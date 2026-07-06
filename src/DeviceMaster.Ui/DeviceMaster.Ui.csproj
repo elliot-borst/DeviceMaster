@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>DeviceMaster</AssemblyName>
+    <!-- Whole-number release versioning: bump the major only (1, 2, 3, ...). The UI, the
+         update check, and build-installer.ps1 all derive the display version from this. -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Product>DeviceMaster</Product>
+    <Company>Elliot Borst</Company>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+  </ItemGroup>
+
+</Project>

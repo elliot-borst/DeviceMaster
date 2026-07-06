@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.App", "src\Dev
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.Core.Tests", "tests\DeviceMaster.Core.Tests\DeviceMaster.Core.Tests.csproj", "{C5652D5D-93E0-4C84-9933-AC432FE95653}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.Ui", "src\DeviceMaster.Ui\DeviceMaster.Ui.csproj", "{056112D0-78DA-48CB-95E3-99A0E95D545F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -113,6 +115,18 @@ Global
 		{C5652D5D-93E0-4C84-9933-AC432FE95653}.Release|x64.Build.0 = Release|Any CPU
 		{C5652D5D-93E0-4C84-9933-AC432FE95653}.Release|x86.ActiveCfg = Release|Any CPU
 		{C5652D5D-93E0-4C84-9933-AC432FE95653}.Release|x86.Build.0 = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|x64.Build.0 = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Debug|x86.Build.0 = Debug|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|x64.ActiveCfg = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|x64.Build.0 = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|x86.ActiveCfg = Release|Any CPU
+		{056112D0-78DA-48CB-95E3-99A0E95D545F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -125,5 +139,6 @@ Global
 		{BF1C2E05-4BF6-4D36-B576-E31840D96010} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{FECEE4B8-C73D-4B1F-9F98-277608DACC0A} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{C5652D5D-93E0-4C84-9933-AC432FE95653} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{056112D0-78DA-48CB-95E3-99A0E95D545F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
