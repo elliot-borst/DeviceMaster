@@ -472,15 +472,20 @@ public sealed class LinkHub : IDisposable
         }
     }
 
+    private List<int> _lastUnenrolled = [];
+
     /// <summary>
-    /// The hub persists its LED registry (which channels carry an LED device, endpoint 0x1E)
-    /// in flash, and only vendor software ever rewrites it — re-arranging the chain leaves it
-    /// pointing at phantom channels, so color data never reaches the fans that moved.
-    /// This compares the registry against the enumerated chain and rewrites it when they
-    /// disagree, then pulses LED power (0x15 0x01) so the hub re-registers its devices.
-    /// Command codes come from the catalog or the hub's own current table — never invented;
-    /// channels whose code is unknown keep their existing entry.
-    /// Returns true when the registry was rewritten (colors must be re-applied).
+    /// Reconciles the hub's LED registry (endpoint 0x1E) with the enumerated chain — WITHOUT
+    /// fighting the hub. Live observation (2026-07-06): the hub maintains this registry
+    /// itself as fans complete LED enrollment; entries appear and decay on their own.
+    /// Force-writing entries for fans the hub cannot enroll never lit anything and risks
+    /// clobbering the hub's own enrollment bookkeeping. So this only:
+    ///  1. removes PHANTOM entries (registered channels with no device on the chain — the
+    ///     one genuinely stale case, left behind when the chain is re-arranged),
+    ///  2. pulses LED power when the set of unenrolled LED-capable fans changes, giving the
+    ///     hub a fresh chance to enroll them,
+    ///  3. flags registry drift so the color slots (built from the registry) get rebuilt.
+    /// Returns true when colors must be re-applied.
     /// </summary>
     public bool SyncLedRegistry(Action<string>? log = null)
     {
@@ -489,73 +494,53 @@ public sealed class LinkHub : IDisposable
             return false;
         }
 
-        IReadOnlyDictionary<int, byte> current;
-        lock (_ioLock)
+        var current = ReadLedRegistry();
+        var ledChannels = _channels
+            .Where(c => c.Info is { LedCount: > 0 })
+            .Select(c => c.Channel)
+            .ToHashSet();
+
+        var mustReapply = false;
+
+        var phantoms = current.Keys.Where(ch => !ledChannels.Contains(ch)).OrderBy(ch => ch).ToList();
+        if (phantoms.Count > 0)
         {
-            current = LinkHubParser.ParseLedRegistry(ReadViaColorHandle(0x1E));
+            var target = current
+                .Where(kv => !phantoms.Contains(kv.Key))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            log?.Invoke($"hub {SerialNumber[..8]}… LED registry has phantom entries "
+                + $"(ch{string.Join(", ch", phantoms)} carry no device) — removing them, keeping [{Describe(target)}]");
+            WriteLedRegistry(target); // settles 100 ms, pulses LED power, invalidates color slots
+            current = target;
+            mustReapply = true;
         }
 
-        // codes we can trust: catalog first, then whatever the hub already uses for the model
-        var codeByModel = new Dictionary<byte, byte>();
-        foreach (var channel in _channels)
+        var unenrolled = ledChannels.Where(ch => !current.ContainsKey(ch)).OrderBy(ch => ch).ToList();
+        if (!unenrolled.SequenceEqual(_lastUnenrolled))
         {
-            if (current.TryGetValue(channel.Channel, out var existing) && existing != 0)
+            _lastUnenrolled = unenrolled;
+            if (unenrolled.Count > 0 && !mustReapply)
             {
-                codeByModel.TryAdd(channel.Model, existing);
-            }
-        }
-
-        var target = new Dictionary<int, byte>();
-        foreach (var channel in _channels)
-        {
-            if (channel.Info is not { LedCount: > 0 } info)
-            {
-                continue;
-            }
-
-            if (info.LedCommandCode != 0)
-            {
-                target[channel.Channel] = info.LedCommandCode;
-            }
-            else if (codeByModel.TryGetValue(channel.Model, out var learned))
-            {
-                target[channel.Channel] = learned;
-            }
-            else if (current.TryGetValue(channel.Channel, out var existing))
-            {
-                target[channel.Channel] = existing; // keep what's there rather than guess
-            }
-            else
-            {
-                log?.Invoke($"hub {SerialNumber[..8]}… ch{channel.Channel} ({channel.Name}): no known LED command code — leaving the registry slot empty");
+                // pulse once per change of the unenrolled set — not every rescan, a pulse
+                // visibly blinks the chain
+                log?.Invoke($"hub {SerialNumber[..8]}… has not LED-enrolled ch{string.Join(", ch", unenrolled)} "
+                    + "— pulsing LED power so it retries");
+                PulseLedPower();
+                mustReapply = true;
             }
         }
 
-        if (target.Count == current.Count && target.All(kv => current.TryGetValue(kv.Key, out var c) && c == kv.Value))
+        // the hub enrolled or dropped fans on its own — the color slots no longer match
+        if (!mustReapply && _colorReady
+            && !_ledCounts.Keys.OrderBy(k => k).SequenceEqual(current.Keys.OrderBy(k => k)))
         {
-            return false; // registry already matches the chain
+            log?.Invoke($"hub {SerialNumber[..8]}… LED registry changed on its own: now [{Describe(current)}] "
+                + "— rebuilding color slots");
+            _colorReady = false;
+            mustReapply = true;
         }
 
-        var maxChannel = Math.Max(
-            _channels.Max(c => c.Channel),
-            current.Keys.DefaultIfEmpty(0).Max());
-        log?.Invoke($"hub {SerialNumber[..8]}… LED registry stale: hub has [{Describe(current)}], chain needs [{Describe(target)}] — rewriting");
-
-        lock (_ioLock)
-        {
-            WriteEndpoint(
-                [0x1E],
-                LinkHubProtocol.DataTypes.LedRegistry,
-                LinkHubPackets.CreateLedRegistryData(maxChannel, target));
-
-            // reference parity (OpenLinkHub UpdateExternalAdapter): the hub needs settle time
-            // between the registry write and the LED power pulse that re-registers devices
-            Thread.Sleep(100);
-            SendCommand(LinkHubProtocol.Commands.ResetLedPower);
-        }
-
-        _colorReady = false; // LED map changed — rebuild the color path on the next apply
-        return true;
+        return mustReapply;
 
         static string Describe(IReadOnlyDictionary<int, byte> registry) =>
             string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
