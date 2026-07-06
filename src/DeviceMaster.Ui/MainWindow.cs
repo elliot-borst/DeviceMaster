@@ -58,8 +58,10 @@ public sealed class MainWindow : Window
     public MainWindow()
     {
         Title = $"DeviceMaster v{AppVersion}";
-        Width = 820;
+        Width = 840;
         Height = 680;
+        MinWidth = 840;  // below this the header/controls clip
+        MinHeight = 600;
         Background = Bg;
         Content = BuildLayout();
         _uiReady = true;
@@ -244,7 +246,7 @@ public sealed class MainWindow : Window
         };
         var controlPanel = new StackPanel();
 
-        var controlRow = new StackPanel { Orientation = Orientation.Horizontal };
+        var controlRow = new WrapPanel { Orientation = Orientation.Horizontal };
         controlRow.Children.Add(new TextBlock
         {
             Text = "Fan control",
