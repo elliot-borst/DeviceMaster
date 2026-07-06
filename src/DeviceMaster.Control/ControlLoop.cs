@@ -583,6 +583,9 @@ public sealed class ControlLoop : IDisposable
             {
                 _hubRgbRetryAt[hub.SerialNumber] = Environment.TickCount64 + 10_000;
                 warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
+
+                // also into the log — color failures used to be invisible post-mortem
+                _log?.Invoke($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message} — retrying in 10 s with a rebuilt color path");
             }
         }
 

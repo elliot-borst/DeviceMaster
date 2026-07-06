@@ -199,8 +199,19 @@ public sealed class LinkHub : IDisposable
     /// </summary>
     public void ApplyStaticColor(byte r, byte g, byte b)
     {
-        EnsureColorReady();
-        WriteColorBuffer(r, g, b);
+        try
+        {
+            EnsureColorReady();
+            WriteColorBuffer(r, g, b);
+        }
+        catch (LinkHubException)
+        {
+            // the color handle/endpoint state on the hub is not durable — registry reads
+            // share the handle and mode blips invalidate it. Rebuild the whole color path
+            // (endpoint open + reset frame) on the next attempt instead of failing forever.
+            _colorReady = false;
+            throw;
+        }
     }
 
     /// <summary>
@@ -209,6 +220,19 @@ public sealed class LinkHub : IDisposable
     /// count and stream ordering — the buffer is linear in ascending channel order.
     /// </summary>
     public void ApplyPerChannelColors(IReadOnlyDictionary<int, (byte R, byte G, byte B)> colors, int? ledsPerDeviceOverride = null)
+    {
+        try
+        {
+            ApplyPerChannelColorsCore(colors, ledsPerDeviceOverride);
+        }
+        catch (LinkHubException)
+        {
+            _colorReady = false; // rebuild the color path on the next attempt
+            throw;
+        }
+    }
+
+    private void ApplyPerChannelColorsCore(IReadOnlyDictionary<int, (byte R, byte G, byte B)> colors, int? ledsPerDeviceOverride)
     {
         EnsureColorReady();
 
