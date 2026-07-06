@@ -102,4 +102,11 @@ public static class LinkDeviceCatalog
 
     public static LinkDeviceInfo? Find(byte model, byte variant) =>
         Entries.GetValueOrDefault(((LinkDeviceModel)model, variant));
+
+    /// <summary>
+    /// Finds a model by the LED command code the hub's registry uses for it — for sizing the
+    /// color slot of a registered channel whose chain identity is unknown (phantom entries).
+    /// </summary>
+    public static LinkDeviceInfo? FindByLedCommandCode(byte code) =>
+        code == 0 ? null : Entries.Values.FirstOrDefault(d => d.LedCommandCode == code);
 }

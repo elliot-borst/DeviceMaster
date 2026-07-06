@@ -212,16 +212,13 @@ public sealed class LinkHub : IDisposable
     {
         EnsureColorReady();
 
+        // slot layout mirrors _ledCounts (the hub's registry order), so each color lands on
+        // the channel it was named for even when the registry differs from the chain
         var data = new List<byte>();
-        foreach (var channel in _channels.OrderBy(c => c.Channel))
+        foreach (var (channel, slotCount) in _ledCounts.OrderBy(kv => kv.Key))
         {
-            if (channel.Info is not { LedCount: > 0 } info)
-            {
-                continue; // non-LED devices contribute nothing, override or not
-            }
-
-            var count = ledsPerDeviceOverride ?? info.LedCount;
-            var color = colors.GetValueOrDefault(channel.Channel);
+            var count = ledsPerDeviceOverride ?? slotCount;
+            var color = colors.GetValueOrDefault(channel);
             for (var i = 0; i < count; i++)
             {
                 data.Add(color.R);
@@ -321,6 +318,32 @@ public sealed class LinkHub : IDisposable
         catch (LinkHubException ex)
         {
             _trace?.Invoke($"LED enumeration read failed: {ex.Message} (continuing with catalog counts)");
+        }
+
+        // The hub consumes the color stream by REGISTRY slot in ascending channel order —
+        // verified live 2026-07-06 with a 4-entry registry variant on a 6-fan chain: the
+        // stream shifted onto exactly the registered channels. So the buffer must be laid
+        // out for the registered channels, not the raw chain; a registered channel missing
+        // from the chain (phantom) still occupies its slot, sized via its command code.
+        try
+        {
+            var registry = ReadLedRegistry();
+            if (registry.Count > 0)
+            {
+                var slotCounts = new Dictionary<int, int>();
+                foreach (var (channel, code) in registry)
+                {
+                    slotCounts[channel] = counts.TryGetValue(channel, out var known) && known > 0
+                        ? known
+                        : LinkDeviceCatalog.FindByLedCommandCode(code)?.LedCount ?? 8;
+                }
+
+                counts = slotCounts;
+            }
+        }
+        catch (LinkHubException ex)
+        {
+            _trace?.Invoke($"LED registry read failed: {ex.Message} (color slots fall back to catalog counts)");
         }
 
         if (counts.Values.Sum() == 0)

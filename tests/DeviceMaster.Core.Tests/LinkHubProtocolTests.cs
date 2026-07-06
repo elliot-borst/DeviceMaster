@@ -228,3 +228,30 @@ public class LinkHubFirmwareTests
     public void SupportsAdditionalSubDevices_ChecksFirmware25(string firmware, bool expected) =>
         Assert.Equal(expected, LinkHub.SupportsAdditionalSubDevices(firmware));
 }
+
+public class LinkDeviceCatalogLedCodeTests
+{
+    [Fact]
+    public void FindByLedCommandCode_ResolvesRxMaxRgbFan()
+    {
+        var info = LinkDeviceCatalog.FindByLedCommandCode(0x19);
+
+        Assert.NotNull(info);
+        Assert.Equal("RX MAX RGB Fan", info!.Name);
+        Assert.Equal(8, info.LedCount);
+    }
+
+    [Fact]
+    public void FindByLedCommandCode_ResolvesXd6Pump()
+    {
+        var info = LinkDeviceCatalog.FindByLedCommandCode(0x11);
+
+        Assert.NotNull(info);
+        Assert.Equal(22, info!.LedCount);
+        Assert.True(info.IsPump);
+    }
+
+    [Fact]
+    public void FindByLedCommandCode_ZeroIsNeverAMatch() =>
+        Assert.Null(LinkDeviceCatalog.FindByLedCommandCode(0));
+}
