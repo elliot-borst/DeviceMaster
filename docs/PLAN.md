@@ -77,7 +77,7 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 - **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
   hard-floored at 50%, live coolant + pump RPM display).
 
-### Status snapshot (2026-07-06, v17 released)
+### Status snapshot (2026-07-06, v18 released)
 
 Desktop app (WPF, tray-resident, elevated, auto-updating whole-number releases via GitHub
 setup-exe assets) covers: fan curves/manual on Corsair + Lian Li + motherboard SuperIO
@@ -93,12 +93,13 @@ v16 RGB verified by owner on every surface: Corsair (pump + connected fans), Lia
 Aura ARGB headers, 4× RAM sticks, ASUS GPU (after the NvAPI block count-byte fix).
 
 **Outstanding, in priority order:**
-1. Verify v17 on hardware: color changes snappy again, no rainbow fallbacks (keepalive
-   thread), silent start via scheduled task (one UAC on first run only).
-2. Corsair: some fans dark/no-RPM, but a dark fan can sit BETWEEN two lit ones — junction
-   theory disproved for RGB. v17 re-enumerates the chain every 30 s (stale-map suspect);
-   if fans stay dark, run `link leds` (app closed) for the hub's own per-channel LED
-   counts and correct the catalog.
+1. Corsair fans/RGB still not fully working (owner, post-v17): some channels no RPM, RGB
+   incomplete; a dark fan can sit BETWEEN two lit ones (junction theory disproved for
+   RGB). v18 logs the hub's own per-channel LED data (0x1E/0x1D) + chain map to
+   %LOCALAPPDATA%\DeviceMaster\logs\app.log at hub open, and tags fan rows with their
+   hub — diagnose from that log, then fix the LED/count mapping.
+2. Verify v17/v18 behaviour: snappy colors, no rainbow fallbacks, silent start + silent
+   auto-update, in-app Start-with-Windows toggle.
 3. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
    Stage 5: Turzx 8.8" via shared renderer + 11× SL V3 per-fan LCDs (JPEG over USB bulk,
    DES-CBC headers) → Stage 6: effects, per-device colors, curve editor, profiles.

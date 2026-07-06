@@ -71,8 +71,11 @@ internal static class ElevationBroker
         }
     }
 
-    /// <summary>Registers/refreshes the tasks (elevated only) and retires the legacy startup shortcut.</summary>
-    public static void EnsureTasks()
+    /// <summary>
+    /// Registers/refreshes the tasks (elevated only) and retires the legacy startup shortcut.
+    /// Start-with-Windows defaults ON and is controlled from the app's header toggle.
+    /// </summary>
+    public static void EnsureTasks(bool startWithWindows)
     {
         var exe = Environment.ProcessPath;
         if (exe is null || !IsElevated)
@@ -81,24 +84,38 @@ internal static class ElevationBroker
         }
 
         RunSchtasks($"/Create /F /TN \"{RunTask}\" /SC ONDEMAND /RL HIGHEST /TR \"\\\"{exe}\\\" {ViaTaskArg}\"");
+        SetStartWithWindows(startWithWindows);
 
         var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DeviceMaster.lnk");
-        var startupWanted = File.Exists(shortcut) || TaskExists(StartupTaskName);
-        if (startupWanted)
+        if (File.Exists(shortcut))
         {
-            var created = RunSchtasks(
-                $"/Create /F /TN \"{StartupTaskName}\" /SC ONLOGON /RL HIGHEST /TR \"\\\"{exe}\\\" --minimized {ViaTaskArg}\"");
-            if (created == 0 && File.Exists(shortcut))
+            try
             {
-                try
-                {
-                    File.Delete(shortcut);
-                }
-                catch
-                {
-                    // harmless leftover — Windows won't launch it anyway
-                }
+                File.Delete(shortcut); // superseded by the logon task (and ignored by Windows anyway)
             }
+            catch
+            {
+                // harmless leftover
+            }
+        }
+    }
+
+    /// <summary>Creates or removes the logon task; called from the header toggle and at startup.</summary>
+    public static void SetStartWithWindows(bool enabled)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null || !IsElevated)
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            RunSchtasks($"/Create /F /TN \"{StartupTaskName}\" /SC ONLOGON /RL HIGHEST /TR \"\\\"{exe}\\\" --minimized {ViaTaskArg}\"");
+        }
+        else if (TaskExists(StartupTaskName))
+        {
+            RunSchtasks($"/Delete /F /TN \"{StartupTaskName}\"");
         }
     }
 

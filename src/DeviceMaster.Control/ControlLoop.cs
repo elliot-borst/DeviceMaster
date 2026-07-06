@@ -311,7 +311,18 @@ public sealed class ControlLoop : IDisposable
 
                     _hubs.Add(hub);
                     _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
-                    _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… ({hub.Channels.Count} devices)");
+                    _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
+                    try
+                    {
+                        // the hub's own idea of per-channel LEDs — ground truth against the catalog
+                        var (codes, leds) = hub.ReadLedDeviceInfo();
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… 0x1E raw: {Convert.ToHexString(codes.AsSpan(0, 48))}");
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… 0x1D raw: {Convert.ToHexString(leds.AsSpan(0, 48))}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… LED info read failed: {ex.Message}");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -795,7 +806,7 @@ public sealed class ControlLoop : IDisposable
 
                     readings.Add(new DeviceReading(
                         "Corsair",
-                        $"{channel.Name} (ch{channel.Channel})",
+                        $"{channel.Name} (ch{channel.Channel} · hub {hub.SerialNumber[..4]})",
                         speeds.TryGetValue(channel.Channel, out var s) ? s.Rpm : null,
                         channel.IsPump ? pumpDuty : TryGetPulse(hub.SerialNumber, channel.Channel) ? 100 : duty,
                         channel.IsPump,

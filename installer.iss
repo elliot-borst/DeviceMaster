@@ -22,7 +22,12 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL=https://github.com/elliot-borst/DeviceMaster
 DefaultDirName={localappdata}\DeviceMaster
 DefaultGroupName=DeviceMaster
+; Zero-question install: no task/dir/ready pages. Startup-with-Windows is ON by default and
+; controlled from inside the app (scheduled task), not by the installer.
 DisableProgramGroupPage=yes
+DisableDirPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
 OutputBaseFilename=DeviceMaster-Setup
@@ -32,26 +37,22 @@ UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName={#MyAppName}
 WizardStyle=modern
 SetupIconFile=src\DeviceMaster.Ui\DeviceMaster.ico
-; The in-app updater downloads this installer and runs it while DeviceMaster is open;
-; offer to close the running copy so files can be replaced (no forced reboot).
-CloseApplications=yes
+; The in-app updater downloads this installer and runs it silently while DeviceMaster is
+; open; close the running copy so files can be replaced (no forced reboot).
+CloseApplications=force
 RestartApplications=no
 
 [Files]
 Source: "dist\ui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
-[Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
-Name: "startupicon"; Description: "Run automatically when Windows starts"; GroupDescription: "Startup:"
-
 [Icons]
 Name: "{group}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"
 Name: "{group}\Uninstall DeviceMaster"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
-Name: "{userstartup}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Parameters: "--minimized"; Tasks: startupicon
 
 [Run]
-Filename: "{app}\{#MyAppExe}"; Description: "Launch DeviceMaster now"; Flags: nowait postinstall skipifsilent
+; Always relaunch (also on silent auto-updates). --minimized keeps updates invisible in the
+; tray; the app shows its window anyway on a true first run (no config yet).
+Filename: "{app}\{#MyAppExe}"; Parameters: "--minimized"; Flags: nowait
 
 [UninstallRun]
 ; The app registers highest-run-level scheduled tasks for silent elevation and autostart

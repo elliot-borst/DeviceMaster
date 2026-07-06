@@ -35,6 +35,9 @@ public sealed class ControlSettings
     /// <summary>When enabled, DeviceMaster drives all lighting with one static color.</summary>
     public bool RgbEnabled { get; set; }
 
+    /// <summary>Registers the logon scheduled task ("start with Windows"). On by default; the app manages it.</summary>
+    public bool StartWithWindows { get; set; } = true;
+
     public int RgbR { get; set; } = 86;
     public int RgbG { get; set; } = 130;
     public int RgbB { get; set; } = 255;

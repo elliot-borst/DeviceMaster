@@ -1,4 +1,5 @@
 using System.Windows;
+using DeviceMaster.Control;
 
 namespace DeviceMaster.Ui;
 
@@ -17,7 +18,7 @@ public static class Program
 
         if (ElevationBroker.IsElevated)
         {
-            ElevationBroker.EnsureTasks();
+            ElevationBroker.EnsureTasks(ControlSettings.Load().StartWithWindows);
         }
 
         // Single instance — two control loops would fight over the same devices.
@@ -37,8 +38,10 @@ public static class Program
         var window = new MainWindow();
         app.MainWindow = window;
 
-        // The startup shortcut launches with --minimized: tray-only until opened.
-        if (!args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase)))
+        // --minimized (startup task / post-update relaunch) stays in the tray — except on a
+        // true first run (no config yet), where an invisible app would look like a failed install.
+        var minimized = args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
+        if (!minimized || !System.IO.File.Exists(ControlSettings.ConfigPath))
         {
             window.Show();
         }

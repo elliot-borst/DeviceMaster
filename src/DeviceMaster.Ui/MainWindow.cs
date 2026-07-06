@@ -29,11 +29,36 @@ public sealed class MainWindow : Window
     private ControlLoop? _loop;
     private bool _uiReady;
 
+    // ---------- diagnostics log (device-layer messages land here; readable post-mortem) ----------
+
+    private static readonly object LogGate = new();
+    private static readonly string LogPath = System.IO.Path.Combine(
+        System.IO.Path.GetDirectoryName(ControlSettings.ConfigPath)!, "logs", "app.log");
+
+    internal static void LogLine(string message)
+    {
+        try
+        {
+            lock (LogGate)
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogPath)!);
+                if (System.IO.File.Exists(LogPath) && new System.IO.FileInfo(LogPath).Length > 2_000_000)
+                {
+                    System.IO.File.Move(LogPath, LogPath + ".old", overwrite: true);
+                }
+
+                System.IO.File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // diagnostics must never break the app
+        }
+    }
+
     // header / updater
     private Border _checkButton = null!;
     private TextBlock _checkLabel = null!;
-    private Border _installButton = null!;
-    private TextBlock _installLabel = null!;
     private StackPanel _updateNotice = null!;
     private TextBlock _updateNoticeText = null!;
     private UpdateInfo? _pendingUpdate;
@@ -97,7 +122,8 @@ public sealed class MainWindow : Window
             UpdateControlStatus();
             if (_downloading)
             {
-                _installLabel.Text = "Downloading" + new string('.', 1 + _downloadDots++ % 3);
+                _updateNoticeText.Text = $"Updating to {_pendingUpdate?.Tag} — downloading"
+                    + new string('.', 1 + _downloadDots++ % 3);
             }
         };
         timer.Start();
@@ -173,16 +199,39 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(_checkButton, Dock.Right);
         header.Children.Add(_checkButton);
 
+        // updates install themselves — this is a status line, not a prompt
         _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
         _updateNotice.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(5), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
         _updateNoticeText = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
         _updateNotice.Children.Add(_updateNoticeText);
-        _installButton = Theme.Btn("↓  Download & Install", primary: true, () => _ = StartUpdateAsync());
-        _installLabel = (TextBlock)_installButton.Child;
-        _installButton.Margin = new Thickness(14, 0, 0, 0);
-        _updateNotice.Children.Add(_installButton);
         DockPanel.SetDock(_updateNotice, Dock.Right);
         header.Children.Add(_updateNotice);
+
+        var startupToggle = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
+        startupToggle.Children.Add(new TextBlock
+        {
+            Text = "Start with Windows",
+            FontSize = 12,
+            Foreground = Theme.Dim,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 9, 0),
+        });
+        startupToggle.Children.Add(Theme.Toggle(_controlSettings.StartWithWindows, on =>
+        {
+            _controlSettings.StartWithWindows = on;
+            try
+            {
+                _controlSettings.Save();
+            }
+            catch
+            {
+                // non-fatal — the task change below still applies for this install
+            }
+
+            ElevationBroker.SetStartWithWindows(on);
+        }));
+        DockPanel.SetDock(startupToggle, Dock.Right);
+        header.Children.Add(startupToggle);
 
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
@@ -809,7 +858,7 @@ public sealed class MainWindow : Window
 
         if (_loop is null)
         {
-            _loop = new ControlLoop(_controlSettings);
+            _loop = new ControlLoop(_controlSettings, LogLine);
             _loop.Start();
         }
         else
@@ -927,11 +976,13 @@ public sealed class MainWindow : Window
         var current = WholeVersion.Parse(AppVersion);
         if (info is not null && WholeVersion.Compare(info.Version, current) > 0 && info.SetupUrl is not null)
         {
+            // updates are hands-off: download and install silently, then relaunch in the tray
             _pendingUpdate = info;
-            _updateNoticeText.Text = $"Version {info.Tag.TrimStart('v', 'V')} is available";
             _checkButton.Visibility = Visibility.Collapsed;
             _updateNotice.Visibility = Visibility.Visible;
+            _updateNoticeText.Text = $"Updating to {info.Tag}…";
             RestoreCheckButton();
+            await StartUpdateAsync();
             return;
         }
 
@@ -959,26 +1010,24 @@ public sealed class MainWindow : Window
             return;
         }
 
-        // show progress immediately — the download takes a while before the installer opens
         _downloading = true;
-        _installButton.IsHitTestVisible = false;
-        _installButton.Opacity = 0.7;
-        _installLabel.Text = "Downloading.";
-
         var installerPath = await Updater.DownloadInstallerAsync(setupUrl);
         if (installerPath is null)
         {
             _downloading = false;
-            _installButton.IsHitTestVisible = true;
-            _installButton.Opacity = 1.0;
-            _installLabel.Text = "↓  Download & Install";
+            _updateNoticeText.Text = "Update download failed — opening the releases page";
             Process.Start(new ProcessStartInfo(_pendingUpdate.PageUrl) { UseShellExecute = true });
             return;
         }
 
-        _installLabel.Text = "Starting installer…";
+        _downloading = false;
+        _updateNoticeText.Text = "Installing…";
+        LogLine($"auto-update: installing {_pendingUpdate.Tag}");
         PrepareExit(); // release devices and the tray icon before the installer replaces us
-        Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(installerPath, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /FORCECLOSEAPPLICATIONS")
+        {
+            UseShellExecute = true,
+        });
         Application.Current.Shutdown();
     }
 }
