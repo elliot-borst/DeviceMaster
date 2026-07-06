@@ -277,10 +277,11 @@ public sealed class MainWindow : Window
     private readonly WrapPanel _swatchPanel = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _rgbStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
+    // fully saturated primaries — pastel tones look washed out on LEDs
     private static readonly (byte R, byte G, byte B)[] SwatchColors =
     [
-        (255, 255, 255), (255, 64, 64), (255, 140, 0), (255, 220, 0), (64, 220, 100),
-        (34, 211, 238), (86, 130, 255), (168, 85, 247), (255, 105, 180),
+        (255, 255, 255), (255, 0, 0), (255, 70, 0), (255, 170, 0), (0, 255, 0),
+        (0, 255, 255), (0, 60, 255), (150, 0, 255), (255, 0, 110),
     ];
 
     private Border BuildRgbCard()

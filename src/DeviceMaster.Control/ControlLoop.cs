@@ -301,6 +301,7 @@ public sealed class ControlLoop : IDisposable
     // ---- RGB (static color, both families) ----
 
     private readonly Dictionary<string, string> _appliedHubRgb = [];
+    private readonly Dictionary<string, long> _hubRgbRetryAt = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private long _slv3RgbRefreshDue;
 
@@ -318,14 +319,24 @@ public sealed class ControlLoop : IDisposable
                 continue;
             }
 
+            if (Environment.TickCount64 < _hubRgbRetryAt.GetValueOrDefault(hub.SerialNumber))
+            {
+                warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… pending retry");
+                continue;
+            }
+
             try
             {
                 hub.ApplyStaticColor(r, g, b);
                 _appliedHubRgb[hub.SerialNumber] = key;
+                _hubRgbRetryAt.Remove(hub.SerialNumber);
+                _log?.Invoke($"RGB applied on hub {hub.SerialNumber[..8]}…: {hub.TotalLeds} LEDs "
+                    + $"({string.Join(", ", hub.LedCounts.Select(kv => $"ch{kv.Key}={kv.Value}"))})");
             }
             catch (Exception ex)
             {
-                warnings.Add($"RGB write to hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
+                _hubRgbRetryAt[hub.SerialNumber] = Environment.TickCount64 + 10_000;
+                warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
             }
         }
 

@@ -181,6 +181,9 @@ public sealed class LinkHub : IDisposable
     /// <summary>Total LEDs across all connected chain devices (0 before the first color write).</summary>
     public int TotalLeds => _ledCounts.Values.Sum();
 
+    /// <summary>Per-channel LED counts from the last endpoint 0x20 read (diagnostics).</summary>
+    public IReadOnlyDictionary<int, int> LedCounts => _ledCounts;
+
     /// <summary>
     /// Sets every LED on the chain to one static color. Lazily reads per-channel LED counts
     /// (endpoint 0x20) and opens the color endpoint (0x22, handle 0) on first use.
@@ -194,7 +197,8 @@ public sealed class LinkHub : IDisposable
         var total = TotalLeds;
         if (total == 0)
         {
-            return;
+            _colorReady = false; // retry the LED read on the next attempt
+            throw new LinkHubException("hub reported 0 connected LEDs — RGB unavailable (will retry)");
         }
 
         var data = new byte[total * 3];
