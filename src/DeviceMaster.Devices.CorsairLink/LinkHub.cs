@@ -149,6 +149,7 @@ public sealed class LinkHub : IDisposable
         SendCommand(LinkHubProtocol.Commands.EnterHardwareMode);
         _inSoftwareMode = false;
         _colorReady = false;
+        _colorAttached = false;
     }
 
     public IReadOnlyList<LinkSpeedReading> ReadSpeeds() =>
@@ -319,10 +320,21 @@ public sealed class LinkHub : IDisposable
         }
     }
 
+    // _colorReady = LED slot map is valid; _colorAttached = handle 0 currently targets the
+    // color endpoint. Registry reads borrow the handle (cheap to re-attach); chain/registry
+    // changes invalidate the slots (full rebuild incl. reset frame).
+    private bool _colorAttached;
+
     private void EnsureColorReady()
     {
+        if (_colorReady && _colorAttached)
+        {
+            return;
+        }
+
         if (_colorReady)
         {
+            AttachColorEndpoint(); // slots still valid — just re-target handle 0 (~20 ms)
             return;
         }
 
@@ -394,7 +406,27 @@ public sealed class LinkHub : IDisposable
         }
 
         _ledCounts = counts;
+        AttachColorEndpoint();
+        _colorReady = true;
 
+        // Reference quirk (OpenLinkHub setDeviceColor): mixed QX/RX chains randomly stay dark
+        // unless a reset frame is sent and 40 ms pass before the first real color packet.
+        try
+        {
+            WriteColorBuffer(0, 0, 0);
+        }
+        catch (LinkHubException ex)
+        {
+            _colorReady = false;
+            throw new LinkHubException($"initial reset frame failed: {ex.Message}", ex.ErrorCode);
+        }
+
+        Thread.Sleep(40);
+    }
+
+    /// <summary>(Re-)targets handle 0 at the color endpoint. Responses are best-effort on fw 3.10.</summary>
+    private void AttachColorEndpoint()
+    {
         lock (_ioLock)
         {
             // The reference (OpenLinkHub) ignores the responses to these two entirely — on
@@ -417,21 +449,7 @@ public sealed class LinkHub : IDisposable
             }
         }
 
-        _colorReady = true;
-
-        // Reference quirk (OpenLinkHub setDeviceColor): mixed QX/RX chains randomly stay dark
-        // unless a reset frame is sent and 40 ms pass before the first real color packet.
-        try
-        {
-            WriteColorBuffer(0, 0, 0);
-        }
-        catch (LinkHubException ex)
-        {
-            _colorReady = false;
-            throw new LinkHubException($"initial reset frame failed: {ex.Message}", ex.ErrorCode);
-        }
-
-        Thread.Sleep(40);
+        _colorAttached = true;
     }
 
     /// <summary>Close/open/read without waiting for a specific data type (single response read).</summary>
@@ -650,10 +668,11 @@ public sealed class LinkHub : IDisposable
 
     private byte[] ReadViaColorHandleCore(byte endpoint)
     {
-        // this REPURPOSES the color handle (0) and closes it afterwards — the color path
-        // must be rebuilt before the next color write (this is why every 30 s registry
-        // check used to make the following color change fail its first attempt)
-        _colorReady = false;
+        // this REPURPOSES the color handle (0) and closes it afterwards — the endpoint must
+        // be re-attached before the next color write (this is why every 30 s registry check
+        // used to make the following color change fail its first attempt); the slot map
+        // itself stays valid
+        _colorAttached = false;
 
         // open (0x0d 0x00 + endpoint) → read (0x08 0x00) → close (0x05 0x01); responses to
         // open/close are best-effort on fw 3.10, like the color endpoint itself

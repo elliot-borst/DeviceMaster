@@ -139,10 +139,25 @@ public sealed class ControlLoop : IDisposable
 
     public ControlStatus Status => _status;
 
+    // set when the user picks a new color: the woken tick paints BEFORE its duty/telemetry
+    // passes, because the eye notices color lag far more than a briefly deferred duty write
+    private readonly AutoResetEvent _wake = new(false);
+    private volatile bool _rgbPriority;
+    private string _lastRgbSignature = "";
+
     public void Apply(ControlSettings settings)
     {
         _settings = settings;
         _lastWrittenCorsairDuty = -1; // force a rewrite on the next tick
+
+        var rgbSignature = $"{settings.RgbEnabled}|{settings.RgbOff}|{settings.RgbR},{settings.RgbG},{settings.RgbB}";
+        if (rgbSignature != _lastRgbSignature)
+        {
+            _lastRgbSignature = rgbSignature;
+            _rgbPriority = true;
+        }
+
+        _wake.Set(); // act on the change now, not at the next 1 Hz boundary
     }
 
     public void Start()
@@ -238,9 +253,9 @@ public sealed class ControlLoop : IDisposable
 
             var elapsed = Environment.TickCount64 - started;
             var wait = (int)Math.Max(50, TickMs - elapsed);
-            if (token.WaitHandle.WaitOne(wait))
+            if (WaitHandle.WaitAny([token.WaitHandle, _wake], wait) == 0)
             {
-                break;
+                break; // cancelled; index 1 (wake) and WaitTimeout both mean "tick now"
             }
         }
     }
@@ -251,6 +266,15 @@ public sealed class ControlLoop : IDisposable
         var warnings = new List<string>();
 
         EnsureDevices(warnings);
+
+        if (_rgbPriority)
+        {
+            _rgbPriority = false;
+            if (settings.RgbEnabled)
+            {
+                ApplyRgb(settings, warnings); // the later regular call no-ops via key matching
+            }
+        }
 
         // ---- decide the duty ----
         double? sourceTemp = null;
