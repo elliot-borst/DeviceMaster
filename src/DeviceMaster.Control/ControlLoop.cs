@@ -7,7 +7,9 @@ using DeviceMaster.Sensors;
 
 namespace DeviceMaster.Control;
 
-public sealed record DeviceReading(string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump, string? Id = null);
+public sealed record DeviceReading(
+    string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump,
+    string? Id = null, string? HubSerial = null, int? Channel = null);
 
 /// <summary>Immutable snapshot of the loop's last tick, safe to read from any thread.</summary>
 public sealed record ControlStatus
@@ -52,6 +54,44 @@ public sealed class ControlLoop : IDisposable
     private LhmSensorSource? _lhm;
     private int _lastWrittenCorsairDuty = -1;
     private int _ticksSinceCorsairWrite;
+
+    // "identify this fan" pulses: (hub serial, channel) -> expiry tick
+    private readonly Dictionary<(string Hub, int Channel), long> _pulses = [];
+
+    /// <summary>Runs one fan channel at 100% for a few seconds so it can be identified by eye/ear.</summary>
+    public void PulseChannel(string hubSerial, int channel, int seconds = 6)
+    {
+        lock (_pulses)
+        {
+            _pulses[(hubSerial, channel)] = Environment.TickCount64 + seconds * 1000L;
+        }
+    }
+
+    private bool TryGetPulse(string hubSerial, int channel)
+    {
+        lock (_pulses)
+        {
+            if (_pulses.TryGetValue((hubSerial, channel), out var expiry))
+            {
+                if (Environment.TickCount64 <= expiry)
+                {
+                    return true;
+                }
+
+                _pulses.Remove((hubSerial, channel));
+            }
+
+            return false;
+        }
+    }
+
+    private bool AnyPulsePending()
+    {
+        lock (_pulses)
+        {
+            return _pulses.Count > 0;
+        }
+    }
 
     public ControlLoop(ControlSettings settings, Action<string>? log = null)
     {
@@ -316,10 +356,17 @@ public sealed class ControlLoop : IDisposable
 
     // ---- appliers ----
 
+    private bool _pulseWasActive;
+
     private void ApplyCorsair(int duty, int pumpDuty, List<DeviceReading> readings, List<string> warnings)
     {
+        var pulseActive = AnyPulsePending();
         var writeKey = duty * 1000 + pumpDuty;
-        var mustWrite = writeKey != _lastWrittenCorsairDuty || ++_ticksSinceCorsairWrite >= CorsairRefreshTicks;
+        var mustWrite = writeKey != _lastWrittenCorsairDuty
+            || ++_ticksSinceCorsairWrite >= CorsairRefreshTicks
+            || pulseActive
+            || _pulseWasActive; // one extra write to restore duties after a pulse ends
+        _pulseWasActive = pulseActive;
 
         foreach (var hub in _hubs.ToList())
         {
@@ -332,7 +379,9 @@ public sealed class ControlLoop : IDisposable
 
                 if (mustWrite)
                 {
-                    var requests = hub.Channels.Where(c => !c.IsPump).ToDictionary(c => c.Channel, _ => duty);
+                    var requests = hub.Channels.Where(c => !c.IsPump).ToDictionary(
+                        c => c.Channel,
+                        c => TryGetPulse(hub.SerialNumber, c.Channel) ? 100 : duty);
                     hub.WriteFixedDuties(requests, pumpDuty);
                 }
 
@@ -348,9 +397,11 @@ public sealed class ControlLoop : IDisposable
                         "Corsair",
                         $"{channel.Name} (ch{channel.Channel})",
                         speeds.TryGetValue(channel.Channel, out var s) ? s.Rpm : null,
-                        channel.IsPump ? pumpDuty : duty,
+                        channel.IsPump ? pumpDuty : TryGetPulse(hub.SerialNumber, channel.Channel) ? 100 : duty,
                         channel.IsPump,
-                        channel.Id));
+                        channel.Id,
+                        hub.SerialNumber,
+                        channel.Channel));
                 }
             }
             catch (Exception ex)

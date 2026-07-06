@@ -644,7 +644,31 @@ public sealed class MainWindow : Window
         {
             var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm";
             var brush = device.Rpm is null ? Theme.Faint : Theme.Accent2;
-            _fanRows.Children.Add(DeviceRow($"{device.Family} · {device.Name}", ShortId(device.Id), $"{rpm} @ {device.AppliedDutyPercent}%", brush));
+            var row = DeviceRow($"{device.Family} · {device.Name}", ShortId(device.Id), $"{rpm} @ {device.AppliedDutyPercent}%", brush);
+
+            // Corsair channels get an "identify" pulse (100% for a few seconds) to map
+            // channels to physical fans
+            if (device is { Family: "Corsair", HubSerial: not null, Channel: not null } && row.Child is DockPanel rowPanel)
+            {
+                var identify = new TextBlock
+                {
+                    Text = "◉ identify",
+                    Foreground = Theme.Faint,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 0, 0, 0),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    ToolTip = "Run this fan at 100% for 6 seconds",
+                };
+                identify.MouseEnter += (_, _) => identify.Foreground = Theme.Accent;
+                identify.MouseLeave += (_, _) => identify.Foreground = Theme.Faint;
+                var (hubSerial, channel) = (device.HubSerial, device.Channel.Value);
+                identify.MouseLeftButtonUp += (_, _) => _loop?.PulseChannel(hubSerial, channel);
+                DockPanel.SetDock(identify, Dock.Right);
+                rowPanel.Children.Add(identify);
+            }
+
+            _fanRows.Children.Add(row);
         }
 
         foreach (var warning in status.Warnings)
