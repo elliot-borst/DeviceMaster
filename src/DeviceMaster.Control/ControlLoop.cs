@@ -560,6 +560,7 @@ public sealed class ControlLoop : IDisposable
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
     private long _slv3RgbRefreshDue;
+    private int _slv3ConfirmSendsLeft;
 
     // flash persistence is slow and endurance-limited: colors apply instantly (volatile),
     // and only a color that has stayed put this long gets written to controller flash
@@ -724,16 +725,26 @@ public sealed class ControlLoop : IDisposable
                 }
             }
 
-            if (refreshDue)
+            // The RF uplink is fire-and-forget and drops roughly one group per few changes —
+            // a group that missed chunks shows its rainbow fallback. Every fresh upload is
+            // followed by TWO confirmation re-sends ~1.5 s apart (a fixed, finite burst —
+            // never a continuous re-send loop: that flooded the RF network in v17).
+            if (sentAny && !refreshDue)
             {
-                _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+                _slv3ConfirmSendsLeft = 2;
+                _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 1_500);
             }
-            else if (sentAny)
+            else if (refreshDue)
             {
-                // the RF uplink is fire-and-forget — a group that missed chunks shows its
-                // rainbow fallback. One early confirmation re-send bounds that to seconds
-                // (never a continuous re-send loop: that flooded the RF network in v17)
-                _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+                if (_slv3ConfirmSendsLeft > 0)
+                {
+                    _slv3ConfirmSendsLeft--;
+                    _slv3RgbRefreshDue = Environment.TickCount64 + 1_500;
+                }
+                else
+                {
+                    _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+                }
             }
         }
     }

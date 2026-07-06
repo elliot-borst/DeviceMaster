@@ -517,6 +517,24 @@ public sealed class MainWindow : Window
         };
     }
 
+    /// <summary>A softly pulsing placeholder row shown while a scan/startup is in flight.</summary>
+    private static TextBlock LoadingRow(string text)
+    {
+        var block = new TextBlock
+        {
+            Text = text,
+            Foreground = Theme.Dim,
+            FontSize = 12.5,
+            Margin = new Thickness(2, 6, 0, 6),
+        };
+        block.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(700))
+        {
+            AutoReverse = true,
+            RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+        });
+        return block;
+    }
+
     // Rows are 3-column grids; the id and value columns share size groups (scoped per card
     // panel) so every row's full device id lines up in one central column.
     private static Border DeviceRow(string name, string? id, string value, Brush valueBrush)
@@ -642,6 +660,11 @@ public sealed class MainWindow : Window
     {
         _rescanButton.IsHitTestVisible = false;
         _rescanButton.Opacity = 0.5;
+        if (_hardwareRows.Children.Count == 0)
+        {
+            _hardwareRows.Children.Add(LoadingRow("Scanning for devices…"));
+        }
+
         try
         {
             // Link-chain devices (fans/pump) aren't USB devices — take them from the running
@@ -905,6 +928,7 @@ public sealed class MainWindow : Window
     }
 
     private bool _chainRowsLive;
+    private bool _showingStartupSearch;
 
     private void UpdateControlStatus()
     {
@@ -919,6 +943,27 @@ public sealed class MainWindow : Window
         if (status is null || !status.Running)
         {
             _chainRowsLive = false;
+            if (_loop is not null && _controlSettings.Mode != ControlMode.Off)
+            {
+                // the loop is starting: hubs, dongles and sensors take a few seconds to open
+                if (!_showingStartupSearch)
+                {
+                    _showingStartupSearch = true;
+                    SetBadge("Starting", Theme.Accent2);
+                    _controlStatus.Text = "Starting fan control…";
+                    _controlStatus.Foreground = Theme.Dim;
+                    _fanRows.Children.Clear();
+                    _fanRows.Children.Add(LoadingRow("Searching for fans…"));
+                    _pumpCoolant.Text = "Searching for the pump…";
+                    _pumpCoolant.Foreground = Theme.Dim;
+                    _pumpRows.Children.Clear();
+                    _pumpRows.Children.Add(LoadingRow("Searching for the pump…"));
+                }
+
+                return;
+            }
+
+            _showingStartupSearch = false;
             SetBadge("Off", Theme.Faint);
             _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
             _controlStatus.Foreground = Theme.Dim;
@@ -928,6 +973,8 @@ public sealed class MainWindow : Window
             _pumpRows.Children.Clear();
             return;
         }
+
+        _showingStartupSearch = false;
 
         var temp = status.SourceTemperatureC is { } t ? $"{t:F1} °C" : "—";
         if (status.FailsafeActive)
