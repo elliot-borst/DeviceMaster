@@ -51,6 +51,25 @@ AMD Ryzen 7 9800X3D, NVIDIA RTX 5090). Re-run any time with:
   USBPcap capture of L-Connect before/if it is reinstalled in a VM).
 - WinUSB bindings survived the L-Connect uninstall (verified 2026-07-06).
 
+### SL V3 wireless fan group map (live telemetry via our protocol port, 2026-07-06)
+
+TX dongle master MAC `54440e7a4ee0`, RF channel 8, dongle firmware 16. Four bound groups
+(3+3+2+3 = the 11 fans), all idling at PWM 160/255 (~63%, the firmware default curve):
+
+| Group MAC | Fans | RX type |
+|---|---|---|
+| `6f1a107a4ee0` | 3 | 5 |
+| `c929107a4ee0` | 3 | 6 |
+| `562a107a4ee0` | 2 | 1 |
+| `5f00117a4ee0` | 3 | 4 |
+
+- Fan-type byte `0x19` (25) ⇒ SL V3 **LCD** models — matches the 11 per-fan LCD USB nodes.
+- Verified live: 80% command ramped all groups ~1220 → ~1510 RPM; releasing the keepalive
+  returns fans to firmware defaults within seconds (crash-safe by design).
+- **Firmware 16 quirk:** the RX ignores GetDev with page count 1 — only answers from 2 up.
+  Bring-up order that works: TX reset (`11 08`) + 500 ms, RX queries (`10 01 04 34/37/30`),
+  then GetDev with escalating page counts.
+
 ## Turzx smart screen
 
 | Device | VID:PID | Port | Device serial |

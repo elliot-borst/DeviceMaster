@@ -52,7 +52,8 @@ Revisit a service split only if pre-login control or multi-user support becomes 
   - ✅ SL V3 wireless protocol research complete (REFERENCES.md) — fully documented in two
     MIT projects; fans need PWM re-sent every ≤1 s and revert to defaults otherwise
     (= fail-safe on crash by design).
-  - ⬜ SL V3 fan control implementation (WinUSB TX/RX dongle driver).
+  - ✅ SL V3 fan control implemented and verified (dependency-free WinUSB interop; TX/RX
+    dongle driver; keepalive model). Firmware 16 GetDev page quirk documented in DEVICES.md.
   - ⬜ Temperature curves + the long-running control loop (with failsafe rules below).
   - ⬜ Link hub crash-fallback verification: no keepalive exists in either reference; the
     hub appears to hold last-written duties in software mode. Graceful exit restores
