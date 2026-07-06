@@ -54,9 +54,22 @@ public sealed class ControlLoop : IDisposable
     private volatile ControlSettings _settings;
     private volatile ControlStatus _status = new();
 
-    // SL V3 access is shared between the tick thread and the keepalive thread
+    // SL V3 access is shared between the tick thread and the keepalive thread. The gate covers
+    // the _slv3 field and fast TX sends only — RX polling (slow: timeouts, recovery resets)
+    // deliberately runs OUTSIDE it, because a starved keepalive reverts every group to
+    // firmware defaults (rainbow + own curve) within ~1 s.
     private readonly object _slv3Gate = new();
     private volatile int _slv3KeepaliveDuty = SafetyLimits.FailsafeDutyPercent;
+    private volatile bool _slv3Dead; // a thread saw the session fail — the tick reopens it
+    private int _slv3OpenFailures;
+    private long _slv3UsbRestartNotBefore;
+
+    /// <summary>Failed opens/reopens tolerated before the USB device-node restart (software replug).</summary>
+    private const int Slv3FailuresBeforeUsbRestart = 3;
+    private const long Slv3UsbRestartCooldownMs = 10 * 60_000;
+
+    /// <summary>A group missing from RX telemetry this long shows "no rpm" (commands continue).</summary>
+    private const int Slv3StaleAfterMs = 5_000;
 
     private readonly List<LinkHub> _hubs = [];
     private Slv3Controller? _slv3;
@@ -183,7 +196,7 @@ public sealed class ControlLoop : IDisposable
         {
             lock (_slv3Gate)
             {
-                if (_slv3 is not null)
+                if (_slv3 is not null && !_slv3Dead)
                 {
                     try
                     {
@@ -191,9 +204,10 @@ public sealed class ControlLoop : IDisposable
                     }
                     catch (Exception ex)
                     {
-                        _log?.Invoke($"SL V3 keepalive failed: {ex.Message} — reopening from the control loop");
-                        _slv3.Dispose();
-                        _slv3 = null; // fans fail safe on their own; the tick reopens
+                        // never dispose from this thread — the tick thread may be mid-poll on
+                        // the same handles; it reopens once it sees the flag
+                        _log?.Invoke($"SL V3 keepalive failed: {ex.Message} — scheduling a dongle reopen");
+                        _slv3Dead = true; // fans fail safe on their own until the reopen
                     }
                 }
             }
@@ -337,17 +351,57 @@ public sealed class ControlLoop : IDisposable
 
         lock (_slv3Gate)
         {
+            if (_slv3 is not null && (_slv3Dead || _slv3.NeedsReopen))
+            {
+                _log?.Invoke("control: reopening the SL V3 dongles");
+                _slv3.Dispose();
+                _slv3 = null;
+                _slv3OpenFailures++; // a wedged session counts toward the USB-restart escalation
+            }
+
+            _slv3Dead = false;
+
             if (_slv3 is null)
             {
+                // escalation of last resort — the dongle firmware sometimes wedges so hard that
+                // only a replug helps (verified live 2026-07-06); do the replug in software
+                if (_slv3OpenFailures >= Slv3FailuresBeforeUsbRestart
+                    && Environment.TickCount64 >= _slv3UsbRestartNotBefore)
+                {
+                    _slv3UsbRestartNotBefore = Environment.TickCount64 + Slv3UsbRestartCooldownMs;
+                    _slv3OpenFailures = 0;
+                    try
+                    {
+                        _log?.Invoke("SL V3 dongles unresponsive after repeated reopens — restarting their USB device nodes (software replug)");
+                        if (Slv3Controller.RestartDongleDevices(_log) > 0)
+                        {
+                            Thread.Sleep(3000); // give Windows time to re-enumerate the nodes
+                        }
+                    }
+                    catch (Exception rex)
+                    {
+                        _log?.Invoke($"SL V3 USB device restart failed: {rex.Message}");
+                    }
+                }
+
                 try
                 {
-                    _slv3 = Slv3Controller.Open();
+                    _slv3 = Slv3Controller.Open(log: _log);
                     _slv3.PollDevices();
                     _appliedSlv3Rgb.Clear(); // reapply color after a reconnect
-                    _log?.Invoke($"control: opened SL V3 dongles (master {_slv3.MasterMacText})");
+                    _slv3OpenFailures = 0;
+                    var groups = _slv3.Devices
+                        .Where(d => d.IsBoundTo(_slv3.MasterMac))
+                        .Select(d => $"{d.MacText[..4]}({d.FanCount})");
+                    _log?.Invoke($"control: opened SL V3 dongles (master {_slv3.MasterMacText}) — groups: [{string.Join(" ", groups)}]");
                 }
                 catch (Exception ex)
                 {
+                    if (++_slv3OpenFailures == 1)
+                    {
+                        _log?.Invoke($"SL V3 open failed: {ex.Message}");
+                    }
+
                     warnings.Add($"SL V3 open failed: {ex.Message}");
                 }
             }
@@ -494,10 +548,15 @@ public sealed class ControlLoop : IDisposable
 
     private void ApplyRgb(ControlSettings settings, List<string> warnings)
     {
-        var key = $"{settings.RgbR},{settings.RgbG},{settings.RgbB}";
-        var (r, g, b) = ((byte)Math.Clamp(settings.RgbR, 0, 255),
-                        (byte)Math.Clamp(settings.RgbG, 0, 255),
-                        (byte)Math.Clamp(settings.RgbB, 0, 255));
+        // "Off" is an active color: every surface gets black (and persists it), because
+        // several devices (SL V3 firmware, hub hardware mode) fall back to their own rainbow
+        // effects the moment we merely stop writing
+        var (r, g, b) = settings.RgbOff
+            ? ((byte)0, (byte)0, (byte)0)
+            : ((byte)Math.Clamp(settings.RgbR, 0, 255),
+               (byte)Math.Clamp(settings.RgbG, 0, 255),
+               (byte)Math.Clamp(settings.RgbB, 0, 255));
+        var key = $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
         {
@@ -605,7 +664,7 @@ public sealed class ControlLoop : IDisposable
 
         lock (_slv3Gate)
         {
-            if (_slv3 is null)
+            if (_slv3 is null || _slv3Dead)
             {
                 return;
             }
@@ -706,6 +765,9 @@ public sealed class ControlLoop : IDisposable
 
     private bool _pulseWasActive;
 
+    // per-hub fingerprint of the channels that currently report a tach, for reseat detection
+    private readonly Dictionary<string, string> _hubTachSignatures = [];
+
     private void ApplyCorsair(int duty, int pumpDuty, List<DeviceReading> readings, List<string> warnings)
     {
         var pulseActive = AnyPulsePending();
@@ -759,6 +821,55 @@ public sealed class ControlLoop : IDisposable
                 }
 
                 var speeds = hub.ReadSpeeds().Where(s => s.Rpm is not null).ToDictionary(s => s.Channel);
+
+                // degraded-link tracking: a fan that enumerates but reports no tach also ignores
+                // LED data on this hardware (verified with `link ledtest`). When a channel's tach
+                // comes alive mid-session — the owner reseated a junction — pulse LED power so the
+                // hub re-registers the fan, and re-send colors immediately.
+                var fanChannels = hub.Channels
+                    .Where(c => !c.IsPump && c.Info?.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed) == true)
+                    .ToList();
+                var degraded = fanChannels.Where(c => !speeds.ContainsKey(c.Channel))
+                    .Select(c => c.Channel).OrderBy(c => c).ToList();
+                var responsive = fanChannels.Where(c => speeds.ContainsKey(c.Channel))
+                    .Select(c => c.Channel).OrderBy(c => c).ToList();
+                var tachSignature = string.Join(",", responsive);
+                if (_hubTachSignatures.TryGetValue(hub.SerialNumber, out var previousTach)
+                    && previousTach != tachSignature)
+                {
+                    // pulse only on GAINED channels (a reseat): pulsing visibly blinks the whole
+                    // chain, so a transient tach dropout must not trigger it
+                    HashSet<int> previousSet = previousTach.Length == 0
+                        ? []
+                        : previousTach.Split(',').Select(int.Parse).ToHashSet();
+                    var gained = responsive.Where(c => !previousSet.Contains(c)).ToList();
+                    _log?.Invoke($"hub {hub.SerialNumber[..8]}… responsive fan channels changed: "
+                        + $"[{previousTach}] → [{tachSignature}]");
+                    if (gained.Count > 0)
+                    {
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… ch{string.Join(", ch", gained)} came alive "
+                            + "— pulsing LED power and re-applying colors");
+                        try
+                        {
+                            hub.PulseLedPower();
+                        }
+                        catch (LinkHubException ex)
+                        {
+                            _log?.Invoke($"hub {hub.SerialNumber[..8]}… LED power pulse failed: {ex.Message}");
+                        }
+
+                        _appliedHubRgb.Remove(hub.SerialNumber);
+                    }
+                }
+
+                _hubTachSignatures[hub.SerialNumber] = tachSignature;
+                if (degraded.Count > 0)
+                {
+                    warnings.Add($"{degraded.Count} Corsair fan(s) on hub {hub.SerialNumber[..4]}… have degraded links "
+                        + $"(no tach, no RGB): ch{string.Join(", ch", degraded)} — reseat those magnetic junctions "
+                        + "or swap the stack onto the other Link port");
+                }
+
                 foreach (var channel in hub.Channels)
                 {
                     if (channel.Info?.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed) != true)
@@ -792,39 +903,55 @@ public sealed class ControlLoop : IDisposable
         }
     }
 
+    private readonly Dictionary<string, bool> _slv3TelemetryFresh = [];
+
     private void ApplySlv3(int duty, List<DeviceReading> readings, List<string> warnings)
     {
         _slv3KeepaliveDuty = duty; // the keepalive thread sends the PWM at its own 1 Hz cadence
 
+        Slv3Controller? slv3;
         lock (_slv3Gate)
         {
-            if (_slv3 is null)
-            {
-                return;
-            }
+            slv3 = _slv3Dead ? null : _slv3;
+        }
 
-            try
+        if (slv3 is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // deliberately outside _slv3Gate: polling only touches the RX dongle, and its slow
+            // paths (timeouts, recovery resets) must never block the keepalive thread
+            var devices = slv3.PollDevices();
+            foreach (var device in devices.Where(d => d.IsBoundTo(slv3.MasterMac)))
             {
-                var devices = _slv3.PollDevices();
-                foreach (var device in devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+                var fresh = slv3.LastSeenAgeMs(device) <= Slv3StaleAfterMs;
+                if (_slv3TelemetryFresh.TryGetValue(device.MacText, out var was) && was != fresh)
                 {
-                    var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
-                        .Where(r => r > 0).Select(r => (int)r).ToList();
-                    readings.Add(new DeviceReading(
-                        "Lian Li",
-                        $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
-                        rpms.Count > 0 ? (int)rpms.Average() : null,
-                        duty,
-                        IsPump: false,
-                        device.MacText));
+                    _log?.Invoke(fresh
+                        ? $"SL V3 group {device.MacText[..4]} telemetry recovered"
+                        : $"SL V3 group {device.MacText[..4]} telemetry lost — speeds and colors keep being sent");
                 }
+
+                _slv3TelemetryFresh[device.MacText] = fresh;
+
+                var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
+                    .Where(r => r > 0).Select(r => (int)r).ToList();
+                readings.Add(new DeviceReading(
+                    "Lian Li",
+                    $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
+                    fresh && rpms.Count > 0 ? (int)rpms.Average() : null,
+                    duty,
+                    IsPump: false,
+                    device.MacText));
             }
-            catch (Exception ex)
-            {
-                warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
-                _slv3.Dispose();
-                _slv3 = null;
-            }
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
+            _slv3Dead = true; // the tick's EnsureDevices reopens under the gate
         }
     }
 

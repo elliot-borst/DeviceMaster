@@ -369,9 +369,41 @@ public sealed class MainWindow : Window
     private void RebuildSwatches()
     {
         _swatchPanel.Children.Clear();
+
+        // "lights out" tile — actively paints every LED black (≠ the toggle, which stops
+        // writing and lets devices fall back to their own effects)
+        var offSwatch = new Border
+        {
+            Width = 26,
+            Height = 26,
+            CornerRadius = new CornerRadius(7),
+            Background = new SolidColorBrush(Color.FromRgb(10, 10, 14)),
+            BorderBrush = _controlSettings.RgbOff ? Theme.Accent : Theme.Line2,
+            BorderThickness = new Thickness(_controlSettings.RgbOff ? 2 : 1),
+            Margin = new Thickness(0, 0, 8, 0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "Lights out — every LED off",
+            Child = new TextBlock
+            {
+                Text = "⊘",
+                FontSize = 13,
+                Foreground = _controlSettings.RgbOff ? Theme.Accent2 : Theme.Dim,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        offSwatch.MouseLeftButtonUp += (_, _) =>
+        {
+            _controlSettings.RgbOff = true;
+            RebuildSwatches();
+            OnControlSettingChanged();
+        };
+        _swatchPanel.Children.Add(offSwatch);
+
         foreach (var (r, g, b) in SwatchColors)
         {
-            var selected = _controlSettings.RgbR == r && _controlSettings.RgbG == g && _controlSettings.RgbB == b;
+            var selected = !_controlSettings.RgbOff
+                && _controlSettings.RgbR == r && _controlSettings.RgbG == g && _controlSettings.RgbB == b;
             var swatch = new Border
             {
                 Width = 26,
@@ -386,6 +418,7 @@ public sealed class MainWindow : Window
             var (cr, cg, cb) = (r, g, b);
             swatch.MouseLeftButtonUp += (_, _) =>
             {
+                _controlSettings.RgbOff = false;
                 _controlSettings.RgbR = cr;
                 _controlSettings.RgbG = cg;
                 _controlSettings.RgbB = cb;
@@ -400,11 +433,15 @@ public sealed class MainWindow : Window
     {
         if (!_controlSettings.RgbEnabled)
         {
-            _rgbStatus.Text = "Lighting off — devices keep their own colors.";
+            _rgbStatus.Text = "Lighting control off — devices keep their own colors.";
         }
         else if (_controlSettings.Mode == ControlMode.Off)
         {
             _rgbStatus.Text = "Waiting for fan control — set Mode to Manual or Curve to apply lighting.";
+        }
+        else if (_controlSettings.RgbOff)
+        {
+            _rgbStatus.Text = "Lights out — every LED on Corsair, Lian Li, motherboard ARGB, RAM and GPU is dark.";
         }
         else
         {

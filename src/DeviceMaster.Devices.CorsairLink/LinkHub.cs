@@ -123,11 +123,14 @@ public sealed class LinkHub : IDisposable
             LoadSubDevices();
             return false;
         }
-        catch (LinkHubException ex) when (ex.IsIncorrectMode && allowEnterSoftwareMode)
+        catch (LinkHubException ex) when (ex.IsIncorrectMode && (allowEnterSoftwareMode || _inSoftwareMode))
         {
+            // either the hub is in hardware mode and we're allowed to switch, or it dropped
+            // out of software mode behind our back — (re-)enter and retry once
+            var wasInSoftwareMode = _inSoftwareMode;
             EnterSoftwareMode();
             LoadSubDevices();
-            return true;
+            return !wasInSoftwareMode;
         }
     }
 
@@ -521,6 +524,10 @@ public sealed class LinkHub : IDisposable
                 [0x1E],
                 LinkHubProtocol.DataTypes.LedRegistry,
                 LinkHubPackets.CreateLedRegistryData(maxChannel, target));
+
+            // reference parity (OpenLinkHub UpdateExternalAdapter): the hub needs settle time
+            // between the registry write and the LED power pulse that re-registers devices
+            Thread.Sleep(100);
             SendCommand(LinkHubProtocol.Commands.ResetLedPower);
         }
 
@@ -529,6 +536,20 @@ public sealed class LinkHub : IDisposable
 
         static string Describe(IReadOnlyDictionary<int, byte> registry) =>
             string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
+    }
+
+    /// <summary>
+    /// Pulses chain LED power (0x15 0x01) so the hub re-registers its LED devices. Used when a
+    /// fan's link comes alive mid-session (physical reseat) — colors must be re-applied after.
+    /// </summary>
+    public void PulseLedPower()
+    {
+        lock (_ioLock)
+        {
+            SendCommand(LinkHubProtocol.Commands.ResetLedPower);
+        }
+
+        _colorReady = false; // the color endpoint must be rebuilt before the next write
     }
 
     private byte[] ReadViaColorHandle(byte endpoint)
@@ -561,6 +582,19 @@ public sealed class LinkHub : IDisposable
 
     private byte[] ReadEndpoint(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType)
     {
+        try
+        {
+            return ReadEndpointCore(endpoint, dataType);
+        }
+        catch (LinkHubException ex) when (ex.IsIncorrectMode && _inSoftwareMode)
+        {
+            RecoverSoftwareMode();
+            return ReadEndpointCore(endpoint, dataType);
+        }
+    }
+
+    private byte[] ReadEndpointCore(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType)
+    {
         lock (_ioLock)
         {
             SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
@@ -573,6 +607,19 @@ public sealed class LinkHub : IDisposable
 
     private void WriteEndpoint(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType, ReadOnlySpan<byte> data)
     {
+        try
+        {
+            WriteEndpointCore(endpoint, dataType, data);
+        }
+        catch (LinkHubException ex) when (ex.IsIncorrectMode && _inSoftwareMode)
+        {
+            RecoverSoftwareMode();
+            WriteEndpointCore(endpoint, dataType, data);
+        }
+    }
+
+    private void WriteEndpointCore(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType, ReadOnlySpan<byte> data)
+    {
         var writeData = LinkHubPackets.CreateWriteData(dataType, data);
 
         lock (_ioLock)
@@ -582,6 +629,18 @@ public sealed class LinkHub : IDisposable
             SendCommand(LinkHubProtocol.Commands.Write, writeData);
             SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
         }
+    }
+
+    /// <summary>
+    /// The hub occasionally answers 0x03 to endpoint traffic even though this session put it in
+    /// software mode — seen live right after a mode change and when another process touched the
+    /// hub. Reference behaviour (FanControl.CorsairLink) is to re-enter software mode and go
+    /// again; we retry the failed endpoint operation once after re-entering.
+    /// </summary>
+    private void RecoverSoftwareMode()
+    {
+        _trace?.Invoke($"hub {SerialNumber[..Math.Min(8, SerialNumber.Length)]}: 0x03 while in software mode — re-entering and retrying once");
+        EnterSoftwareMode();
     }
 
     private byte[] SendCommand(ReadOnlySpan<byte> command, ReadOnlySpan<byte> data = default, ReadOnlySpan<byte> waitForDataType = default)

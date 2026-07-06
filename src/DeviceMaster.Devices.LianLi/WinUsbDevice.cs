@@ -103,6 +103,11 @@ public sealed class WinUsbDevice : IDisposable
             var timeout = (uint)timeoutMs;
             WinUsb_SetPipePolicy(winUsbHandle, inPipe, PIPE_TRANSFER_TIMEOUT, sizeof(uint), ref timeout);
             WinUsb_SetPipePolicy(winUsbHandle, outPipe, PIPE_TRANSFER_TIMEOUT, sizeof(uint), ref timeout);
+
+            // clear any halt/stall left by a previous session or a device replug — a stalled
+            // OUT pipe makes every WritePipe fail with 0 bytes transferred (best effort)
+            _ = WinUsb_ResetPipe(winUsbHandle, inPipe);
+            _ = WinUsb_ResetPipe(winUsbHandle, outPipe);
             return new WinUsbDevice(devicePath, usbId, fileHandle, winUsbHandle, inPipe, outPipe);
         }
         catch
@@ -152,7 +157,12 @@ public sealed class WinUsbDevice : IDisposable
         if (!WinUsb_WritePipe(_winUsbHandle, OutPipe, buffer, (uint)buffer.Length, out var transferred, IntPtr.Zero)
             || transferred != buffer.Length)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"WinUsb_WritePipe failed ({transferred}/{buffer.Length} bytes)");
+            var error = Marshal.GetLastWin32Error();
+
+            // a stalled pipe rejects every transfer until reset — clear it so the NEXT
+            // attempt can succeed, then surface this failure to the caller
+            _ = WinUsb_ResetPipe(_winUsbHandle, OutPipe);
+            throw new Win32Exception(error, $"WinUsb_WritePipe failed (error {error}, {transferred}/{buffer.Length} bytes)");
         }
     }
 
@@ -273,6 +283,9 @@ public sealed class WinUsbDevice : IDisposable
     [DllImport("winusb.dll", SetLastError = true)]
     private static extern bool WinUsb_SetPipePolicy(IntPtr interfaceHandle, byte pipeId, uint policyType,
         uint valueLength, ref uint value);
+
+    [DllImport("winusb.dll", SetLastError = true)]
+    private static extern bool WinUsb_ResetPipe(IntPtr interfaceHandle, byte pipeId);
 
     [DllImport("winusb.dll", SetLastError = true)]
     private static extern bool WinUsb_WritePipe(IntPtr interfaceHandle, byte pipeId, byte[] buffer,

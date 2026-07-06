@@ -16,27 +16,63 @@ public sealed class Slv3Controller : IDisposable
     private const ushort RxPid = 0x8041;
     private const int MacProbeReadTimeoutMs = 200;
     private const int DeviceListReadTimeoutMs = 1000;
+    private const int DeviceListProbeTimeoutMs = 300;
+
+    /// <summary>Silent polls tolerated before the recovery ladder kicks in (RX reset, then RF engine).</summary>
+    private const int FailedPollsBeforeRecovery = 3;
+
+    /// <summary>A device absent this long from otherwise-healthy telemetry is treated as removed.</summary>
+    private const long RememberedDeviceTtlMs = 10 * 60_000;
 
     private readonly WinUsbDevice _tx;
     private readonly WinUsbDevice _rx;
     private readonly Action<string>? _trace;
+    private readonly Action<string>? _log;
 
-    private Slv3Controller(WinUsbDevice tx, WinUsbDevice rx, Action<string>? trace)
+    // TX pipe serialization: the keepalive thread and the control tick (recovery, colors)
+    // may both write the TX dongle — 64-byte protocol chunks must never interleave.
+    private readonly object _txGate = new();
+
+    // protects the remembered-device map and the Devices snapshot swap
+    private readonly object _deviceGate = new();
+    private readonly Dictionary<string, (Slv3Device Device, long LastSeenTick)> _known = [];
+    private int _consecutiveFailedPolls;
+
+    private Slv3Controller(WinUsbDevice tx, WinUsbDevice rx, Action<string>? trace, Action<string>? log)
     {
         _tx = tx;
         _rx = rx;
         _trace = trace;
+        _log = log;
     }
 
     public byte[] MasterMac { get; private set; } = new byte[6];
     public byte MasterChannel { get; private set; } = 8;
     public ushort MasterFirmware { get; private set; }
+
+    /// <summary>
+    /// Every wireless device seen this session (freshest record per MAC). Devices missing from
+    /// a poll stay listed — the RX telemetry path drops out routinely while the TX command path
+    /// keeps working, so keepalive/PWM/RGB must keep flowing to them.
+    /// </summary>
     public IReadOnlyList<Slv3Device> Devices { get; private set; } = [];
+
     public int? MotherboardPwm { get; private set; }
 
     public string MasterMacText => Convert.ToHexString(MasterMac).ToLowerInvariant();
 
-    public static Slv3Controller Open(Action<string>? trace = null)
+    /// <summary>Milliseconds since this device last appeared in RX telemetry (long.MaxValue if never).</summary>
+    public long LastSeenAgeMs(Slv3Device device)
+    {
+        lock (_deviceGate)
+        {
+            return _known.TryGetValue(device.MacText, out var entry)
+                ? Environment.TickCount64 - entry.LastSeenTick
+                : long.MaxValue;
+        }
+    }
+
+    public static Slv3Controller Open(Action<string>? trace = null, Action<string>? log = null)
     {
         var candidates = WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid);
 
@@ -63,7 +99,7 @@ public sealed class Slv3Controller : IDisposable
         {
             rx = WinUsbDevice.Open(rxInfo.Path, rxInfo.UsbId);
             trace?.Invoke($"TX pipes: in=0x{tx.InPipe:X2} out=0x{tx.OutPipe:X2}; RX pipes: in=0x{rx.InPipe:X2} out=0x{rx.OutPipe:X2}");
-            var controller = new Slv3Controller(tx, rx, trace);
+            var controller = new Slv3Controller(tx, rx, trace, log);
             controller.FindMaster();
             controller.ResetTx();
             controller.SendRxBringUp();
@@ -113,7 +149,11 @@ public sealed class Slv3Controller : IDisposable
         var command = new byte[Slv3Protocol.UsbPacketSize];
         command[0] = 0x11;
         command[1] = 0x08;
-        _tx.Write(command);
+        lock (_txGate)
+        {
+            _tx.Write(command);
+        }
+
         _trace?.Invoke("TX reset sent");
         Thread.Sleep(500);
     }
@@ -128,16 +168,21 @@ public sealed class Slv3Controller : IDisposable
         var videoStart = new byte[Slv3Protocol.UsbPacketSize];
         videoStart[0] = 0x11;
         videoStart[1] = 0x01;
-        _tx.Write(videoStart);
-        Thread.Sleep(2);
 
         var prep = new byte[Slv3Protocol.UsbPacketSize];
         prep[0] = Slv3Protocol.UsbCmdSendRf;
         prep[1] = 0x00;
         prep[2] = MasterChannel;
         prep[3] = 0xFF;
-        _tx.Write(prep);
-        Thread.Sleep(2);
+
+        lock (_txGate)
+        {
+            _tx.Write(videoStart);
+            Thread.Sleep(2);
+            _tx.Write(prep);
+            Thread.Sleep(2);
+        }
+
         _trace?.Invoke("RF engine activation sent (VIDEO_START + prep)");
     }
 
@@ -182,31 +227,93 @@ public sealed class Slv3Controller : IDisposable
     }
 
     private byte? _workingPageCount;
+    private int _recoveryStage; // 0 = nothing tried yet, 1 = RX reset done, 2 = RF engine restart done
 
     /// <summary>
-    /// Polls the RX dongle for the current device list (RPMs, PWM, fan counts). Firmware 16
-    /// ignores page count 1, so on first contact we probe 1→4 and cache what works.
+    /// Set once the in-band recovery ladder (RX reset, then RF engine restart) has run and
+    /// telemetry is still silent. The owner should dispose this controller and reopen the
+    /// dongles — escalating to a USB device-node restart if reopening alone doesn't help.
+    /// </summary>
+    public bool NeedsReopen { get; private set; }
+
+    /// <summary>
+    /// Polls the RX dongle for the current device list (RPMs, PWM, fan counts) and merges it
+    /// into the remembered-device registry. A silent RX never shrinks the device list; after
+    /// <see cref="FailedPollsBeforeRecovery"/> consecutive silent polls the recovery ladder
+    /// runs (RX reset → RF engine restart → <see cref="NeedsReopen"/>).
     /// </summary>
     public IReadOnlyList<Slv3Device> PollDevices()
     {
-        if (_workingPageCount is { } cached)
+        if (TryReadDeviceList() is { } fresh)
         {
-            return PollDevicesWithPageCount(cached);
+            if (_recoveryStage != 0)
+            {
+                _log?.Invoke("SL V3 telemetry recovered");
+            }
+
+            _consecutiveFailedPolls = 0;
+            _recoveryStage = 0;
+            MergeDevices(fresh);
+            return Devices;
         }
 
-        for (byte page = 1; page <= 4; page++)
+        if (++_consecutiveFailedPolls >= FailedPollsBeforeRecovery && !NeedsReopen)
         {
-            var result = PollDevicesWithPageCount(page);
-            if (_workingPageCount is not null)
+            _consecutiveFailedPolls = 0;
+            _workingPageCount = null; // re-probe page counts after any recovery action
+            try
             {
-                return result;
+                switch (_recoveryStage)
+                {
+                    case 0:
+                        _log?.Invoke("SL V3 telemetry silent — resetting the RX dongle");
+                        ResetRx();
+                        SendRxBringUp();
+                        _recoveryStage = 1;
+                        break;
+                    case 1:
+                        _log?.Invoke("SL V3 telemetry still silent after an RX reset — restarting the RF engine");
+                        ActivateRfEngine();
+                        SendRxBringUp();
+                        _recoveryStage = 2;
+                        break;
+                    default:
+                        _log?.Invoke("SL V3 telemetry still silent after in-band recovery — dongles need a reopen/restart");
+                        NeedsReopen = true;
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"SL V3 recovery step failed: {ex.Message} — dongles need a reopen/restart");
+                NeedsReopen = true;
             }
         }
 
         return Devices;
     }
 
-    private IReadOnlyList<Slv3Device> PollDevicesWithPageCount(byte pageCount)
+    /// <summary>One GetDev round; null when the RX doesn't produce a valid response.</summary>
+    private IReadOnlyList<Slv3Device>? TryReadDeviceList()
+    {
+        if (_workingPageCount is { } cached)
+        {
+            return ReadDeviceListOnce(cached, DeviceListReadTimeoutMs);
+        }
+
+        // fw 16 ignores page count 1 entirely (verified live) — probe it last, briefly
+        foreach (var page in new byte[] { 2, 3, 4, 1 })
+        {
+            if (ReadDeviceListOnce(page, DeviceListProbeTimeoutMs) is { } list)
+            {
+                return list;
+            }
+        }
+
+        return null;
+    }
+
+    private IReadOnlyList<Slv3Device>? ReadDeviceListOnce(byte pageCount, int readTimeoutMs)
     {
         _rx.FlushInput();
         _rx.Write(Slv3Protocol.BuildGetDeviceList(pageCount));
@@ -219,7 +326,7 @@ public sealed class Slv3Controller : IDisposable
         while (total < response.Length)
         {
             var chunk = new byte[512];
-            lastResult = _rx.Read(chunk, DeviceListReadTimeoutMs);
+            lastResult = _rx.Read(chunk, readTimeoutMs);
             if (lastResult <= 0)
             {
                 break;
@@ -236,21 +343,46 @@ public sealed class Slv3Controller : IDisposable
         _trace?.Invoke($"GetDev(pages={pageCount}) read {total} byte(s) ({(lastResult == -1 ? "timeout" : "zlp/end")})"
             + (total > 0 ? $", head={Convert.ToHexString(response.AsSpan(0, Math.Min(total, 12)))}" : ""));
 
-        var length = total;
-        if (length < 4 || response[0] != Slv3Protocol.UsbCmdSendRf)
+        if (total < 4 || response[0] != Slv3Protocol.UsbCmdSendRf)
         {
-            return Devices; // keep last known list on timeout — the RX answers intermittently
+            return null;
         }
 
         _workingPageCount = pageCount;
-        var (devices, moboPwm) = Slv3Protocol.ParseDeviceList(response, length);
+        var (devices, moboPwm) = Slv3Protocol.ParseDeviceList(response, total);
         MotherboardPwm = moboPwm;
-        if (devices.Count > 0)
-        {
-            Devices = devices;
-        }
+        return devices;
+    }
 
-        return Devices;
+    private void MergeDevices(IReadOnlyList<Slv3Device> fresh)
+    {
+        var now = Environment.TickCount64;
+        lock (_deviceGate)
+        {
+            foreach (var device in fresh)
+            {
+                if (!_known.ContainsKey(device.MacText))
+                {
+                    _log?.Invoke($"SL V3 group {device.MacText[..4]} appeared ({device.FanCount} fans, rx type {device.RxType})");
+                }
+
+                _known[device.MacText] = (device, now);
+            }
+
+            // telemetry is healthy right now, so a long-absent device is genuinely gone
+            foreach (var mac in _known
+                .Where(kv => now - kv.Value.LastSeenTick > RememberedDeviceTtlMs)
+                .Select(kv => kv.Key).ToList())
+            {
+                _log?.Invoke($"SL V3 group {mac[..4]} absent from telemetry for 10 min — dropping it");
+                _known.Remove(mac);
+            }
+
+            Devices = _known.Values
+                .Select(v => v.Device)
+                .OrderBy(d => d.MacText, StringComparer.Ordinal)
+                .ToList();
+        }
     }
 
     /// <summary>
@@ -321,6 +453,37 @@ public sealed class Slv3Controller : IDisposable
         }
     }
 
+    /// <summary>
+    /// The software equivalent of unplugging and reseating both dongles: restarts their USB
+    /// device nodes (requires elevation). Last-resort recovery when the dongle firmware wedges
+    /// so hard that in-band resets and a plain reopen stop working — verified live: a physical
+    /// replug fixed exactly this state on 2026-07-06. Only registry-approved SL V3 dongles are
+    /// touched. Returns the number of devices restarted.
+    /// </summary>
+    public static int RestartDongleDevices(Action<string>? log = null)
+    {
+        var restarted = 0;
+        foreach (var (path, usbId) in WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid))
+        {
+            if (usbId.Pid is not (TxPid or RxPid) || !KnownDeviceRegistry.IsWriteAllowed(usbId))
+            {
+                continue;
+            }
+
+            if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(path) is not { } instanceId)
+            {
+                log?.Invoke($"SL V3 dongle {usbId}: could not derive a device instance id from its path — skipped");
+                continue;
+            }
+
+            log?.Invoke($"SL V3 dongle {usbId}: restarting its USB device node (software replug)");
+            Core.Discovery.UsbDeviceRestarter.Restart(instanceId);
+            restarted++;
+        }
+
+        return restarted;
+    }
+
     /// <summary>Diagnostic: writes a raw 64-byte command to the TX or RX and returns the reply.</summary>
     public (int Length, byte[] Data) ProbeRaw(bool toTx, byte[] head, int readTimeoutMs = 800)
     {
@@ -336,10 +499,13 @@ public sealed class Slv3Controller : IDisposable
 
     private void SendRfChunks(byte[] rfData, byte channel, byte rxType)
     {
-        foreach (var packet in Slv3Protocol.ChunkRfData(rfData, channel, rxType))
+        lock (_txGate)
         {
-            _tx.Write(packet);
-            Thread.Sleep(2);
+            foreach (var packet in Slv3Protocol.ChunkRfData(rfData, channel, rxType))
+            {
+                _tx.Write(packet);
+                Thread.Sleep(2);
+            }
         }
     }
 
