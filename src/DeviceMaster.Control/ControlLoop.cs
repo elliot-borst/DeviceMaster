@@ -806,9 +806,18 @@ public sealed class ControlLoop : IDisposable
                         _log?.Invoke($"Link chain changed on hub {hub.SerialNumber[..8]}… — re-applying duties and colors");
                     }
 
-                    if (hub.SyncLedRegistry(_log))
+                    try
                     {
-                        _appliedHubRgb.Remove(hub.SerialNumber);
+                        if (hub.SyncLedRegistry(_log))
+                        {
+                            _appliedHubRgb.Remove(hub.SerialNumber);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // registry maintenance is best-effort — it must never take down the
+                        // speed-control session (v21.0 did exactly that, every rescan)
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… LED registry sync skipped: {ex.Message}");
                     }
                 }
 
@@ -909,49 +918,49 @@ public sealed class ControlLoop : IDisposable
     {
         _slv3KeepaliveDuty = duty; // the keepalive thread sends the PWM at its own 1 Hz cadence
 
-        Slv3Controller? slv3;
+        // Everything below holds _slv3Gate: the dongle pair is ONE RF system and its firmware
+        // crashes when TX traffic (keepalive) and RX polling overlap — the v21.0 release
+        // interleaved them and the TX dongle died with error 31 every ~50 s, taking the whole
+        // USB branch (including the Link hubs) down with it. Poll timeouts are short and
+        // bounded instead, so the keepalive is delayed at most ~400 ms in steady state.
         lock (_slv3Gate)
         {
-            slv3 = _slv3Dead ? null : _slv3;
-        }
-
-        if (slv3 is null)
-        {
-            return;
-        }
-
-        try
-        {
-            // deliberately outside _slv3Gate: polling only touches the RX dongle, and its slow
-            // paths (timeouts, recovery resets) must never block the keepalive thread
-            var devices = slv3.PollDevices();
-            foreach (var device in devices.Where(d => d.IsBoundTo(slv3.MasterMac)))
+            if (_slv3 is null || _slv3Dead)
             {
-                var fresh = slv3.LastSeenAgeMs(device) <= Slv3StaleAfterMs;
-                if (_slv3TelemetryFresh.TryGetValue(device.MacText, out var was) && was != fresh)
-                {
-                    _log?.Invoke(fresh
-                        ? $"SL V3 group {device.MacText[..4]} telemetry recovered"
-                        : $"SL V3 group {device.MacText[..4]} telemetry lost — speeds and colors keep being sent");
-                }
-
-                _slv3TelemetryFresh[device.MacText] = fresh;
-
-                var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
-                    .Where(r => r > 0).Select(r => (int)r).ToList();
-                readings.Add(new DeviceReading(
-                    "Lian Li",
-                    $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
-                    fresh && rpms.Count > 0 ? (int)rpms.Average() : null,
-                    duty,
-                    IsPump: false,
-                    device.MacText));
+                return;
             }
-        }
-        catch (Exception ex)
-        {
-            warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
-            _slv3Dead = true; // the tick's EnsureDevices reopens under the gate
+
+            try
+            {
+                var devices = _slv3.PollDevices();
+                foreach (var device in devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+                {
+                    var fresh = _slv3.LastSeenAgeMs(device) <= Slv3StaleAfterMs;
+                    if (_slv3TelemetryFresh.TryGetValue(device.MacText, out var was) && was != fresh)
+                    {
+                        _log?.Invoke(fresh
+                            ? $"SL V3 group {device.MacText[..4]} telemetry recovered"
+                            : $"SL V3 group {device.MacText[..4]} telemetry lost — speeds and colors keep being sent");
+                    }
+
+                    _slv3TelemetryFresh[device.MacText] = fresh;
+
+                    var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
+                        .Where(r => r > 0).Select(r => (int)r).ToList();
+                    readings.Add(new DeviceReading(
+                        "Lian Li",
+                        $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
+                        fresh && rpms.Count > 0 ? (int)rpms.Average() : null,
+                        duty,
+                        IsPump: false,
+                        device.MacText));
+                }
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
+                _slv3Dead = true; // the tick's EnsureDevices reopens under the gate
+            }
         }
     }
 

@@ -14,9 +14,12 @@ public sealed class Slv3Controller : IDisposable
 {
     private const ushort TxPid = 0x8040;
     private const ushort RxPid = 0x8041;
+    // Poll timeouts stay SHORT: polling holds the same gate as the 800 ms keepalive (the
+    // dongle firmware cannot take concurrent TX+RX host I/O), and SL V3 fans revert to
+    // firmware defaults when the keepalive pauses much beyond a second.
     private const int MacProbeReadTimeoutMs = 200;
-    private const int DeviceListReadTimeoutMs = 1000;
-    private const int DeviceListProbeTimeoutMs = 300;
+    private const int DeviceListReadTimeoutMs = 400;
+    private const int DeviceListProbeTimeoutMs = 250;
 
     /// <summary>Silent polls tolerated before the recovery ladder kicks in (RX reset, then RF engine).</summary>
     private const int FailedPollsBeforeRecovery = 3;

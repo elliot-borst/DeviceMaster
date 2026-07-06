@@ -538,6 +538,39 @@ public sealed class LinkHub : IDisposable
             string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
     }
 
+    /// <summary>The hub's current persisted LED registry (channel → LED command code).</summary>
+    public IReadOnlyDictionary<int, byte> ReadLedRegistry()
+    {
+        lock (_ioLock)
+        {
+            return LinkHubParser.ParseLedRegistry(ReadViaColorHandle(0x1E));
+        }
+    }
+
+    /// <summary>
+    /// Writes an EXPLICIT LED registry (diagnostics: registry-variant experiments). Channels
+    /// absent from <paramref name="entries"/> get an empty slot. Persists in hub flash until
+    /// rewritten — the control loop re-syncs it to the full chain on its next open.
+    /// </summary>
+    public void WriteLedRegistry(IReadOnlyDictionary<int, byte> entries)
+    {
+        var maxChannel = Math.Max(
+            _channels.Count == 0 ? 0 : _channels.Max(c => c.Channel),
+            entries.Keys.DefaultIfEmpty(0).Max());
+
+        lock (_ioLock)
+        {
+            WriteEndpoint(
+                [0x1E],
+                LinkHubProtocol.DataTypes.LedRegistry,
+                LinkHubPackets.CreateLedRegistryData(maxChannel, entries));
+            Thread.Sleep(100);
+            SendCommand(LinkHubProtocol.Commands.ResetLedPower);
+        }
+
+        _colorReady = false;
+    }
+
     /// <summary>
     /// Pulses chain LED power (0x15 0x01) so the hub re-registers its LED devices. Used when a
     /// fan's link comes alive mid-session (physical reseat) — colors must be re-applied after.
@@ -553,6 +586,19 @@ public sealed class LinkHub : IDisposable
     }
 
     private byte[] ReadViaColorHandle(byte endpoint)
+    {
+        try
+        {
+            return ReadViaColorHandleCore(endpoint);
+        }
+        catch (LinkHubException ex) when (ex.IsIncorrectMode && _inSoftwareMode)
+        {
+            RecoverSoftwareMode();
+            return ReadViaColorHandleCore(endpoint);
+        }
+    }
+
+    private byte[] ReadViaColorHandleCore(byte endpoint)
     {
         // open (0x0d 0x00 + endpoint) → read (0x08 0x00) → close (0x05 0x01); responses to
         // open/close are best-effort on fw 3.10, like the color endpoint itself
