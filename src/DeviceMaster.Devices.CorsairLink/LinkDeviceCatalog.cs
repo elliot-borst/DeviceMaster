@@ -67,7 +67,7 @@ public static class LinkDeviceCatalog
         new LinkDeviceInfo(LinkDeviceModel.FanRxMaxRgbSeries, 0x00, "RX MAX RGB Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed),
         new LinkDeviceInfo(LinkDeviceModel.PumpXd5Series, 0x00, "XD5", LinkDeviceFlags.All),
         new LinkDeviceInfo(LinkDeviceModel.PumpXd5Series, 0x01, "XD5 (white)", LinkDeviceFlags.All),
-        // Confirmed on this machine (2026-07-06): XD5 Elite LCD screen module enumerates as its own
+        // Verified on real hardware: the XD5 Elite LCD screen module enumerates as its own
         // chain device (model 0x0E, variant 0x00) next to the pump. No speed to control.
         new LinkDeviceInfo(LinkDeviceModel.LcdXd5Elite, 0x00, "XD5 Elite LCD display module", LinkDeviceFlags.None),
         new LinkDeviceInfo(LinkDeviceModel.FanLxSeries, 0x00, "LX Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed),

@@ -26,10 +26,11 @@ on the real hardware before the next begins. Stage 0 complete 2026-07-06.
 
 ## Hardware truth
 
-docs/DEVICES.md records what is physically attached (scan 2026-07-06). Notable: TWO iCUE Link
-hubs; Lian Li is the SL V3 *wireless* ecosystem (WinUSB, protocol unresearched — NOT classic
-Uni Hub); Corsair LCD self-reports "XD5 ELITE LCD Pump"; Turzx is an 8.8" panel on COM3.
-docs/REFERENCES.md maps each device to the open-source implementation we port from.
+Keep the repo generic — other people will install this. Supported hardware and protocol
+facts live in docs/SUPPORTED-DEVICES.md. Machine-specific inventory (serials, MACs, chain
+maps of the dev rig) goes ONLY in local/MACHINE-NOTES.md, which is git-ignored — never
+commit rig-specific identifiers or name the owner's hardware in code, docs, or commits.
+docs/REFERENCES.md maps each device family to the open-source implementation we port from.
 
 ## Commands
 

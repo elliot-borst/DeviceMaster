@@ -47,13 +47,15 @@ Revisit a service split only if pre-login control or multi-user support becomes 
   LHM sensor polling (`monitor`), Serilog logging, safety primitives, unit tests.
 - **Stage 1 — fan speed control.** Progress 2026-07-06:
   - ✅ iCUE Link protocol ported (handshake, chain enumeration, RPM/coolant-temp reads,
-    fixed-duty writes) and verified on both hubs (`link status` / `link set`). Chain map in
-    DEVICES.md; coolant temp reads 23.6 °C from the pump channel.
+    fixed-duty writes) and verified on real hardware (`link status` / `link set`).
+    Coolant temperature is read from the pump chain device. Dev-rig chain maps live in
+    the git-ignored local/MACHINE-NOTES.md.
   - ✅ SL V3 wireless protocol research complete (REFERENCES.md) — fully documented in two
     MIT projects; fans need PWM re-sent every ≤1 s and revert to defaults otherwise
     (= fail-safe on crash by design).
   - ✅ SL V3 fan control implemented and verified (dependency-free WinUSB interop; TX/RX
-    dongle driver; keepalive model). Firmware 16 GetDev page quirk documented in DEVICES.md.
+    dongle driver; keepalive model). Firmware 16 GetDev page quirk documented in
+    SUPPORTED-DEVICES.md.
   - ⬜ Temperature curves + the long-running control loop (with failsafe rules below).
   - ⬜ Link hub crash-fallback verification: no keepalive exists in either reference; the
     hub appears to hold last-written duties in software mode. Graceful exit restores
@@ -61,7 +63,7 @@ Revisit a service split only if pre-login control or multi-user support becomes 
     the hub ever self-reverts; until proven, the control loop must treat "last write" as
     persistent — another reason pump stays at 100% whenever we are in software mode.
 - **Stage 2 — RGB static colors** on both families (OpenLinkHub for Link; SL V3 research).
-- **Stage 3 — pump speed control** via the Link hub (pump + XD5/XD7 res pump), floor-clamped.
+- **Stage 3 — pump speed control** via the Link hub (pump-bearing chain devices), floor-clamped.
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
   then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.
 - **Stage 5 — Turzx 8.8"** via the same rendering pipeline, serial protocol from
