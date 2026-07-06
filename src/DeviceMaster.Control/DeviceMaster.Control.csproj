@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Sensors\DeviceMaster.Sensors.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.LianLi\DeviceMaster.Devices.LianLi.csproj" />
+  </ItemGroup>
+
+</Project>

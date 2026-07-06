@@ -56,12 +56,19 @@ Revisit a service split only if pre-login control or multi-user support becomes 
   - ✅ SL V3 fan control implemented and verified (dependency-free WinUSB interop; TX/RX
     dongle driver; keepalive model). Firmware 16 GetDev page quirk documented in
     SUPPORTED-DEVICES.md.
-  - ⬜ Temperature curves + the long-running control loop (with failsafe rules below).
+  - ✅ Temperature curves + 1 Hz control loop (DeviceMaster.Control): coolant/CPU/GPU
+    sources, linear-interpolated curves, manual mode, sensor-failure ⇒ 100% failsafe,
+    write-on-change + periodic refresh for Link hubs, per-tick keepalive for SL V3.
+    Verified live across both families simultaneously (v2). Desktop app (DeviceMaster.Ui)
+    runs the loop with mode/source/duty controls, persisted config, and auto-updates.
   - ⬜ Link hub crash-fallback verification: no keepalive exists in either reference; the
     hub appears to hold last-written duties in software mode. Graceful exit restores
-    hardware mode (implemented & verified). Pending: kill-process test to observe whether
-    the hub ever self-reverts; until proven, the control loop must treat "last write" as
-    persistent — another reason pump stays at 100% whenever we are in software mode.
+    hardware mode (implemented & verified, including from the UI). Pending: kill-process
+    test to observe whether the hub ever self-reverts; until proven, the control loop
+    treats "last write" as persistent — another reason pump stays at 100% whenever we are
+    in software mode.
+  - ⬜ Per-family/per-channel curves and an in-app curve editor (currently one global
+    curve; Stage 6 territory).
 - **Stage 2 — RGB static colors** on both families (OpenLinkHub for Link; SL V3 research).
 - **Stage 3 — pump speed control** via the Link hub (pump-bearing chain devices), floor-clamped.
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,

@@ -3,6 +3,8 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
+using DeviceMaster.Control;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
@@ -36,18 +38,41 @@ public sealed class MainWindow : Window
     private TextBlock _updateNoticeText = null!;
     private UpdateInfo? _pendingUpdate;
 
+    private readonly ControlSettings _controlSettings = ControlSettings.Load();
+    private ControlLoop? _loop;
+    private ComboBox _modeBox = null!;
+    private ComboBox _sourceBox = null!;
+    private Slider _dutySlider = null!;
+    private TextBlock _dutyLabel = null!;
+    private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Solid(0xE6, 0xE9, 0xEE), Margin = new Thickness(0, 12, 0, 4) };
+    private readonly TextBlock _controlDevices = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
+    private bool _uiReady;
+
     public MainWindow()
     {
         Title = $"DeviceMaster v{AppVersion}";
         Width = 820;
-        Height = 560;
+        Height = 680;
         Background = Bg;
         Content = BuildLayout();
+        _uiReady = true;
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer.Tick += (_, _) => UpdateControlStatus();
+        timer.Start();
+
         Loaded += async (_, _) =>
         {
+            ApplyControlState();
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
         };
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
+        base.OnClosed(e);
     }
 
     private UIElement BuildLayout()
@@ -128,6 +153,69 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
 
+        // ---- fan control card ----
+        var controlCard = new Border
+        {
+            Background = Card,
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(18),
+            Margin = new Thickness(0, 0, 0, 14),
+        };
+        var controlPanel = new StackPanel();
+
+        var controlRow = new StackPanel { Orientation = Orientation.Horizontal };
+        controlRow.Children.Add(new TextBlock
+        {
+            Text = "Fan control",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Fg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 18, 0),
+        });
+
+        _modeBox = MakeCombo(Enum.GetNames<ControlMode>());
+        _modeBox.SelectedIndex = (int)_controlSettings.Mode;
+        _modeBox.SelectionChanged += (_, _) => OnControlSettingChanged();
+        controlRow.Children.Add(Labelled("Mode", _modeBox));
+
+        _sourceBox = MakeCombo(Enum.GetNames<CurveSource>());
+        _sourceBox.SelectedIndex = (int)_controlSettings.Source;
+        _sourceBox.SelectionChanged += (_, _) => OnControlSettingChanged();
+        controlRow.Children.Add(Labelled("Curve source", _sourceBox));
+
+        _dutySlider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = _controlSettings.ManualDutyPercent,
+            Width = 180,
+            IsSnapToTickEnabled = true,
+            TickFrequency = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _dutySlider.ValueChanged += (_, _) => OnControlSettingChanged();
+        _dutyLabel = new TextBlock
+        {
+            Text = $"{_controlSettings.ManualDutyPercent}%",
+            FontSize = 13,
+            Foreground = Fg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            MinWidth = 38,
+        };
+        var sliderRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        sliderRow.Children.Add(_dutySlider);
+        sliderRow.Children.Add(_dutyLabel);
+        controlRow.Children.Add(Labelled("Manual duty", sliderRow));
+
+        controlPanel.Children.Add(controlRow);
+        controlPanel.Children.Add(_controlStatus);
+        controlPanel.Children.Add(_controlDevices);
+        controlCard.Child = controlPanel;
+        DockPanel.SetDock(controlCard, Dock.Top);
+        root.Children.Add(controlCard);
+
         // ---- status bar at the bottom ----
         DockPanel.SetDock(_status, Dock.Bottom);
         root.Children.Add(_status);
@@ -184,6 +272,122 @@ public sealed class MainWindow : Window
     };
 
     private static SolidColorBrush Solid(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+
+    private static ComboBox MakeCombo(IEnumerable<string> items)
+    {
+        var box = new ComboBox { MinWidth = 96, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var item in items)
+        {
+            box.Items.Add(item);
+        }
+
+        return box;
+    }
+
+    private static StackPanel Labelled(string label, UIElement element)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 22, 0), VerticalAlignment = VerticalAlignment.Center };
+        panel.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            Foreground = Solid(0x96, 0x9C, 0xA5),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+        });
+        panel.Children.Add(element);
+        return panel;
+    }
+
+    // ---- fan control wiring ----
+
+    private void OnControlSettingChanged()
+    {
+        if (!_uiReady)
+        {
+            return;
+        }
+
+        _controlSettings.Mode = (ControlMode)Math.Max(_modeBox.SelectedIndex, 0);
+        _controlSettings.Source = (CurveSource)Math.Max(_sourceBox.SelectedIndex, 0);
+        _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
+        _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
+
+        try
+        {
+            _controlSettings.Save();
+        }
+        catch
+        {
+            // non-fatal — settings just won't persist
+        }
+
+        ApplyControlState();
+    }
+
+    private void ApplyControlState()
+    {
+        _dutySlider.IsEnabled = _controlSettings.Mode == ControlMode.Manual;
+        _sourceBox.IsEnabled = _controlSettings.Mode == ControlMode.Curve;
+
+        if (_controlSettings.Mode == ControlMode.Off)
+        {
+            if (_loop is not null)
+            {
+                var loop = _loop;
+                _loop = null;
+                Task.Run(loop.Stop); // hardware release can take a moment — keep the UI responsive
+            }
+
+            UpdateControlStatus();
+            return;
+        }
+
+        if (_loop is null)
+        {
+            _loop = new ControlLoop(_controlSettings);
+            _loop.Start();
+        }
+        else
+        {
+            _loop.Apply(_controlSettings);
+        }
+    }
+
+    private void UpdateControlStatus()
+    {
+        var status = _loop?.Status;
+        if (status is null || !status.Running)
+        {
+            _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
+            _controlStatus.Foreground = Dim;
+            _controlDevices.Text = "";
+            return;
+        }
+
+        var temp = status.SourceTemperatureC is { } t ? $"{t:F1} °C" : "—";
+        _controlStatus.Text = status.FailsafeActive
+            ? $"FAILSAFE: {status.SourceName} unavailable — all fans at 100%"
+            : status.Mode == ControlMode.Manual
+                ? $"Manual: all fans at {status.TargetDutyPercent}%"
+                : $"{status.SourceName} {temp}  →  fans {status.TargetDutyPercent}%";
+        _controlStatus.Foreground = status.FailsafeActive ? Warn : Fg;
+
+        var lines = status.Devices
+            .GroupBy(d => d.Family)
+            .Select(g =>
+            {
+                var fans = g.Where(d => !d.IsPump).ToList();
+                var rpms = fans.Where(d => d.Rpm is not null).Select(d => d.Rpm!.Value).ToList();
+                var pumps = g.Where(d => d.IsPump && d.Rpm is not null).Select(d => $"{d.Rpm} rpm").ToList();
+                return $"{g.Key}: {fans.Count} fan target(s)"
+                    + (rpms.Count > 0 ? $", ~{rpms.Average():F0} rpm" : "")
+                    + (pumps.Count > 0 ? $"  ·  pump {string.Join(", ", pumps)} @100%" : "");
+            })
+            .ToList();
+        lines.AddRange(status.Warnings.Select(w => "⚠ " + w));
+        _controlDevices.Text = string.Join(Environment.NewLine, lines);
+    }
 
     // ---- device scan ----
 
