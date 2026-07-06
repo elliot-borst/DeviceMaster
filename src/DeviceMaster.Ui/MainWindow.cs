@@ -48,6 +48,7 @@ public sealed class MainWindow : Window
     private TextBlock _dutyLabel = null!;
     private Slider _pumpSlider = null!;
     private TextBlock _pumpLabel = null!;
+    private readonly TextBlock _pumpStatus = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20, Margin = new Thickness(0, 10, 0, 0) };
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Solid(0xE6, 0xE9, 0xEE), Margin = new Thickness(0, 12, 0, 4) };
     private readonly TextBlock _controlDevices = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
     private bool _uiReady;
@@ -292,12 +293,38 @@ public sealed class MainWindow : Window
         sliderRow.Children.Add(_dutyLabel);
         controlRow.Children.Add(Labelled("Manual duty", sliderRow));
 
+        controlPanel.Children.Add(controlRow);
+        controlPanel.Children.Add(_controlStatus);
+        controlPanel.Children.Add(_controlDevices);
+        controlCard.Child = controlPanel;
+        DockPanel.SetDock(controlCard, Dock.Top);
+        root.Children.Add(controlCard);
+
+        // ---- pump card (separate from fans by design: its own duty, never below 50%) ----
+        var pumpCard = new Border
+        {
+            Background = Card,
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(18),
+            Margin = new Thickness(0, 0, 0, 14),
+        };
+        var pumpPanel = new StackPanel();
+        var pumpRow = new WrapPanel { Orientation = Orientation.Horizontal };
+        pumpRow.Children.Add(new TextBlock
+        {
+            Text = "Pump",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Fg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 18, 0),
+        });
         _pumpSlider = new Slider
         {
             Minimum = 50, // hard safety floor — the write layer clamps to this too
             Maximum = 100,
             Value = Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100),
-            Width = 140,
+            Width = 180,
             IsSnapToTickEnabled = true,
             TickFrequency = 5,
             VerticalAlignment = VerticalAlignment.Center,
@@ -312,17 +339,15 @@ public sealed class MainWindow : Window
             Margin = new Thickness(8, 0, 0, 0),
             MinWidth = 38,
         };
-        var pumpRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        pumpRow.Children.Add(_pumpSlider);
-        pumpRow.Children.Add(_pumpLabel);
-        controlRow.Children.Add(Labelled("Pump duty", pumpRow));
-
-        controlPanel.Children.Add(controlRow);
-        controlPanel.Children.Add(_controlStatus);
-        controlPanel.Children.Add(_controlDevices);
-        controlCard.Child = controlPanel;
-        DockPanel.SetDock(controlCard, Dock.Top);
-        root.Children.Add(controlCard);
+        var pumpSliderRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        pumpSliderRow.Children.Add(_pumpSlider);
+        pumpSliderRow.Children.Add(_pumpLabel);
+        pumpRow.Children.Add(Labelled("Pump duty", pumpSliderRow));
+        pumpPanel.Children.Add(pumpRow);
+        pumpPanel.Children.Add(_pumpStatus);
+        pumpCard.Child = pumpPanel;
+        DockPanel.SetDock(pumpCard, Dock.Top);
+        root.Children.Add(pumpCard);
 
         // ---- status bar at the bottom ----
         DockPanel.SetDock(_status, Dock.Bottom);
@@ -473,6 +498,7 @@ public sealed class MainWindow : Window
             _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
             _controlStatus.Foreground = Dim;
             _controlDevices.Text = "";
+            _pumpStatus.Text = "Control off — the pump follows the hub's own behaviour.";
             return;
         }
 
@@ -485,29 +511,36 @@ public sealed class MainWindow : Window
         _controlStatus.Foreground = status.FailsafeActive ? Warn : Fg;
 
         var lines = new List<string>();
-        foreach (var family in status.Devices.GroupBy(d => d.Family))
+        foreach (var device in status.Devices.Where(d => !d.IsPump))
         {
-            if (family.Key == "Corsair")
-            {
-                // few channels — show each so unresponsive fans are visible
-                foreach (var device in family)
-                {
-                    var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
-                    var tag = device.IsPump ? "  [PUMP]" : "";
-                    lines.Add($"Corsair · {device.Name}: {rpm} @ {device.AppliedDutyPercent}%{tag}");
-                }
-            }
-            else
-            {
-                var fans = family.Where(d => !d.IsPump).ToList();
-                var rpms = fans.Where(d => d.Rpm is not null).Select(d => d.Rpm!.Value).ToList();
-                lines.Add($"{family.Key}: {fans.Count} fan group(s)"
-                    + (rpms.Count > 0 ? $", ~{rpms.Average():F0} rpm" : ""));
-            }
+            var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
+            var id = device.Id is { Length: > 0 } fullId
+                ? $"  ·  id {(fullId.Length > 8 ? "…" + fullId[^8..] : fullId)}"
+                : "";
+            lines.Add($"{device.Family} · {device.Name}: {rpm} @ {device.AppliedDutyPercent}%{id}");
         }
 
         lines.AddRange(status.Warnings.Select(w => "⚠ " + w));
         _controlDevices.Text = string.Join(Environment.NewLine, lines);
+
+        var pumpLines = new List<string>();
+        if (status.CoolantTemperatureC is { } coolant)
+        {
+            pumpLines.Add($"Coolant {coolant:F1} °C");
+        }
+
+        foreach (var pump in status.Devices.Where(d => d.IsPump))
+        {
+            var rpm = pump.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
+            pumpLines.Add($"{pump.Family} · {pump.Name}: {rpm} @ {pump.AppliedDutyPercent}%");
+        }
+
+        if (pumpLines.Count == 0)
+        {
+            pumpLines.Add("No pump detected on the Link chain.");
+        }
+
+        _pumpStatus.Text = string.Join(Environment.NewLine, pumpLines);
 
         if (_trayIcon is not null)
         {
@@ -529,23 +562,51 @@ public sealed class MainWindow : Window
             var (scan, conflicts) = await Task.Run(() =>
                 (DeviceScanner.ScanAll(), ConflictingSoftwareChecker.FindConflicts()));
 
-            var hubs = scan.HidDevices.Count(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0);
-            var lcds = scan.HidDevices.Count(d => d.Kind == DeviceKind.CorsairLcd);
-            var slv3Fans = scan.UsbTree.Count(n => n.IsPhysicalDevice
-                && n.UsbId is { } id && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3FanNode);
-            var slv3Dongles = scan.UsbTree.Count(n => n.IsPhysicalDevice
-                && n.UsbId is { } id && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3Controller);
-            var screens = scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen).ToList();
+            // one line per physical device, each with its unique id
+            var lines = new List<string>();
 
-            var lines = new List<string>
+            foreach (var hub in scan.HidDevices
+                .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
+                .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
             {
-                $"Corsair iCUE LINK hubs:  {hubs}",
-                $"Corsair pump/res LCD modules:  {lcds}",
-                $"Lian Li SL V3 wireless dongles:  {slv3Dongles} (TX/RX)",
-                $"Lian Li SL V3 fans:  {slv3Fans}",
-                $"Turzx/Turing screens:  {screens.Count}"
-                    + (screens.Count > 0 ? $"  ({string.Join(", ", screens.Select(s => s.ComPort))})" : ""),
-            };
+                lines.Add($"Corsair iCUE LINK hub  ·  serial {hub.SerialNumber ?? "?"}");
+            }
+
+            foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
+            {
+                lines.Add($"Corsair pump/res LCD ({lcd.Name})  ·  serial {lcd.SerialNumber ?? "?"}");
+            }
+
+            foreach (var dongle in scan.UsbTree
+                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
+                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3Controller)
+                .OrderBy(n => n.UsbId!.Value.Pid))
+            {
+                var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX (control)" : "RX (telemetry)";
+                lines.Add($"Lian Li SL V3 wireless dongle {role}  ·  {dongle.UsbId}");
+            }
+
+            var fanNodes = scan.UsbTree
+                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
+                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3FanNode)
+                .Select(n => n.PnpInstanceId.Split('\\').LastOrDefault() ?? "?")
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToList();
+            for (var i = 0; i < fanNodes.Count; i++)
+            {
+                lines.Add($"Lian Li SL V3 fan LCD node {i + 1}/{fanNodes.Count}  ·  serial {fanNodes[i]}");
+            }
+
+            foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
+            {
+                lines.Add($"Turzx/Turing screen  ·  {screen.ComPort}, serial {screen.SerialHint ?? "?"}");
+            }
+
+            if (lines.Count == 0)
+            {
+                lines.Add("No supported devices found.");
+            }
+
             _deviceSummary.Text = string.Join(Environment.NewLine, lines);
 
             if (conflicts.Count > 0)

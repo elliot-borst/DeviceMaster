@@ -7,7 +7,7 @@ using DeviceMaster.Sensors;
 
 namespace DeviceMaster.Control;
 
-public sealed record DeviceReading(string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump);
+public sealed record DeviceReading(string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump, string? Id = null);
 
 /// <summary>Immutable snapshot of the loop's last tick, safe to read from any thread.</summary>
 public sealed record ControlStatus
@@ -16,6 +16,10 @@ public sealed record ControlStatus
     public ControlMode Mode { get; init; }
     public string SourceName { get; init; } = "";
     public double? SourceTemperatureC { get; init; }
+
+    /// <summary>Loop coolant temperature, read every tick regardless of the curve source.</summary>
+    public double? CoolantTemperatureC { get; init; }
+
     public int TargetDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
@@ -159,12 +163,17 @@ public sealed class ControlLoop : IDisposable
         ApplyCorsair(duty, pumpDuty, readings, warnings);
         ApplySlv3(duty, readings, warnings);
 
+        var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
+            ? sourceTemp
+            : TryReadCoolant();
+
         _status = new ControlStatus
         {
             Running = true,
             Mode = settings.Mode,
             SourceName = settings.Mode == ControlMode.Manual ? "manual" : settings.Source.ToString(),
             SourceTemperatureC = sourceTemp,
+            CoolantTemperatureC = coolant,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             Devices = readings,
@@ -240,6 +249,27 @@ public sealed class ControlLoop : IDisposable
         _lhm?.Dispose();
         _lhm = null;
         _lastWrittenCorsairDuty = -1;
+    }
+
+    private double? TryReadCoolant()
+    {
+        foreach (var hub in _hubs)
+        {
+            try
+            {
+                var temp = hub.ReadTemperatures().FirstOrDefault(t => t.TemperatureCelsius is not null);
+                if (temp?.TemperatureCelsius is { } coolant)
+                {
+                    return coolant;
+                }
+            }
+            catch
+            {
+                // informational only — the source path reports its own errors
+            }
+        }
+
+        return null;
     }
 
     // ---- temperature sources ----
@@ -319,7 +349,8 @@ public sealed class ControlLoop : IDisposable
                         $"{channel.Name} (ch{channel.Channel})",
                         speeds.TryGetValue(channel.Channel, out var s) ? s.Rpm : null,
                         channel.IsPump ? pumpDuty : duty,
-                        channel.IsPump));
+                        channel.IsPump,
+                        channel.Id));
                 }
             }
             catch (Exception ex)
@@ -357,7 +388,8 @@ public sealed class ControlLoop : IDisposable
                     $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
                     rpms.Count > 0 ? (int)rpms.Average() : null,
                     duty,
-                    IsPump: false));
+                    IsPump: false,
+                    device.MacText));
             }
         }
         catch (Exception ex)
