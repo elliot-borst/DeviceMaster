@@ -12,6 +12,9 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 
 - Hub protocol: 512-byte packets, software/hardware mode, endpoint open/read/write sequence.
   Speed + telemetry ported from FanControl.CorsairLink; RGB/LCD framing from OpenLinkHub.
+- **RGB quirk (fw 3.10.636):** the hub answers the color-endpoint open (`0x0d 0x00` + `0x22`)
+  with error `0x03` even in software mode, yet subsequent color writes succeed. Treat that
+  handshake as best-effort (the vendor references never check it); only fail on the write.
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
 - Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.

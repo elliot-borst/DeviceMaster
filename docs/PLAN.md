@@ -74,7 +74,29 @@ Revisit a service split only if pre-login control or multi-user support becomes 
   508-byte chunks. SL V3: TinyUZ-compressed one-frame effect over RF (0x12 0x20), stored
   and looped by fan firmware, refreshed every 60 s. Lighting card in the app (toggle +
   swatches). Effects/animations remain for Stage 6.
-- **Stage 3 — pump speed control** via the Link hub (pump-bearing chain devices), floor-clamped.
+- **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
+  hard-floored at 50%, live coolant + pump RPM display).
+
+### Status snapshot (2026-07-06, v14 released)
+
+Desktop app (WPF, tray-resident, auto-updating whole-number releases via GitHub setup-exe
+assets) covers: fan curves/manual on both ecosystems, pump control, static RGB on both
+ecosystems, per-device hardware inventory, identify-pulse per Corsair channel,
+three-column one-screen layout.
+
+**Outstanding, in priority order:**
+1. Verify Corsair RGB on hardware after the v14 fix (color-endpoint 0x03 quirk).
+2. Motherboard fan headers (v15 candidate): LibreHardwareMonitor Control sensors —
+   autodetects SuperIO chips; requires the app to run elevated (add an installer/startup
+   elevation option).
+3. Motherboard RGB headers: port OpenRGB's AuraUSB HID protocol (ASUS `0B05:19AF` already
+   in the registry); other vendors later.
+4. RAM LEDs + GPU RGB: SMBus/I2C territory (kernel driver, strict address whitelisting,
+   read-only probing first). Need the GPU's board partner to pick the right controller.
+5. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
+   Stage 5: Turzx 8.8" via shared renderer → Stage 6: effects, per-device colors,
+   curve editor, profiles.
+6. Corsair hub crash-fallback kill test (graceful-exit restore is verified; kill-test not).
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
   then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.
 - **Stage 5 — Turzx 8.8"** via the same rendering pipeline, serial protocol from
