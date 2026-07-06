@@ -208,9 +208,19 @@ public sealed class LinkHub : IDisposable
         {
             // the color handle/endpoint state on the hub is not durable — registry reads
             // share the handle and mode blips invalidate it. Rebuild the whole color path
-            // (endpoint open + reset frame) on the next attempt instead of failing forever.
+            // (endpoint open + reset frame) and retry once, in place: waiting for the
+            // caller's backoff turns every color change into a 10+ second affair.
             _colorReady = false;
-            throw;
+            try
+            {
+                EnsureColorReady();
+                WriteColorBuffer(r, g, b);
+            }
+            catch (LinkHubException)
+            {
+                _colorReady = false;
+                throw;
+            }
         }
     }
 
@@ -227,8 +237,16 @@ public sealed class LinkHub : IDisposable
         }
         catch (LinkHubException)
         {
-            _colorReady = false; // rebuild the color path on the next attempt
-            throw;
+            _colorReady = false; // rebuild the color path and retry once, in place
+            try
+            {
+                ApplyPerChannelColorsCore(colors, ledsPerDeviceOverride);
+            }
+            catch (LinkHubException)
+            {
+                _colorReady = false;
+                throw;
+            }
         }
     }
 
@@ -632,6 +650,11 @@ public sealed class LinkHub : IDisposable
 
     private byte[] ReadViaColorHandleCore(byte endpoint)
     {
+        // this REPURPOSES the color handle (0) and closes it afterwards — the color path
+        // must be rebuilt before the next color write (this is why every 30 s registry
+        // check used to make the following color change fail its first attempt)
+        _colorReady = false;
+
         // open (0x0d 0x00 + endpoint) → read (0x08 0x00) → close (0x05 0x01); responses to
         // open/close are best-effort on fw 3.10, like the color endpoint itself
         try

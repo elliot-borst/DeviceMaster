@@ -377,6 +377,10 @@ public sealed class ControlLoop : IDisposable
                         {
                             Thread.Sleep(3000); // give Windows time to re-enumerate the nodes
                         }
+                        else
+                        {
+                            _log?.Invoke("SL V3 recovery has nothing left to restart — check the dongles' USB cables");
+                        }
                     }
                     catch (Exception rex)
                     {
@@ -674,6 +678,7 @@ public sealed class ControlLoop : IDisposable
 
             // wireless effects live in fan firmware; refresh periodically in case a group resets
             var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
+            var sentAny = false;
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
             {
                 if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
@@ -687,6 +692,7 @@ public sealed class ControlLoop : IDisposable
                     var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
                     _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
                     _appliedSlv3Rgb[device.MacText] = key;
+                    sentAny = true;
                 }
                 catch (Exception ex)
                 {
@@ -697,6 +703,13 @@ public sealed class ControlLoop : IDisposable
             if (refreshDue)
             {
                 _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+            }
+            else if (sentAny)
+            {
+                // the RF uplink is fire-and-forget — a group that missed chunks shows its
+                // rainbow fallback. One early confirmation re-send bounds that to seconds
+                // (never a continuous re-send loop: that flooded the RF network in v17)
+                _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
             }
         }
     }

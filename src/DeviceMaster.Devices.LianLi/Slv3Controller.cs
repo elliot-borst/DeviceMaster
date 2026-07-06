@@ -101,6 +101,7 @@ public sealed class Slv3Controller : IDisposable
         try
         {
             rx = WinUsbDevice.Open(rxInfo.Path, rxInfo.UsbId);
+            RememberDongleParents(txInfo.Path, rxInfo.Path);
             trace?.Invoke($"TX pipes: in=0x{tx.InPipe:X2} out=0x{tx.OutPipe:X2}; RX pipes: in=0x{rx.InPipe:X2} out=0x{rx.OutPipe:X2}");
             var controller = new Slv3Controller(tx, rx, trace, log);
             controller.FindMaster();
@@ -456,23 +457,48 @@ public sealed class Slv3Controller : IDisposable
         }
     }
 
+    // where each dongle was last seen plugged in (its parent USB hub), captured at every
+    // successful open — needed to bring back a dongle that has fallen OFF the bus entirely
+    private static string? _lastTxParentId;
+    private static string? _lastRxParentId;
+
+    private static void RememberDongleParents(string txPath, string rxPath)
+    {
+        try
+        {
+            if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(txPath) is { } txId)
+            {
+                _lastTxParentId = Core.Discovery.UsbDeviceRestarter.TryGetParentInstanceId(txId) ?? _lastTxParentId;
+            }
+
+            if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(rxPath) is { } rxId)
+            {
+                _lastRxParentId = Core.Discovery.UsbDeviceRestarter.TryGetParentInstanceId(rxId) ?? _lastRxParentId;
+            }
+        }
+        catch
+        {
+            // topology memory is best-effort; recovery falls back to sibling lookup
+        }
+    }
+
     /// <summary>
-    /// The software equivalent of unplugging and reseating both dongles: restarts their USB
-    /// device nodes (requires elevation). Last-resort recovery when the dongle firmware wedges
-    /// so hard that in-band resets and a plain reopen stop working — verified live: a physical
-    /// replug fixed exactly this state on 2026-07-06. Only registry-approved SL V3 dongles are
-    /// touched. Returns the number of devices restarted.
+    /// The software equivalent of unplugging and reseating both dongles (requires elevation).
+    /// Present dongles get their USB device node restarted. A dongle MISSING from the bus
+    /// (brownout/glitch on marginal cabling — seen live 2026-07-06) can only come back when
+    /// its port re-enumerates, so its last-known parent hub (or a present sibling's parent —
+    /// the pair shares a hub) is restarted instead. Root hubs are never touched: cycling one
+    /// would drop every device on that controller. Returns the number of restarts performed.
     /// </summary>
     public static int RestartDongleDevices(Action<string>? log = null)
     {
-        var restarted = 0;
-        foreach (var (path, usbId) in WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid))
-        {
-            if (usbId.Pid is not (TxPid or RxPid) || !KnownDeviceRegistry.IsWriteAllowed(usbId))
-            {
-                continue;
-            }
+        var candidates = WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid)
+            .Where(c => c.UsbId.Pid is TxPid or RxPid && KnownDeviceRegistry.IsWriteAllowed(c.UsbId))
+            .ToList();
 
+        var restarted = 0;
+        foreach (var (path, usbId) in candidates)
+        {
             if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(path) is not { } instanceId)
             {
                 log?.Invoke($"SL V3 dongle {usbId}: could not derive a device instance id from its path — skipped");
@@ -482,6 +508,54 @@ public sealed class Slv3Controller : IDisposable
             log?.Invoke($"SL V3 dongle {usbId}: restarting its USB device node (software replug)");
             Core.Discovery.UsbDeviceRestarter.Restart(instanceId);
             restarted++;
+        }
+
+        // vanished dongles: cycle the hub whose port they were last seen on
+        var parentsToCycle = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!candidates.Any(c => c.UsbId.Pid == TxPid) && _lastTxParentId is { } txParent)
+        {
+            parentsToCycle.Add(txParent);
+        }
+
+        if (!candidates.Any(c => c.UsbId.Pid == RxPid) && _lastRxParentId is { } rxParent)
+        {
+            parentsToCycle.Add(rxParent);
+        }
+
+        if (candidates.Count < 2 && parentsToCycle.Count == 0)
+        {
+            // no remembered topology (fresh process) — assume the pair shares a hub and use a
+            // present sibling's parent
+            foreach (var (path, _) in candidates)
+            {
+                if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(path) is { } id
+                    && Core.Discovery.UsbDeviceRestarter.TryGetParentInstanceId(id) is { } parent)
+                {
+                    parentsToCycle.Add(parent);
+                    break;
+                }
+            }
+        }
+
+        foreach (var parent in parentsToCycle)
+        {
+            if (parent.Contains("ROOT_HUB", StringComparison.OrdinalIgnoreCase))
+            {
+                log?.Invoke($"SL V3 dongle is missing and its last port was on a ROOT hub ({parent}) — "
+                    + "not cycling it (would drop every device on that controller); physical replug required");
+                continue;
+            }
+
+            log?.Invoke($"SL V3 dongle missing from the USB bus — restarting its parent hub ({parent}) to re-enumerate the port");
+            try
+            {
+                Core.Discovery.UsbDeviceRestarter.Restart(parent, settleMs: 3000);
+                restarted++;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"parent hub restart failed: {ex.Message}");
+            }
         }
 
         return restarted;

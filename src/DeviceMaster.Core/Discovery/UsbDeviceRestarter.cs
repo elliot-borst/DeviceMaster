@@ -24,6 +24,25 @@ public static class UsbDeviceRestarter
         return parts.Length >= 3 ? $@"{parts[0]}\{parts[1]}\{parts[2]}" : null;
     }
 
+    /// <summary>
+    /// The PnP instance id of the device's parent (usually the USB hub it is plugged into),
+    /// or null. Restarting the parent re-enumerates the port — the software equivalent of
+    /// physically replugging a device that has fallen OFF the bus entirely.
+    /// </summary>
+    public static string? TryGetParentInstanceId(string pnpInstanceId)
+    {
+        if (CM_Locate_DevNodeW(out var node, pnpInstanceId, 0) != 0
+            || CM_Get_Parent(out var parent, node, 0) != 0)
+        {
+            return null;
+        }
+
+        var buffer = new char[500];
+        return CM_Get_Device_IDW(parent, buffer, buffer.Length, 0) == 0
+            ? new string(buffer, 0, Array.IndexOf(buffer, '\0') is var end && end >= 0 ? end : buffer.Length)
+            : null;
+    }
+
     /// <summary>Disables the device node, waits, and re-enables it. Throws on failure.</summary>
     public static void Restart(string pnpInstanceId, int settleMs = 2000)
     {
@@ -123,4 +142,13 @@ public static class UsbDeviceRestarter
 
     [DllImport("setupapi.dll", SetLastError = true)]
     private static extern bool SetupDiDestroyDeviceInfoList(IntPtr deviceInfoSet);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, uint flags);
+
+    [DllImport("cfgmgr32.dll")]
+    private static extern int CM_Get_Parent(out uint parentDevInst, uint devInst, uint flags);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CM_Get_Device_IDW(uint devInst, char[] buffer, int bufferLength, uint flags);
 }
