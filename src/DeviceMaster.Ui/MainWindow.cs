@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
@@ -5,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DeviceMaster.Control;
+using WinForms = System.Windows.Forms;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
@@ -47,6 +49,9 @@ public sealed class MainWindow : Window
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Solid(0xE6, 0xE9, 0xEE), Margin = new Thickness(0, 12, 0, 4) };
     private readonly TextBlock _controlDevices = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
     private bool _uiReady;
+    private WinForms.NotifyIcon? _trayIcon;
+    private bool _exitRequested;
+    private bool _trayHintShown;
 
     public MainWindow()
     {
@@ -57,22 +62,96 @@ public sealed class MainWindow : Window
         Content = BuildLayout();
         _uiReady = true;
 
+        CreateTrayIcon();
+
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) => UpdateControlStatus();
         timer.Start();
 
-        Loaded += async (_, _) =>
+        // Not tied to Loaded — with --minimized the window is never shown, but fan
+        // control and the update check must still start.
+        _ = Dispatcher.InvokeAsync(async () =>
         {
             ApplyControlState();
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
-        };
+        });
     }
 
-    protected override void OnClosed(EventArgs e)
+    // ---- system tray ----
+
+    private void CreateTrayIcon()
     {
+        _trayIcon = new WinForms.NotifyIcon
+        {
+            Text = "DeviceMaster",
+            Visible = true,
+        };
+        try
+        {
+            _trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
+        }
+        catch
+        {
+            // no icon in odd hosting scenarios — the tray entry still works
+        }
+
+        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
+        var menu = new WinForms.ContextMenuStrip();
+        var open = menu.Items.Add("Open DeviceMaster", null, (_, _) => ShowFromTray());
+        open.Font = new System.Drawing.Font(open.Font, System.Drawing.FontStyle.Bold);
+        menu.Items.Add(new WinForms.ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitApplication());
+        _trayIcon.ContextMenuStrip = menu;
+    }
+
+    private void ShowFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    /// <summary>The window close button hides to the tray — fan control keeps running.</summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_exitRequested)
+        {
+            e.Cancel = true;
+            Hide();
+            if (!_trayHintShown && _trayIcon is not null)
+            {
+                _trayHintShown = true;
+                _trayIcon.ShowBalloonTip(2500, "DeviceMaster",
+                    "Still running in the tray — fan control stays active. Right-click the icon to exit.",
+                    WinForms.ToolTipIcon.Info);
+            }
+
+            return;
+        }
+
+        base.OnClosing(e);
+    }
+
+    /// <summary>Releases the tray icon and hardware; the caller decides what happens next.</summary>
+    private void PrepareExit()
+    {
+        _exitRequested = true;
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
+
         _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
-        base.OnClosed(e);
+        _loop = null;
+    }
+
+    private void ExitApplication()
+    {
+        PrepareExit();
+        Application.Current.Shutdown();
     }
 
     private UIElement BuildLayout()
@@ -387,6 +466,14 @@ public sealed class MainWindow : Window
             .ToList();
         lines.AddRange(status.Warnings.Select(w => "⚠ " + w));
         _controlDevices.Text = string.Join(Environment.NewLine, lines);
+
+        if (_trayIcon is not null)
+        {
+            var tip = status.FailsafeActive
+                ? "DeviceMaster — FAILSAFE, fans 100%"
+                : $"DeviceMaster — {status.SourceName} {temp} → {status.TargetDutyPercent}%";
+            _trayIcon.Text = tip.Length > 63 ? tip[..63] : tip;
+        }
     }
 
     // ---- device scan ----
@@ -495,6 +582,7 @@ public sealed class MainWindow : Window
         }
 
         SetStatus("Starting installer…", Dim);
+        PrepareExit(); // release devices and the tray icon before the installer replaces us
         Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
         Application.Current.Shutdown();
     }

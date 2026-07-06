@@ -3,12 +3,15 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
+    <!-- WinForms is only for NotifyIcon (system tray) -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>DeviceMaster.ico</ApplicationIcon>
     <AssemblyName>DeviceMaster</AssemblyName>
     <!-- Whole-number release versioning: bump the major only (1, 2, 3, ...). The UI, the
          update check, and build-installer.ps1 all derive the display version from this. -->
-    <Version>3.0.0</Version>
-    <FileVersion>3.0.0.0</FileVersion>
-    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <Version>4.0.0</Version>
+    <FileVersion>4.0.0.0</FileVersion>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
     <!-- Embedded version info -> Task Manager shows the name (FileDescription/Product)
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>
@@ -17,6 +20,12 @@
     <Company>Elliot Borst</Company>
     <Copyright>Elliot Borst</Copyright>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms adds implicit global usings that collide with WPF types -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />

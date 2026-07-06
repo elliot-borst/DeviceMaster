@@ -31,6 +31,7 @@ SolidCompression=yes
 UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName={#MyAppName}
 WizardStyle=modern
+SetupIconFile=src\DeviceMaster.Ui\DeviceMaster.ico
 ; The in-app updater downloads this installer and runs it while DeviceMaster is open;
 ; offer to close the running copy so files can be replaced (no forced reboot).
 CloseApplications=yes
@@ -47,7 +48,7 @@ Name: "startupicon"; Description: "Run automatically when Windows starts"; Group
 Name: "{group}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"
 Name: "{group}\Uninstall DeviceMaster"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
-Name: "{userstartup}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Tasks: startupicon
+Name: "{userstartup}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Parameters: "--minimized"; Tasks: startupicon
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "Launch DeviceMaster now"; Flags: nowait postinstall skipifsilent
