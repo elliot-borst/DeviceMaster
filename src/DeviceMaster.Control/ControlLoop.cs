@@ -870,6 +870,12 @@ public sealed class ControlLoop : IDisposable
         if (applied > 0)
         {
             _log?.Invoke($"{applied} fan LCD(s) set to {mode}");
+
+            // the LCD node lives inside the fan — LCD commands can reset the fan's stored
+            // RGB effect (observed live: a group went rainbow right after LCD writes).
+            // Re-push colors shortly after any fan-LCD burst.
+            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 2_000);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
         }
     }
 
@@ -1106,6 +1112,7 @@ public sealed class ControlLoop : IDisposable
     }
 
     private readonly Dictionary<string, bool> _slv3TelemetryFresh = [];
+    private readonly Dictionary<string, bool> _slv3BoundState = [];
 
     private void ApplySlv3(int duty, List<DeviceReading> readings, List<string> warnings)
     {
@@ -1126,8 +1133,26 @@ public sealed class ControlLoop : IDisposable
             try
             {
                 var devices = _slv3.PollDevices();
-                foreach (var device in devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+                foreach (var device in devices)
                 {
+                    // pairing loss is otherwise SILENT: an unpaired group ignores our PWM and
+                    // colors and just runs its firmware rainbow — make it loud instead
+                    var bound = device.IsBoundTo(_slv3.MasterMac);
+                    if (_slv3BoundState.TryGetValue(device.MacText, out var wasBound) && wasBound != bound)
+                    {
+                        _log?.Invoke(bound
+                            ? $"SL V3 group {device.MacText[..4]} re-paired to this dongle"
+                            : $"SL V3 group {device.MacText[..4]} LOST its pairing to this dongle — its fans run "
+                              + "their own defaults (rainbow) until re-paired (power-cycle the fans)");
+                    }
+
+                    _slv3BoundState[device.MacText] = bound;
+                    if (!bound)
+                    {
+                        warnings.Add($"SL V3 group {device.MacText[..4]} is not paired to this dongle — fans on firmware defaults");
+                        continue;
+                    }
+
                     var fresh = _slv3.LastSeenAgeMs(device) <= Slv3StaleAfterMs;
                     if (_slv3TelemetryFresh.TryGetValue(device.MacText, out var was) && was != fresh)
                     {

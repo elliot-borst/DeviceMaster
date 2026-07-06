@@ -72,7 +72,12 @@ public sealed class MainWindow : Window
     private DmSlider _dutySlider = null!;
     private TextBlock _dutyLabel = null!;
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
-    private readonly StackPanel _fanRows = new();
+    private readonly StackPanel _fanRows = new() { Visibility = Visibility.Collapsed };
+    private readonly StackPanel _fanWarnings = new();
+    private readonly TextBlock _fanSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
+    private TextBlock _fanExpandLink = null!;
+    private TextBlock _fanForgetLink = null!;
+    private bool _fansExpanded;
     private Border _fanDot = null!;
     private TextBlock _fanBadge = null!;
 
@@ -82,8 +87,13 @@ public sealed class MainWindow : Window
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
-    // hardware card — compact pills, two per row
-    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2 };
+    // hardware card — compact pills, two per row; rolled up behind a summary by default
+    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2, Visibility = Visibility.Collapsed };
+    private readonly TextBlock _hwSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
+    private TextBlock _hwExpandLink = null!;
+    private TextBlock _hwForgetLink = null!;
+    private bool _hwExpanded;
+    private List<string> _lastHardwareKeys = [];
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
 
@@ -315,8 +325,61 @@ public sealed class MainWindow : Window
 
         body.Children.Add(controls);
         body.Children.Add(_controlStatus);
+
+        // rolled-up by default: one "N/N fans" line; details expand on demand
+        var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        _fanExpandLink = LinkText("▸  details", () =>
+        {
+            _fansExpanded = !_fansExpanded;
+            _fanRows.Visibility = _fansExpanded ? Visibility.Visible : Visibility.Collapsed;
+            _fanExpandLink.Text = _fansExpanded ? "▾  hide" : "▸  details";
+        });
+        DockPanel.SetDock(_fanExpandLink, Dock.Right);
+        summaryRow.Children.Add(_fanExpandLink);
+        _fanForgetLink = LinkText("forget missing", () =>
+        {
+            var status = _loop?.Status;
+            var present = (status?.Devices ?? []).Where(d => !d.IsPump)
+                .Select(f => f.Id ?? f.Name).ToHashSet();
+            _controlSettings.SeenFanIds.RemoveAll(id => !present.Contains(id));
+            TrySaveSettings();
+        });
+        _fanForgetLink.Visibility = Visibility.Collapsed;
+        DockPanel.SetDock(_fanForgetLink, Dock.Right);
+        summaryRow.Children.Add(_fanForgetLink);
+        summaryRow.Children.Add(_fanSummary);
+        body.Children.Add(summaryRow);
+
         body.Children.Add(_fanRows);
+        body.Children.Add(_fanWarnings); // warnings stay visible even when collapsed
         return card;
+    }
+
+    private static TextBlock LinkText(string text, Action onClick)
+    {
+        var block = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Foreground = Theme.Accent2,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Margin = new Thickness(14, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        block.MouseLeftButtonUp += (_, _) => onClick();
+        return block;
+    }
+
+    private void TrySaveSettings()
+    {
+        try
+        {
+            _controlSettings.Save();
+        }
+        catch
+        {
+            // non-fatal — settings just won't persist
+        }
     }
 
     private Border BuildPumpCard()
@@ -472,7 +535,8 @@ public sealed class MainWindow : Window
         _lcdButtons.Children.Clear();
         foreach (var (mode, label) in new[]
         {
-            (LcdMode.Unmanaged, "Leave alone"),
+            // no "leave alone" button: Unmanaged is only the fresh-install default (screens
+            // untouched until the first choice); once managed there's no reason to go back
             (LcdMode.Off, "Off"),
             (LcdMode.Black, "Black"),
             (LcdMode.White, "White"),
@@ -525,6 +589,28 @@ public sealed class MainWindow : Window
         _rescanButton = Theme.Btn("↻  Rescan", primary: false, () => _ = RefreshDevicesAsync());
         DockPanel.SetDock(_rescanButton, Dock.Right);
         head.Children.Add(_rescanButton);
+
+        var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        _hwExpandLink = LinkText("▸  details", () =>
+        {
+            _hwExpanded = !_hwExpanded;
+            _hardwareRows.Visibility = _hwExpanded ? Visibility.Visible : Visibility.Collapsed;
+            _hwExpandLink.Text = _hwExpanded ? "▾  hide" : "▸  details";
+        });
+        DockPanel.SetDock(_hwExpandLink, Dock.Right);
+        summaryRow.Children.Add(_hwExpandLink);
+        _hwForgetLink = LinkText("forget missing", () =>
+        {
+            _controlSettings.SeenDeviceIds.RemoveAll(id => !_lastHardwareKeys.Contains(id));
+            TrySaveSettings();
+            _ = RefreshDevicesAsync();
+        });
+        _hwForgetLink.Visibility = Visibility.Collapsed;
+        DockPanel.SetDock(_hwForgetLink, Dock.Right);
+        summaryRow.Children.Add(_hwForgetLink);
+        summaryRow.Children.Add(_hwSummary);
+        body.Children.Add(summaryRow);
+
         body.Children.Add(_hardwareRows);
         body.Children.Add(_conflictSummary);
         return card;
@@ -731,7 +817,17 @@ public sealed class MainWindow : Window
         _rescanButton.Opacity = 0.5;
         if (_hardwareRows.Children.Count == 0)
         {
+            _hwSummary.Text = "Scanning for devices…";
+            _hwSummary.Foreground = Theme.Dim;
             _hardwareRows.Children.Add(LoadingRow("Scanning for devices…"));
+        }
+
+        var hardwareKeys = new List<string>();
+
+        void AddPill(string name, string? displayId, string tag, string? key = null)
+        {
+            hardwareKeys.Add(key ?? displayId ?? name);
+            _hardwareRows.Children.Add(HardwarePill(name, displayId, tag));
         }
 
         try
@@ -800,17 +896,17 @@ public sealed class MainWindow : Window
                 .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
                 .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
             {
-                _hardwareRows.Children.Add(HardwarePill("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID"));
+                AddPill("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", hub.SerialNumber);
             }
 
             foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
             {
-                _hardwareRows.Children.Add(HardwarePill("Corsair pump/res LCD", lcd.SerialNumber, "HID"));
+                AddPill("Corsair pump/res LCD", lcd.SerialNumber, "HID");
             }
 
             foreach (var (name, id, tag) in chainRows)
             {
-                _hardwareRows.Children.Add(HardwarePill(name, Shorten(id), tag));
+                AddPill(name, Shorten(id), tag, id ?? name);
             }
 
             if (chainPending)
@@ -831,7 +927,7 @@ public sealed class MainWindow : Window
                 .OrderBy(n => n.UsbId!.Value.Pid))
             {
                 var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX · control" : "RX · telemetry";
-                _hardwareRows.Children.Add(HardwarePill($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB"));
+                AddPill($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB");
             }
 
             var fanNodes = scan.UsbTree
@@ -842,39 +938,67 @@ public sealed class MainWindow : Window
                 .ToList();
             for (var i = 0; i < fanNodes.Count; i++)
             {
-                _hardwareRows.Children.Add(HardwarePill($"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB"));
+                AddPill($"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", fanNodes[i]);
             }
 
             foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
             {
-                _hardwareRows.Children.Add(HardwarePill("Turzx/Turing screen", screen.SerialHint, screen.ComPort));
+                AddPill("Turzx/Turing screen", screen.SerialHint, screen.ComPort);
             }
 
             foreach (var aura in scan.HidDevices.Where(d => d.Kind == DeviceKind.MotherboardRgbController)
                 .DistinctBy(d => d.UsbId))
             {
-                _hardwareRows.Children.Add(HardwarePill("ASUS Aura LED controller", aura.UsbId.ToString(), "HID"));
+                AddPill("ASUS Aura LED controller", aura.UsbId.ToString(), "HID");
             }
 
             foreach (var gpu in _loop?.GpuInventory ?? [])
             {
-                _hardwareRows.Children.Add(HardwarePill(
+                AddPill(
                     gpu.Gpu.Name,
                     $"{gpu.Gpu.SubVendor:X4}:{gpu.Gpu.SubDevice:X4} · {gpu.Partner}",
-                    gpu.Ene is not null ? "RGB" : "GPU"));
+                    gpu.Ene is not null ? "RGB" : "GPU",
+                    $"{gpu.Gpu.SubVendor:X4}:{gpu.Gpu.SubDevice:X4}");
             }
 
             foreach (var stick in _loop?.RamInventory ?? [])
             {
-                _hardwareRows.Children.Add(HardwarePill(
+                AddPill(
                     $"RAM · {stick.Manufacturer} {stick.PartNumber}",
                     $"SPD 0x{stick.SpdAddress:X2} · {stick.BusName}",
-                    "SMBus"));
+                    "SMBus");
             }
 
             if (_hardwareRows.Children.Count == 0)
             {
                 _hardwareRows.Children.Add(new TextBlock { Text = "No supported devices found.", Foreground = Theme.Dim, FontSize = 12.5 });
+            }
+
+            // roll-up: learn new identities, flag remembered ones that vanished
+            _lastHardwareKeys = hardwareKeys;
+            var learned = false;
+            foreach (var key in hardwareKeys)
+            {
+                if (!_controlSettings.SeenDeviceIds.Contains(key))
+                {
+                    _controlSettings.SeenDeviceIds.Add(key);
+                    learned = true;
+                }
+            }
+
+            if (learned)
+            {
+                TrySaveSettings();
+            }
+
+            var missingDevices = _controlSettings.SeenDeviceIds.Except(hardwareKeys).ToList();
+            _hwSummary.Text = $"{hardwareKeys.Count}/{_controlSettings.SeenDeviceIds.Count} devices detected"
+                + (chainPending ? " · fan chain still starting" : "");
+            _hwSummary.Foreground = missingDevices.Count > 0 ? Theme.Warn : Theme.Text;
+            _hwForgetLink.Visibility = missingDevices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var key in missingDevices)
+            {
+                _hardwareRows.Children.Add(HardwarePill("Remembered device — not detected", Shorten(key), "missing"));
             }
 
             if (conflicts.Count > 0)
@@ -1021,8 +1145,12 @@ public sealed class MainWindow : Window
                     SetBadge("Starting", Theme.Accent2);
                     _controlStatus.Text = "Starting fan control…";
                     _controlStatus.Foreground = Theme.Dim;
+                    _fanSummary.Text = "Searching for fans…";
+                    _fanSummary.Foreground = Theme.Dim;
+                    _fanForgetLink.Visibility = Visibility.Collapsed;
                     _fanRows.Children.Clear();
                     _fanRows.Children.Add(LoadingRow("Searching for fans…"));
+                    _fanWarnings.Children.Clear();
                     _pumpCoolant.Text = "Searching for the pump…";
                     _pumpCoolant.Foreground = Theme.Dim;
                     _pumpRows.Children.Clear();
@@ -1036,7 +1164,10 @@ public sealed class MainWindow : Window
             SetBadge("Off", Theme.Faint);
             _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
             _controlStatus.Foreground = Theme.Dim;
+            _fanSummary.Text = "";
+            _fanForgetLink.Visibility = Visibility.Collapsed;
             _fanRows.Children.Clear();
+            _fanWarnings.Children.Clear();
             _pumpCoolant.Text = "Control off — the pump follows the hub's own behaviour.";
             _pumpCoolant.Foreground = Theme.Dim;
             _pumpRows.Children.Clear();
@@ -1061,17 +1192,47 @@ public sealed class MainWindow : Window
             _controlStatus.Foreground = Theme.Text;
         }
 
+        var fans = status.Devices.Where(d => !d.IsPump).ToList();
+        var presentIds = fans.Select(f => f.Id ?? f.Name).Distinct().ToList();
+        var learnedNew = false;
+        foreach (var id in presentIds)
+        {
+            if (!_controlSettings.SeenFanIds.Contains(id))
+            {
+                _controlSettings.SeenFanIds.Add(id);
+                learnedNew = true;
+            }
+        }
+
+        if (learnedNew)
+        {
+            TrySaveSettings();
+        }
+
+        var missingIds = _controlSettings.SeenFanIds.Except(presentIds).ToList();
+        var noRpm = fans.Count(f => f.Rpm is null);
+        _fanSummary.Text = $"{presentIds.Count}/{_controlSettings.SeenFanIds.Count} fan devices reporting"
+            + (noRpm > 0 ? $" · {noRpm} without rpm" : "");
+        _fanSummary.Foreground = missingIds.Count > 0 ? Theme.Warn : Theme.Text;
+        _fanForgetLink.Visibility = missingIds.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
         _fanRows.Children.Clear();
-        foreach (var device in status.Devices.Where(d => !d.IsPump))
+        foreach (var device in fans)
         {
             var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm";
             var brush = device.Rpm is null ? Theme.Faint : Theme.Accent2;
             _fanRows.Children.Add(DeviceRow($"{device.Family} · {device.Name}", device.Id, $"{rpm} @ {device.AppliedDutyPercent}%", brush));
         }
 
+        foreach (var id in missingIds)
+        {
+            _fanRows.Children.Add(DeviceRow("Remembered fan device — not detected", Shorten(id), "missing", Theme.Warn));
+        }
+
+        _fanWarnings.Children.Clear();
         foreach (var warning in status.Warnings)
         {
-            _fanRows.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 4) });
+            _fanWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 4) });
         }
 
         _pumpCoolant.Text = status.CoolantTemperatureC is { } coolant ? $"Coolant {coolant:F1} °C" : "Coolant temperature unavailable";

@@ -61,6 +61,12 @@ public sealed class ControlSettings
     /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, or a solid background.</summary>
     public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
 
+    /// <summary>Every fan device id ever seen — the expected set behind the "N/N fans" roll-up.</summary>
+    public List<string> SeenFanIds { get; set; } = [];
+
+    /// <summary>Every hardware identity ever seen — the expected set behind the device roll-up.</summary>
+    public List<string> SeenDeviceIds { get; set; } = [];
+
     [JsonIgnore]
     public FanCurve Curve => new(CurvePoints.Count > 0 ? CurvePoints : FanCurve.DefaultCoolant.Points);
 
