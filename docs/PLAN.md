@@ -77,7 +77,7 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 - **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
   hard-floored at 50%, live coolant + pump RPM display).
 
-### Status snapshot (2026-07-06, v19 released)
+### Status snapshot (2026-07-06, v20 released)
 
 Desktop app (WPF, tray-resident, elevated, auto-updating whole-number releases via GitHub
 setup-exe assets) covers: fan curves/manual on Corsair + Lian Li + motherboard SuperIO
@@ -98,11 +98,21 @@ pointed at {2,3,13,15} while fans sat on {1,2,3,13,14,15} — ch1/ch14 never got
 (ch14 = the observed dark fan between two lit ones). v19 syncs the registry to the
 enumerated chain + ResetLedPower, at hub open and every 30 s.
 
+v19/v20 findings: LED registry sync verified live (write persists, rescan quiet).
+Per-channel LED test (`link ledtest`, distinct colors, held session): ch2/ch3 display
+their exact colors — the 8 LEDs/fan mapping is correct — while ch1/13/14/15 ignore LED
+data AND report tach "unavailable" at the hub level, yet enumerate and spin ⇒
+enumeration-only degraded links; physical remediation (reseat junctions / swap stacks
+between hub ports). Also learned: hubs silently ignore endpoint traffic for ~500 ms after
+EnterSoftwareMode (reference sleeps there; now ported). v17's SL V3 effect-index watchdog
+REMOVED in v20 — group 5f00's firmware reports a slot counter, not an index echo, driving
+an ~8 s re-send loop that flooded RF and dropped groups from telemetry (Lian Li rows
+vanished, colors stopped applying). The 60 s refresh is the healing mechanism.
+
 **Outstanding, in priority order:**
-1. Verify v19: all six connected Corsair fans light; snappy colors; no rainbow; silent
-   start + silent auto-update; Start-with-Windows toggle.
-2. Some Corsair channels still report no RPM — separate issue (tach lines / physical);
-   revisit once lighting is confirmed.
+1. Verify v20: Lian Li groups stable in the fan list and colors apply again.
+2. Corsair ch1/13/14/15: physical link remediation by owner (reseat/port swap) — the
+   moment they connect properly, duty/tach/RGB all work with zero code changes.
 3. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
    Stage 5: Turzx 8.8" via shared renderer + 11× SL V3 per-fan LCDs (JPEG over USB bulk,
    DES-CBC headers) → Stage 6: effects, per-device colors, curve editor, profiles.

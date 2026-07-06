@@ -135,6 +135,10 @@ public sealed class LinkHub : IDisposable
     {
         SendCommand(LinkHubProtocol.Commands.EnterSoftwareMode);
         _inSoftwareMode = true;
+
+        // Reference parity (OpenLinkHub setSoftwareMode): the hub needs settle time after the
+        // mode switch — endpoint traffic sent too early is ACKed but silently ignored.
+        Thread.Sleep(500);
     }
 
     public void EnterHardwareMode()
@@ -195,6 +199,54 @@ public sealed class LinkHub : IDisposable
         EnsureColorReady();
         WriteColorBuffer(r, g, b);
     }
+
+    /// <summary>
+    /// Diagnostic: paints each channel a different color, optionally overriding the per-device
+    /// LED count. Which fan shows which color (or two colors at once) reveals the real LED
+    /// count and stream ordering — the buffer is linear in ascending channel order.
+    /// </summary>
+    public void ApplyPerChannelColors(IReadOnlyDictionary<int, (byte R, byte G, byte B)> colors, int? ledsPerDeviceOverride = null)
+    {
+        EnsureColorReady();
+
+        var data = new List<byte>();
+        foreach (var channel in _channels.OrderBy(c => c.Channel))
+        {
+            if (channel.Info is not { LedCount: > 0 } info)
+            {
+                continue; // non-LED devices contribute nothing, override or not
+            }
+
+            var count = ledsPerDeviceOverride ?? info.LedCount;
+            var color = colors.GetValueOrDefault(channel.Channel);
+            for (var i = 0; i < count; i++)
+            {
+                data.Add(color.R);
+                data.Add(color.G);
+                data.Add(color.B);
+            }
+        }
+
+        var envelope = LinkHubPackets.CreateWriteData(LinkHubProtocol.DataTypes.SetColor, data.ToArray());
+        lock (_ioLock)
+        {
+            var offset = 0;
+            var first = true;
+            while (offset < envelope.Length)
+            {
+                var length = Math.Min(LinkHubProtocol.MaxColorChunk, envelope.Length - offset);
+                SendCommand(
+                    first ? LinkHubProtocol.Commands.WriteColor : LinkHubProtocol.Commands.WriteColorNext,
+                    envelope.AsSpan(offset, length));
+                first = false;
+                offset += length;
+            }
+        }
+    }
+
+    /// <summary>Diagnostic: the raw GetSpeeds response (sensor count + per-channel status bytes).</summary>
+    public byte[] ReadSpeedsRaw() =>
+        ReadEndpoint(LinkHubProtocol.Endpoints.GetSpeeds, LinkHubProtocol.DataTypes.Speeds);
 
     private void WriteColorBuffer(byte r, byte g, byte b)
     {
