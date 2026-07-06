@@ -25,6 +25,10 @@ public sealed record ControlStatus
     /// <summary>Loop coolant temperature, read every tick regardless of the curve source.</summary>
     public double? CoolantTemperatureC { get; init; }
 
+    /// <summary>CPU/GPU temperatures, sampled every couple of seconds (for dashboard tiles).</summary>
+    public double? CpuTemperatureC { get; init; }
+    public double? GpuTemperatureC { get; init; }
+
     public int TargetDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
@@ -310,7 +314,8 @@ public sealed class ControlLoop : IDisposable
             ApplyRgb(settings, warnings);
         }
 
-        ApplyLcd(settings, warnings);
+        ApplyLcd(settings, readings, duty, warnings);
+        SampleDashboardTemps();
 
         var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
             ? sourceTemp
@@ -323,11 +328,43 @@ public sealed class ControlLoop : IDisposable
             SourceName = settings.Mode == ControlMode.Manual ? "manual" : settings.Source.ToString(),
             SourceTemperatureC = sourceTemp,
             CoolantTemperatureC = coolant,
+            CpuTemperatureC = _dashCpuTemp,
+            GpuTemperatureC = _dashGpuTemp,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             Devices = readings,
             Warnings = warnings,
         };
+    }
+
+    // dashboard temperatures, sampled on a slow cadence so LHM isn't hit every tick
+    private double? _dashCpuTemp;
+    private double? _dashGpuTemp;
+    private long _dashTempsDue;
+
+    private void SampleDashboardTemps()
+    {
+        if (Environment.TickCount64 < _dashTempsDue)
+        {
+            return;
+        }
+
+        _dashTempsDue = Environment.TickCount64 + 2_000;
+        try
+        {
+            _lhm ??= new LhmSensorSource();
+            var readings = _lhm.Read();
+            _dashCpuTemp = readings
+                .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains("cpu", StringComparison.OrdinalIgnoreCase))
+                .Select(r => (double?)r.Value).Max();
+            _dashGpuTemp = readings
+                .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains("gpu", StringComparison.OrdinalIgnoreCase))
+                .Select(r => (double?)r.Value).Max();
+        }
+        catch
+        {
+            // tiles just show a dash
+        }
     }
 
     // ---- device lifecycle ----
@@ -772,7 +809,59 @@ public sealed class ControlLoop : IDisposable
     private long _lcdRetryAt;
     private bool _lcdOpenFailedWarned;
 
-    private void ApplyLcd(ControlSettings settings, List<string> warnings)
+    /// <summary>Screens currently open (id, isPump) — for the UI's per-screen editors.</summary>
+    public IReadOnlyList<(string Id, bool IsPump)> LcdScreenIds
+    {
+        get
+        {
+            var list = new List<(string, bool)>();
+            if (_corsairLcd is not null)
+            {
+                list.Add(("pump-lcd", true));
+            }
+
+            list.AddRange(_lcdNodes.Select(n => (n.Serial, false)));
+            return list;
+        }
+    }
+
+    // "find this screen": flash a big index frame on one screen for a few seconds
+    private readonly Dictionary<string, long> _lcdIdentifyUntil = [];
+
+    public void IdentifyScreen(string id, int seconds = 8)
+    {
+        lock (_lcdIdentifyUntil)
+        {
+            _lcdIdentifyUntil[id] = Environment.TickCount64 + seconds * 1000L;
+        }
+
+        _lcdShownKey.Remove(id); // force an immediate re-push on the next metric round
+        _lcdLastFanPush.Remove(id);
+        _lcdMetricsDue = 0;
+        _wake.Set();
+    }
+
+    private bool IsIdentifying(string id)
+    {
+        lock (_lcdIdentifyUntil)
+        {
+            if (_lcdIdentifyUntil.TryGetValue(id, out var until))
+            {
+                if (Environment.TickCount64 <= until)
+                {
+                    return true;
+                }
+
+                _lcdIdentifyUntil.Remove(id);
+                _lcdShownKey.Remove(id); // restore the metric right away
+                _lcdLastFanPush.Remove(id);
+            }
+
+            return false;
+        }
+    }
+
+    private void ApplyLcd(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
     {
         var mode = settings.LcdScreens;
         if (mode == LcdMode.Unmanaged || Environment.TickCount64 < _lcdRetryAt)
@@ -906,7 +995,7 @@ public sealed class ControlLoop : IDisposable
 
         if (mode == LcdMode.Metrics)
         {
-            StreamLcdMetrics(settings, warnings);
+            StreamLcdMetrics(settings, readings, duty, warnings);
         }
     }
 
@@ -941,7 +1030,7 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, string> _lcdShownKey = [];
     private readonly Dictionary<string, long> _lcdLastFanPush = [];
 
-    private void StreamLcdMetrics(ControlSettings settings, List<string> warnings)
+    private void StreamLcdMetrics(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
     {
         if (Environment.TickCount64 < _lcdMetricsDue)
         {
@@ -951,19 +1040,20 @@ public sealed class ControlLoop : IDisposable
         _lcdMetricsDue = Environment.TickCount64 + 2_000;
         IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings = null;
 
-        if (_corsairLcd is { } pump && ReadLcdMetric(settings.PumpScreenMetric, ref lhmReadings) is { } pm)
+        if (_corsairLcd is { } pump)
         {
-            var key = $"{settings.PumpScreenMetric}|{pm.Value}|{pm.Unit}";
+            var config = settings.ScreenConfig("pump-lcd", isPump: true);
+            var frame = ComposeScreenFrame("pump-lcd", ordinal: 0, config,
+                Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
+                Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight,
+                readings, duty, ref lhmReadings, out var key);
             var keepaliveDue = Environment.TickCount64 >= _pumpLcdKeepaliveDue;
-            if (_lcdShownKey.GetValueOrDefault("pump-lcd") != key || keepaliveDue)
+            if (frame is not null && (_lcdShownKey.GetValueOrDefault("pump-lcd") != key || keepaliveDue))
             {
                 try
                 {
-                    pump.SendJpegFrame(LcdMetricRenderer.Render(
-                        Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
-                        Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight,
-                        pm.Label, pm.Value, pm.Unit, pm.Accent));
-                    _lcdShownKey["pump-lcd"] = key;
+                    pump.SendJpegFrame(frame);
+                    _lcdShownKey["pump-lcd"] = key!;
                     _pumpLcdKeepaliveDue = Environment.TickCount64 + PumpLcdKeepaliveMs;
                 }
                 catch (Exception ex)
@@ -976,49 +1066,81 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (ReadLcdMetric(settings.FanScreenMetric, ref lhmReadings) is { } fm)
+        var pushedAny = false;
+        var ordinal = 0;
+        foreach (var node in _lcdNodes.ToList())
         {
-            var key = $"{settings.FanScreenMetric}|{fm.Value}|{fm.Unit}";
-            byte[]? frame = null;
-            var pushedAny = false;
-            foreach (var node in _lcdNodes.ToList())
+            ordinal++;
+            var config = settings.ScreenConfig(node.Serial, isPump: false);
+            var frame = ComposeScreenFrame(node.Serial, ordinal, config,
+                Slv3LcdProtocol.ScreenWidth, Slv3LcdProtocol.ScreenHeight,
+                readings, duty, ref lhmReadings, out var key);
+            if (frame is null || _lcdShownKey.GetValueOrDefault(node.Serial) == key)
             {
-                if (_lcdShownKey.GetValueOrDefault(node.Serial) == key
-                    || Environment.TickCount64 - _lcdLastFanPush.GetValueOrDefault(node.Serial) < 10_000)
-                {
-                    continue;
-                }
-
-                frame ??= LcdMetricRenderer.Render(
-                    Slv3LcdProtocol.ScreenWidth, Slv3LcdProtocol.ScreenHeight,
-                    fm.Label, fm.Value, fm.Unit, fm.Accent);
-                try
-                {
-                    node.SendJpegFrame(frame);
-                    _lcdShownKey[node.Serial] = key;
-                    _lcdLastFanPush[node.Serial] = Environment.TickCount64;
-                    pushedAny = true;
-                }
-                catch (Exception ex)
-                {
-                    warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
-                    node.Dispose();
-                    _lcdNodes.Remove(node);
-                    _lcdRetryAt = Environment.TickCount64 + 10_000;
-                }
+                continue;
             }
 
-            if (pushedAny)
+            // identify pushes jump the queue; normal metric updates stay ≥10 s apart per fan
+            if (!IsIdentifying(node.Serial)
+                && Environment.TickCount64 - _lcdLastFanPush.GetValueOrDefault(node.Serial) < 10_000)
             {
-                // fan radios go briefly deaf around LCD traffic — schedule a color confirm
-                _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
-                _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
+                continue;
             }
+
+            try
+            {
+                node.SendJpegFrame(frame);
+                _lcdShownKey[node.Serial] = key!;
+                _lcdLastFanPush[node.Serial] = Environment.TickCount64;
+                pushedAny = true;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
+                node.Dispose();
+                _lcdNodes.Remove(node);
+                _lcdRetryAt = Environment.TickCount64 + 10_000;
+            }
+        }
+
+        if (pushedAny)
+        {
+            // fan radios go briefly deaf around LCD traffic — schedule a color confirm
+            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
         }
     }
 
+    /// <summary>One screen's frame (metric or identify flash) and its content key.</summary>
+    private byte[]? ComposeScreenFrame(
+        string id, int ordinal, LcdScreenConfig config, int width, int height,
+        List<DeviceReading> readings, int duty,
+        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings, out string? key)
+    {
+        if (IsIdentifying(id))
+        {
+            var name = ordinal == 0 ? "P" : ordinal.ToString();
+            key = $"identify|{id}";
+            return LcdMetricRenderer.Render(width, height, "SCREEN",
+                name, id.Length > 6 ? id[..6] : id, (255, 255, 255), config.RotationDegrees);
+        }
+
+        if (ReadLcdMetric(config.Metric, readings, duty, ref lhmReadings) is not { } m)
+        {
+            key = null;
+            return null;
+        }
+
+        var accent = config is { FontR: { } fr, FontG: { } fg, FontB: { } fb }
+            ? ((byte)Math.Clamp(fr, 0, 255), (byte)Math.Clamp(fg, 0, 255), (byte)Math.Clamp(fb, 0, 255))
+            : m.Accent;
+        key = $"{config.Metric}|{m.Value}|{m.Unit}|{accent}|{config.RotationDegrees}";
+        return LcdMetricRenderer.Render(width, height, m.Label, m.Value, m.Unit, accent, config.RotationDegrees);
+    }
+
     private (string Label, string Value, string Unit, (byte R, byte G, byte B) Accent)? ReadLcdMetric(
-        LcdMetric metric, ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings)
+        LcdMetric metric, List<DeviceReading> readings, int duty,
+        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings)
     {
         switch (metric)
         {
@@ -1026,19 +1148,33 @@ public sealed class ControlLoop : IDisposable
                 var now = DateTime.Now;
                 return ("TIME", now.ToString("HH:mm"), now.ToString("ddd d MMM"), (235, 235, 245));
 
+            case LcdMetric.Date:
+                var today = DateTime.Now;
+                return (today.ToString("dddd").ToUpperInvariant(), today.Day.ToString(), today.ToString("MMMM yyyy"), (235, 235, 245));
+
             case LcdMetric.Coolant:
                 return TryReadCoolant() is { } coolant
                     ? ("COOLANT", $"{coolant:F0}", "°C", TemperatureAccent(coolant, warm: 33, hot: 37))
                     : null;
+
+            case LcdMetric.PumpRpm:
+                return readings.FirstOrDefault(r => r.IsPump) is { Rpm: { } rpm }
+                    ? ("PUMP", rpm.ToString(), "rpm", (122, 167, 255))
+                    : null;
+
+            case LcdMetric.FanDuty:
+                return ("FANS", duty.ToString(), "% duty", (122, 167, 255));
 
             case LcdMetric.CpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C");
             case LcdMetric.GpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C");
             case LcdMetric.CpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU LOAD", "%");
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "% load");
             case LcdMetric.GpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU LOAD", "%");
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "% load");
+            case LcdMetric.RamLoad:
+                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "% used");
             default:
                 return null;
         }

@@ -23,6 +23,7 @@ public sealed class LhmSensorSource : ISensorSource
             IsGpuEnabled = true,
             IsMotherboardEnabled = true,
             IsControllerEnabled = true,
+            IsMemoryEnabled = true, // RAM load for the LCD metrics
         };
         _computer.Open();
     }

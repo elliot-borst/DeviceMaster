@@ -87,12 +87,12 @@ public sealed class MainWindow : Window
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
-    // hardware card — compact pills, two per row; expanded by default (its column has room)
-    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2 };
+    // hardware card — compact pills, two per row; collapsed behind the summary by default
+    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2, Visibility = Visibility.Collapsed };
     private readonly TextBlock _hwSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
     private TextBlock _hwExpandLink = null!;
     private TextBlock _hwForgetLink = null!;
-    private bool _hwExpanded = true;
+    private bool _hwExpanded;
     private List<string> _lastHardwareKeys = [];
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
@@ -123,6 +123,12 @@ public sealed class MainWindow : Window
         Grid.SetIsSharedSizeScope(_fanRows, true);
         Grid.SetIsSharedSizeScope(_pumpRows, true);
         Content = BuildLayout();
+        if (Environment.GetEnvironmentVariable("DEVICEMASTER_PAGE") is { Length: > 0 } startPage
+            && _pages.ContainsKey(startPage))
+        {
+            SelectPage(startPage); // development: screenshot a specific page directly
+        }
+
         _uiReady = true;
 
         CreateTrayIcon();
@@ -131,6 +137,7 @@ public sealed class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             UpdateControlStatus();
+            MaybeRebuildScreenList();
             if (_downloading)
             {
                 _updateNoticeText.Text = $"Updating to {_pendingUpdate?.Tag} — downloading"
@@ -159,123 +166,319 @@ public sealed class MainWindow : Window
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
-    // ---------- layout ----------
+    // ---------- layout: left sidebar navigation + visibility-switched pages ----------
+
+    private readonly Dictionary<string, UIElement> _pages = [];
+    private readonly Dictionary<string, Border> _navButtons = [];
+    private string _activePage = "dashboard";
 
     private UIElement BuildLayout()
     {
-        var root = new DockPanel { Margin = new Thickness(24, 20, 24, 16) };
+        var root = new DockPanel();
 
-        // ---- header ----
-        var header = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 0, 0, 20) };
-
-        var logo = new Border
+        // ---- sidebar ----
+        var sidebar = new Border
         {
-            Width = 46,
-            Height = 46,
-            CornerRadius = new CornerRadius(12),
+            Width = 218,
+            Background = Theme.Card,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(0, 0, 1, 0),
+        };
+        var side = new DockPanel { Margin = new Thickness(14, 18, 14, 16) };
+
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 0, 0, 22) };
+        brand.Children.Add(new Border
+        {
+            Width = 40,
+            Height = 40,
+            CornerRadius = new CornerRadius(11),
             Background = Theme.Card2,
             BorderBrush = Theme.Line2,
             BorderThickness = new Thickness(1),
-            VerticalAlignment = VerticalAlignment.Center,
             Child = BuildLogoGlyph(),
-        };
-        DockPanel.SetDock(logo, Dock.Left);
-        header.Children.Add(logo);
+        });
+        var brandText = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        brandText.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 17, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
+        brandText.Children.Add(new TextBlock { Text = "cooling · RGB · screens", FontSize = 10.5, Foreground = Theme.Faint });
+        brand.Children.Add(brandText);
+        DockPanel.SetDock(brand, Dock.Top);
+        side.Children.Add(brand);
 
-        var titles = new StackPanel { Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        titles.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 21, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
-        titles.Children.Add(new TextBlock { Text = "PC cooling & RGB toolkit", FontSize = 11.5, Foreground = Theme.Faint });
-        DockPanel.SetDock(titles, Dock.Left);
-        header.Children.Add(titles);
-
-        var versionBox = new Border
-        {
-            Margin = new Thickness(26, 0, 0, 0),
-            Padding = new Thickness(16, 9, 16, 9),
-            CornerRadius = new CornerRadius(12),
-            Background = Theme.Card,
-            BorderBrush = Theme.Line,
-            BorderThickness = new Thickness(1),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var versionStack = new StackPanel();
-        versionStack.Children.Add(new TextBlock { Text = $"Version {AppVersion}", Foreground = Theme.Accent2, FontSize = 13, FontWeight = FontWeights.SemiBold });
-        versionStack.Children.Add(new TextBlock { Text = $"Released {VersionDate}", Foreground = Theme.Faint, FontSize = 11 });
-        versionBox.Child = versionStack;
-        DockPanel.SetDock(versionBox, Dock.Left);
-        header.Children.Add(versionBox);
+        // ---- sidebar bottom: version, startup, updates ----
+        var bottom = new StackPanel();
+        _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(4, 0, 0, 10) };
+        _updateNotice.Children.Add(new Border { Width = 8, Height = 8, CornerRadius = new CornerRadius(4), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+        _updateNoticeText = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        _updateNotice.Children.Add(_updateNoticeText);
+        bottom.Children.Add(_updateNotice);
 
         _checkButton = Theme.Btn("↻  Check for Updates", primary: false, () => _ = CheckForUpdatesAsync(auto: false));
         _checkLabel = (TextBlock)_checkButton.Child;
-        DockPanel.SetDock(_checkButton, Dock.Right);
-        header.Children.Add(_checkButton);
+        _checkButton.HorizontalAlignment = HorizontalAlignment.Stretch;
+        bottom.Children.Add(_checkButton);
 
-        // updates install themselves — this is a status line, not a prompt
-        _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
-        _updateNotice.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(5), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
-        _updateNoticeText = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
-        _updateNotice.Children.Add(_updateNoticeText);
-        DockPanel.SetDock(_updateNotice, Dock.Right);
-        header.Children.Add(_updateNotice);
-
-        var startupToggle = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
+        var startupToggle = new DockPanel { Margin = new Thickness(4, 12, 0, 10), LastChildFill = false };
         startupToggle.Children.Add(new TextBlock
         {
             Text = "Start with Windows",
-            FontSize = 12,
+            FontSize = 11.5,
             Foreground = Theme.Dim,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 9, 0),
         });
-        startupToggle.Children.Add(Theme.Toggle(_controlSettings.StartWithWindows, on =>
+        var toggle = Theme.Toggle(_controlSettings.StartWithWindows, on =>
         {
             _controlSettings.StartWithWindows = on;
-            try
-            {
-                _controlSettings.Save();
-            }
-            catch
-            {
-                // non-fatal — the task change below still applies for this install
-            }
-
+            TrySaveSettings();
             ElevationBroker.SetStartWithWindows(on);
-        }));
-        DockPanel.SetDock(startupToggle, Dock.Right);
-        header.Children.Add(startupToggle);
+        });
+        DockPanel.SetDock(toggle, Dock.Right);
+        startupToggle.Children.Add(toggle);
+        bottom.Children.Add(startupToggle);
 
-        DockPanel.SetDock(header, Dock.Top);
-        root.Children.Add(header);
+        bottom.Children.Add(new TextBlock
+        {
+            Text = $"Version {AppVersion} · {VersionDate}",
+            FontSize = 10.5,
+            Foreground = Theme.Faint,
+            Margin = new Thickness(4, 0, 0, 0),
+        });
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        side.Children.Add(bottom);
 
-        // ---- three-column card grid (everything on one screen) ----
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.05, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+        // ---- nav ----
+        var nav = new StackPanel();
+        foreach (var (key, glyph, label) in new[]
+        {
+            ("dashboard", "⌂", "Dashboard"),
+            ("cooling", "❄", "Cooling"),
+            ("lighting", "◈", "Lighting"),
+            ("screens", "▣", "Screens"),
+            ("devices", "⚙", "Devices"),
+        })
+        {
+            var button = NavButton(key, glyph, label);
+            _navButtons[key] = button;
+            nav.Children.Add(button);
+        }
 
-        var fanColumn = new StackPanel { Margin = new Thickness(0, 0, 7, 0) };
-        fanColumn.Children.Add(BuildFanCard());
-        var pumpCard = BuildPumpCard();
-        pumpCard.Margin = new Thickness(0, 14, 0, 0);
-        fanColumn.Children.Add(pumpCard);
-        Grid.SetColumn(fanColumn, 0);
-        grid.Children.Add(fanColumn);
+        side.Children.Add(nav);
+        sidebar.Child = side;
+        DockPanel.SetDock(sidebar, Dock.Left);
+        root.Children.Add(sidebar);
 
-        var middleColumn = new StackPanel { Margin = new Thickness(7, 0, 7, 0) };
-        middleColumn.Children.Add(BuildRgbCard());
-        var lcdCard = BuildLcdCard();
-        lcdCard.Margin = new Thickness(0, 14, 0, 0);
-        middleColumn.Children.Add(lcdCard);
-        Grid.SetColumn(middleColumn, 1);
-        grid.Children.Add(middleColumn);
+        // ---- pages (visibility-switched so live updates keep flowing) ----
+        var host = new Grid { Margin = new Thickness(26, 22, 26, 16) };
+        _pages["dashboard"] = WrapPage(BuildDashboardPage());
+        _pages["cooling"] = WrapPage(BuildCoolingPage());
+        _pages["lighting"] = WrapPage(BuildLightingPage());
+        _pages["screens"] = WrapPage(BuildScreensPage());
+        _pages["devices"] = WrapPage(BuildDevicesPage());
+        foreach (var (key, page) in _pages)
+        {
+            page.Visibility = key == _activePage ? Visibility.Visible : Visibility.Collapsed;
+            host.Children.Add(page);
+        }
 
-        var hardwareColumn = new StackPanel { Margin = new Thickness(7, 0, 0, 0) };
-        hardwareColumn.Children.Add(BuildHardwareCard());
-        Grid.SetColumn(hardwareColumn, 2);
-        grid.Children.Add(hardwareColumn);
-
-        root.Children.Add(new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        root.Children.Add(host);
+        RefreshNavStyles();
         return root;
+
+        static UIElement WrapPage(UIElement content) => new ScrollViewer
+        {
+            Content = content,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+    }
+
+    private Border NavButton(string key, string glyph, string label)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock { Text = glyph, FontSize = 15, Width = 26, Foreground = Theme.Dim, VerticalAlignment = VerticalAlignment.Center });
+        row.Children.Add(new TextBlock { Text = label, FontSize = 13.5, Foreground = Theme.Dim, VerticalAlignment = VerticalAlignment.Center });
+        var button = new Border
+        {
+            Padding = new Thickness(12, 10, 12, 10),
+            Margin = new Thickness(0, 2, 0, 2),
+            CornerRadius = new CornerRadius(10),
+            Background = Brushes.Transparent,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Child = row,
+        };
+        button.MouseLeftButtonUp += (_, _) => SelectPage(key);
+        return button;
+    }
+
+    private void SelectPage(string key)
+    {
+        _activePage = key;
+        foreach (var (pageKey, page) in _pages)
+        {
+            page.Visibility = pageKey == key ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        RefreshNavStyles();
+    }
+
+    private void RefreshNavStyles()
+    {
+        foreach (var (key, button) in _navButtons)
+        {
+            var selected = key == _activePage;
+            button.Background = selected ? Theme.Card2 : Brushes.Transparent;
+            var row = (StackPanel)button.Child;
+            ((TextBlock)row.Children[0]).Foreground = selected ? Theme.Accent2 : Theme.Dim;
+            ((TextBlock)row.Children[1]).Foreground = selected ? Theme.Text : Theme.Dim;
+            ((TextBlock)row.Children[1]).FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+    }
+
+    // ---------- pages ----------
+
+    private readonly TextBlock _dashStatus = new() { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(2, 0, 0, 14) };
+    private TextBlock _tileCoolant = null!, _tileCoolantSub = null!;
+    private TextBlock _tileCpu = null!, _tileCpuSub = null!;
+    private TextBlock _tileGpu = null!, _tileGpuSub = null!;
+    private TextBlock _tilePump = null!, _tilePumpSub = null!;
+    private TextBlock _tileFans = null!, _tileFansSub = null!;
+    private TextBlock _tileDuty = null!, _tileDutySub = null!;
+    private readonly StackPanel _dashWarnings = new() { Margin = new Thickness(2, 12, 0, 0) };
+
+    private readonly System.Windows.Controls.Primitives.UniformGrid _dashFanGrid = new() { Columns = 4 };
+
+    private UIElement BuildDashboardPage()
+    {
+        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(PageTitle("Dashboard", "the whole loop at a glance"));
+        page.Children.Add(_dashStatus);
+
+        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 6 };
+        tiles.Children.Add(StatTile("COOLANT", out _tileCoolant, out _tileCoolantSub));
+        tiles.Children.Add(StatTile("CPU", out _tileCpu, out _tileCpuSub));
+        tiles.Children.Add(StatTile("GPU", out _tileGpu, out _tileGpuSub));
+        tiles.Children.Add(StatTile("PUMP", out _tilePump, out _tilePumpSub));
+        tiles.Children.Add(StatTile("FANS", out _tileFans, out _tileFansSub));
+        tiles.Children.Add(StatTile("DUTY", out _tileDuty, out _tileDutySub));
+        page.Children.Add(tiles);
+
+        var fanCard = Theme.CardShell("✻", "Fans right now", "every fan with its live speed", out var fanBody, out _);
+        fanCard.Margin = new Thickness(0, 4, 12, 0);
+        fanBody.Children.Add(_dashFanGrid);
+        page.Children.Add(fanCard);
+
+        page.Children.Add(_dashWarnings);
+        return page;
+    }
+
+    /// <summary>Compact name → rpm pill for the dashboard fan grid.</summary>
+    private static Border FanPill(string name, string value, Brush valueBrush)
+    {
+        var row = new DockPanel { LastChildFill = false };
+        var title = new TextBlock
+        {
+            Text = name,
+            Foreground = Theme.Text,
+            FontSize = 11.5,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 190,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(title, Dock.Left);
+        row.Children.Add(title);
+        var val = new TextBlock
+        {
+            Text = value,
+            Foreground = valueBrush,
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(val, Dock.Right);
+        row.Children.Add(val);
+        return new Border
+        {
+            Margin = new Thickness(0, 0, 6, 6),
+            Padding = new Thickness(10, 7, 10, 7),
+            CornerRadius = new CornerRadius(9),
+            Background = Theme.Inset,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            Child = row,
+        };
+    }
+
+    private static TextBlock PageTitle(string title, string subtitle)
+    {
+        var block = new TextBlock { Margin = new Thickness(2, 0, 0, 18) };
+        block.Inlines.Add(new System.Windows.Documents.Run(title) { FontSize = 24, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
+        block.Inlines.Add(new System.Windows.Documents.Run($"   {subtitle}") { FontSize = 12.5, Foreground = Theme.Faint });
+        return block;
+    }
+
+    private static Border StatTile(string label, out TextBlock value, out TextBlock sub)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
+        value = new TextBlock { Text = "—", FontSize = 30, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
+        stack.Children.Add(value);
+        sub = new TextBlock { Text = "", FontSize = 10.5, Foreground = Theme.Faint };
+        stack.Children.Add(sub);
+        return new Border
+        {
+            Margin = new Thickness(0, 0, 12, 12),
+            Padding = new Thickness(18, 14, 18, 14),
+            CornerRadius = new CornerRadius(14),
+            Background = Theme.Card,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            Child = stack,
+        };
+    }
+
+    private UIElement BuildCoolingPage()
+    {
+        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(PageTitle("Cooling", "fan curves, manual duty and the pump"));
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
+        var fan = BuildFanCard();
+        fan.Margin = new Thickness(0, 0, 8, 0);
+        Grid.SetColumn(fan, 0);
+        grid.Children.Add(fan);
+        var pump = BuildPumpCard();
+        pump.Margin = new Thickness(8, 0, 0, 0);
+        pump.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(pump, 1);
+        grid.Children.Add(pump);
+        page.Children.Add(grid);
+        return page;
+    }
+
+    private UIElement BuildLightingPage()
+    {
+        var page = new StackPanel { MaxWidth = 860, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(PageTitle("Lighting", "one static color across every LED"));
+        page.Children.Add(BuildRgbCard());
+        return page;
+    }
+
+    private UIElement BuildScreensPage()
+    {
+        var page = new StackPanel { MaxWidth = 1000, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(PageTitle("Screens", "the pump LCD and every fan LCD"));
+        page.Children.Add(BuildLcdCard());
+        var list = BuildScreenListCard();
+        list.Margin = new Thickness(0, 14, 0, 0);
+        page.Children.Add(list);
+        return page;
+    }
+
+    private UIElement BuildDevicesPage()
+    {
+        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(PageTitle("Devices", "everything detected, with its unique id"));
+        page.Children.Add(BuildHardwareCard());
+        return page;
     }
 
     private UIElement BuildLogoGlyph()
@@ -522,7 +725,175 @@ public sealed class MainWindow : Window
     private readonly WrapPanel _lcdMetricPanel = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
     private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
-    private static readonly string[] LcdMetricNames = ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock"];
+    private static readonly string[] LcdMetricNames =
+        ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date"];
+
+    // per-screen editor list (Screens page)
+    private readonly StackPanel _screenList = new();
+    private string _screenListSignature = "?";
+
+    private Border BuildScreenListCard()
+    {
+        var card = Theme.CardShell("◎", "Individual screens", "metric, rotation and color per screen · Find flashes the screen", out var body, out _);
+        body.Children.Add(_screenList);
+        RebuildScreenList();
+        return card;
+    }
+
+    private static IReadOnlyList<(string Id, bool IsPump)> FakeScreens =>
+        Environment.GetEnvironmentVariable("DEVICEMASTER_FAKE_SCREENS") is { Length: > 0 }
+            ? [("pump-lcd", true), ("0B913822D5160A66", false), ("14E3F709651F17E6", false), ("522AEAB205160E66", false)]
+            : [];
+
+    private IReadOnlyList<(string Id, bool IsPump)> ScreenIds()
+    {
+        var ids = _loop?.LcdScreenIds ?? [];
+        return ids.Count > 0 ? ids : FakeScreens;
+    }
+
+    private void MaybeRebuildScreenList()
+    {
+        var ids = ScreenIds();
+        var signature = string.Join("|", ids.Select(s => s.Id));
+        if (signature != _screenListSignature)
+        {
+            RebuildScreenList();
+        }
+    }
+
+    private void RebuildScreenList()
+    {
+        var ids = ScreenIds();
+        _screenListSignature = string.Join("|", ids.Select(s => s.Id));
+        _screenList.Children.Clear();
+
+        if (ids.Count == 0)
+        {
+            _screenList.Children.Add(new TextBlock
+            {
+                Text = "Screens appear here once a screen mode is active (pick Off, Black, White or Metrics above).",
+                Foreground = Theme.Dim,
+                FontSize = 12.5,
+            });
+            return;
+        }
+
+        var fanIndex = 0;
+        foreach (var (id, isPump) in ids)
+        {
+            var config = _controlSettings.ScreenConfig(id, isPump);
+            var title = isPump ? "Pump screen" : $"Fan screen {++fanIndex}";
+            _screenList.Children.Add(ScreenRow(id, title, config));
+        }
+    }
+
+    private Border ScreenRow(string id, string title, LcdScreenConfig config)
+    {
+        var row = new DockPanel { LastChildFill = false };
+
+        var find = Theme.Btn("◎ Find", primary: false, () => _loop?.IdentifyScreen(id));
+        find.Margin = new Thickness(0, 0, 12, 0);
+        DockPanel.SetDock(find, Dock.Left);
+        row.Children.Add(find);
+
+        var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Width = 130 };
+        names.Children.Add(new TextBlock { Text = title, FontSize = 12.5, Foreground = Theme.Text, FontWeight = FontWeights.SemiBold });
+        names.Children.Add(new TextBlock
+        {
+            Text = id.Length > 10 ? id[..10] + "…" : id,
+            FontSize = 10,
+            Foreground = Theme.Faint,
+            FontFamily = Theme.Mono,
+        });
+        DockPanel.SetDock(names, Dock.Left);
+        row.Children.Add(names);
+
+        var metricDrop = new DmDropdown(LcdMetricNames, (int)config.Metric, 108);
+        metricDrop.SelectionChanged += index =>
+        {
+            config.Metric = (LcdMetric)index;
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
+        var metricPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+        metricPanel.Children.Add(Theme.SmallLabel("Metric"));
+        metricPanel.Children.Add(metricDrop);
+        DockPanel.SetDock(metricPanel, Dock.Left);
+        row.Children.Add(metricPanel);
+
+        var rotationDrop = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(config.RotationDegrees / 90, 0, 3), 70);
+        rotationDrop.SelectionChanged += index =>
+        {
+            config.RotationDegrees = index * 90;
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
+        var rotationPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+        rotationPanel.Children.Add(Theme.SmallLabel("Rotate"));
+        rotationPanel.Children.Add(rotationDrop);
+        DockPanel.SetDock(rotationPanel, Dock.Left);
+        row.Children.Add(rotationPanel);
+
+        var colors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        colors.Children.Add(Theme.SmallLabel("Color"));
+        colors.Children.Add(FontSwatch(config, null, "Auto — green/amber/red by value"));
+        foreach (var (r, g, b) in new (byte, byte, byte)[]
+        {
+            (235, 235, 245), (255, 60, 60), (255, 170, 0), (80, 230, 120),
+            (80, 200, 255), (90, 120, 255), (200, 90, 255), (255, 80, 170),
+        })
+        {
+            colors.Children.Add(FontSwatch(config, (r, g, b), null));
+        }
+
+        DockPanel.SetDock(colors, Dock.Left);
+        row.Children.Add(colors);
+
+        return Theme.InsetRow(row);
+    }
+
+    private Border FontSwatch(LcdScreenConfig config, (byte R, byte G, byte B)? color, string? tooltip)
+    {
+        var selected = color is null
+            ? config.FontR is null
+            : config is { FontR: { } r, FontG: { } g, FontB: { } b } && (r, g, b) == (color.Value.R, color.Value.G, color.Value.B);
+        var swatch = new Border
+        {
+            Width = 20,
+            Height = 20,
+            CornerRadius = new CornerRadius(6),
+            Margin = new Thickness(0, 0, 5, 0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Background = color is { } c
+                ? new SolidColorBrush(Color.FromRgb(c.R, c.G, c.B))
+                : new SolidColorBrush(Color.FromRgb(24, 26, 38)),
+            BorderBrush = selected ? Theme.Accent : Theme.Line2,
+            BorderThickness = new Thickness(selected ? 2 : 1),
+            ToolTip = tooltip,
+        };
+        if (color is null)
+        {
+            swatch.Child = new TextBlock
+            {
+                Text = "A",
+                FontSize = 10,
+                Foreground = Theme.Dim,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        swatch.MouseLeftButtonUp += (_, _) =>
+        {
+            (config.FontR, config.FontG, config.FontB) = color is { } chosen
+                ? ((int?)chosen.R, (int?)chosen.G, (int?)chosen.B)
+                : (null, null, null);
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+            RebuildScreenList(); // refresh selection rings
+        };
+        return swatch;
+    }
 
     private Border BuildLcdCard()
     {
@@ -618,7 +989,7 @@ public sealed class MainWindow : Window
         head.Children.Add(_rescanButton);
 
         var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        _hwExpandLink = LinkText("▾  hide", () =>
+        _hwExpandLink = LinkText("▸  details", () =>
         {
             _hwExpanded = !_hwExpanded;
             _hardwareRows.Visibility = _hwExpanded ? Visibility.Visible : Visibility.Collapsed;
@@ -882,6 +1253,10 @@ public sealed class MainWindow : Window
             else if (_controlSettings.Mode != ControlMode.Off)
             {
                 chainPending = true; // the loop is still starting — rows appear automatically
+            }
+            else if (Environment.GetEnvironmentVariable("DEVICEMASTER_NO_CHAINSCAN") is { Length: > 0 })
+            {
+                chainPending = true; // development: never touch the hubs from a second instance
             }
 
             var (scan, conflicts) = await Task.Run(() =>
@@ -1160,6 +1535,8 @@ public sealed class MainWindow : Window
             _ = RefreshDevicesAsync();
         }
 
+        UpdateDashboard(status);
+
         if (status is null || !status.Running)
         {
             _chainRowsLive = false;
@@ -1293,6 +1670,72 @@ public sealed class MainWindow : Window
         _fanBadge.Text = text;
         _fanBadge.Foreground = color;
         _fanDot.Background = color;
+    }
+
+    private void UpdateDashboard(ControlStatus? status)
+    {
+        if (status is null || !status.Running)
+        {
+            _dashStatus.Text = _loop is not null && _controlSettings.Mode != ControlMode.Off
+                ? "Starting fan control…"
+                : "Control off — devices follow their own hardware/firmware curves.";
+            _dashStatus.Foreground = Theme.Dim;
+            foreach (var (tile, sub) in new[]
+            {
+                (_tileCoolant, _tileCoolantSub), (_tileCpu, _tileCpuSub), (_tileGpu, _tileGpuSub),
+                (_tilePump, _tilePumpSub), (_tileFans, _tileFansSub), (_tileDuty, _tileDutySub),
+            })
+            {
+                tile.Text = "—";
+                sub.Text = "";
+            }
+
+            _dashFanGrid.Children.Clear();
+            _dashWarnings.Children.Clear();
+            return;
+        }
+
+        _dashStatus.Text = status.FailsafeActive
+            ? $"{status.SourceName} unavailable — FAILSAFE, all fans at 100%"
+            : status.Mode == ControlMode.Manual
+                ? $"Manual — all fans at {status.TargetDutyPercent}%"
+                : $"Curve on {status.SourceName} → fans {status.TargetDutyPercent}%";
+        _dashStatus.Foreground = status.FailsafeActive ? Theme.Warn : Theme.Text;
+
+        _tileCoolant.Text = status.CoolantTemperatureC is { } cool ? $"{cool:F1}°" : "—";
+        _tileCoolantSub.Text = "loop water";
+        _tileCpu.Text = status.CpuTemperatureC is { } cpu ? $"{cpu:F0}°" : "—";
+        _tileCpuSub.Text = "package";
+        _tileGpu.Text = status.GpuTemperatureC is { } gpu ? $"{gpu:F0}°" : "—";
+        _tileGpuSub.Text = "core";
+
+        var pump = status.Devices.FirstOrDefault(d => d.IsPump);
+        _tilePump.Text = pump?.Rpm is { } rpm ? rpm.ToString() : "—";
+        _tilePumpSub.Text = pump is null ? "not detected" : $"rpm @ {pump.AppliedDutyPercent}%";
+
+        var fans = status.Devices.Where(d => !d.IsPump).ToList();
+        _tileFans.Text = $"{fans.Count}/{Math.Max(_controlSettings.SeenFanIds.Count, fans.Count)}";
+        var silent = fans.Count(f => f.Rpm is null);
+        _tileFansSub.Text = silent > 0 ? $"{silent} without rpm" : "all reporting";
+
+        _tileDuty.Text = $"{status.TargetDutyPercent}%";
+        _tileDutySub.Text = status.Mode == ControlMode.Manual ? "manual" : "from curve";
+
+        _dashFanGrid.Children.Clear();
+        foreach (var fan in fans)
+        {
+            var name = fan.Name.Contains('(') ? fan.Name[..fan.Name.IndexOf('(')].Trim() : fan.Name;
+            _dashFanGrid.Children.Add(FanPill(
+                $"{fan.Family} · {name}",
+                fan.Rpm is { } r ? $"{r} rpm" : "no rpm",
+                fan.Rpm is null ? Theme.Faint : Theme.Accent2));
+        }
+
+        _dashWarnings.Children.Clear();
+        foreach (var warning in status.Warnings)
+        {
+            _dashWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) });
+        }
     }
 
     // ---------- updates ----------

@@ -11,7 +11,9 @@ public static class Program
         // Silent elevation: unelevated launches hand off to the highest-run-level scheduled
         // task (or one UAC self-elevation on first run) BEFORE the single-instance check, so
         // the stub never blocks the real instance. Declined UAC ⇒ run with reduced features.
-        if (!ElevationBroker.IsElevated && ElevationBroker.TryRelaunchElevated(args))
+        // (--no-elevate is a development escape hatch: run degraded, no task, no UAC.)
+        var noElevate = args.Any(a => a.Equals("--no-elevate", StringComparison.OrdinalIgnoreCase));
+        if (!noElevate && !ElevationBroker.IsElevated && ElevationBroker.TryRelaunchElevated(args))
         {
             return;
         }

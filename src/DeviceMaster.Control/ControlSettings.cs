@@ -38,6 +38,27 @@ public enum LcdMetric
     CpuLoad,
     GpuLoad,
     Clock,
+    RamLoad,
+    PumpRpm,
+    FanDuty,
+    Date,
+}
+
+/// <summary>Per-screen display configuration (metric, rotation, font color).</summary>
+public sealed class LcdScreenConfig
+{
+    /// <summary>"pump-lcd" or the fan LCD node's serial.</summary>
+    public string Id { get; set; } = "";
+
+    public LcdMetric Metric { get; set; } = LcdMetric.CpuTemp;
+
+    /// <summary>0, 90, 180 or 270 — applied when rendering the frame.</summary>
+    public int RotationDegrees { get; set; }
+
+    /// <summary>Fixed font color; all three null = automatic (green/amber/red by thresholds).</summary>
+    public int? FontR { get; set; }
+    public int? FontG { get; set; }
+    public int? FontB { get; set; }
 }
 
 /// <summary>User-facing control configuration, persisted as JSON under %LOCALAPPDATA%\DeviceMaster.</summary>
@@ -72,11 +93,27 @@ public sealed class ControlSettings
     /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, a solid background, or metrics.</summary>
     public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
 
-    /// <summary>Metric shown on the pump screen while <see cref="LcdScreens"/> is Metrics.</summary>
+    /// <summary>Metric shown on the pump screen while <see cref="LcdScreens"/> is Metrics (default for new configs).</summary>
     public LcdMetric PumpScreenMetric { get; set; } = LcdMetric.Coolant;
 
-    /// <summary>Metric shown on every fan screen while <see cref="LcdScreens"/> is Metrics.</summary>
+    /// <summary>Metric shown on every fan screen while <see cref="LcdScreens"/> is Metrics (default for new configs).</summary>
     public LcdMetric FanScreenMetric { get; set; } = LcdMetric.CpuTemp;
+
+    /// <summary>Per-screen overrides; screens without an entry fall back to the defaults above.</summary>
+    public List<LcdScreenConfig> LcdScreenConfigs { get; set; } = [];
+
+    /// <summary>Finds (or creates, unsaved) the config for a screen id.</summary>
+    public LcdScreenConfig ScreenConfig(string id, bool isPump)
+    {
+        var config = LcdScreenConfigs.FirstOrDefault(c => c.Id == id);
+        if (config is null)
+        {
+            config = new LcdScreenConfig { Id = id, Metric = isPump ? PumpScreenMetric : FanScreenMetric };
+            LcdScreenConfigs.Add(config);
+        }
+
+        return config;
+    }
 
     /// <summary>Every fan device id ever seen — the expected set behind the "N/N fans" roll-up.</summary>
     public List<string> SeenFanIds { get; set; } = [];
