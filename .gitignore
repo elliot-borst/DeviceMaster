@@ -426,6 +426,9 @@ test-results/
 *.dmg
 *.app
 
+# *.app above also matches the DeviceMaster.App source project directory — un-ignore it
+!src/DeviceMaster.App/
+
 # content below from: https://github.com/github/gitignore/blob/main/Global/macOS.gitignore
 # General
 .DS_Store

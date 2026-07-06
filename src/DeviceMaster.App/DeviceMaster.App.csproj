@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Sensors\DeviceMaster.Sensors.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.LianLi\DeviceMaster.Devices.LianLi.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Control\DeviceMaster.Control.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.AsusAura\DeviceMaster.Devices.AsusAura.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.Nvidia\DeviceMaster.Devices.Nvidia.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+</Project>
