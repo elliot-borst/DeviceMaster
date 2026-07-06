@@ -144,6 +144,53 @@ public static class Slv3Protocol
     }
 
     /// <summary>
+    /// 240-byte bind payload (ported from lian-li-linux bind.rs): a PWM-shaped packet
+    /// ([0]=0x12, [1]=0x10) whose master-MAC field carries the TARGET master and whose
+    /// rx-type/sequence slots carry the TARGET rx endpoint — the group adopts the pairing.
+    /// All-zero target master = unbind.
+    /// </summary>
+    public static byte[] BuildBindRfData(
+        ReadOnlySpan<byte> deviceMac, ReadOnlySpan<byte> targetMasterMac,
+        byte targetRx, byte masterChannel, ReadOnlySpan<byte> currentPwm)
+    {
+        if (deviceMac.Length != 6 || targetMasterMac.Length != 6 || currentPwm.Length != 4)
+        {
+            throw new ArgumentException("deviceMac/targetMasterMac must be 6 bytes and currentPwm 4 bytes.");
+        }
+
+        var data = new byte[RfDataSize];
+        data[0] = RfSelect;
+        data[1] = RfPwmCmd;
+        deviceMac.CopyTo(data.AsSpan(2));
+        targetMasterMac.CopyTo(data.AsSpan(8));
+        data[14] = targetRx;
+        data[15] = masterChannel;
+        data[16] = targetRx;
+        currentPwm.CopyTo(data.AsSpan(17));
+        return data;
+    }
+
+    /// <summary>
+    /// 240-byte SaveConfig broadcast ([0]=0x12, [1]=0x15, device MAC = FF×6, [14]=0xFF):
+    /// persists the current bindings to the fans' flash (ported from lian-li-linux bind.rs).
+    /// </summary>
+    public static byte[] BuildSaveConfigRfData(ReadOnlySpan<byte> masterMac)
+    {
+        if (masterMac.Length != 6)
+        {
+            throw new ArgumentException("masterMac must be 6 bytes.");
+        }
+
+        var data = new byte[RfDataSize];
+        data[0] = RfSelect;
+        data[1] = 0x15;
+        data.AsSpan(2, 6).Fill(0xFF);
+        masterMac.CopyTo(data.AsSpan(8));
+        data[14] = 0xFF;
+        return data;
+    }
+
+    /// <summary>
     /// 240-byte "master clock" heartbeat ([0]=0x12, [1]=0x14, [8-13]=master MAC). L-Connect sends
     /// this once per second; without it fan firmware drifts into an autonomous fallback.
     /// </summary>

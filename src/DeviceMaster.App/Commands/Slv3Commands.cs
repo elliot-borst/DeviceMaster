@@ -12,6 +12,7 @@ internal static class Slv3Commands
         {
             "status" => Status(),
             "set" => Set(GetInt(args, "--duty"), GetInt(args, "--hold") ?? 10),
+            "bind" => Bind(GetString(args, "--mac")),
             "probe" => Probe(),
             _ => Usage(),
         };
@@ -112,6 +113,35 @@ internal static class Slv3Commands
         return 0;
     }
 
+    /// <summary>Manually re-pairs a group to this dongle (exit the DeviceMaster app first).</summary>
+    private static int Bind(string? macPrefix)
+    {
+        if (string.IsNullOrWhiteSpace(macPrefix))
+        {
+            Log.Error("--mac <hex prefix> is required (see `slv3 status` for group MACs)");
+            return 1;
+        }
+
+        using var controller = Slv3Controller.Open(trace: m => Log.Debug("{Trace}", m));
+        for (var i = 0; i < 10 && controller.Devices.Count == 0; i++)
+        {
+            controller.PollDevices();
+            Thread.Sleep(300);
+        }
+
+        var device = controller.Devices.FirstOrDefault(
+            d => d.MacText.StartsWith(macPrefix, StringComparison.OrdinalIgnoreCase));
+        if (device is null)
+        {
+            Log.Error("No group with MAC prefix {Prefix} in telemetry ({Count} device(s) visible)",
+                macPrefix, controller.Devices.Count);
+            return 1;
+        }
+
+        var ok = controller.BindDevice(device, m => Log.Information("{Message}", m));
+        return ok ? 0 : 1;
+    }
+
     private static int Probe()
     {
         using var controller = Slv3Controller.Open(trace: m => Log.Debug("{Trace}", m));
@@ -169,6 +199,7 @@ internal static class Slv3Commands
         Console.WriteLine("usage:");
         Console.WriteLine("  slv3 status                      master MAC, wireless fan groups, RPMs, mobo PWM");
         Console.WriteLine("  slv3 set --duty P [--hold S]     hold all fan groups at P% (keepalive loop), then release");
+        Console.WriteLine("  slv3 bind --mac PREFIX           re-pair a group to this dongle (app must be exited)");
         return 1;
     }
 }

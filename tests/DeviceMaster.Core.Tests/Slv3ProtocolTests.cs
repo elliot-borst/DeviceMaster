@@ -163,3 +163,39 @@ public class Slv3ProtocolTests
         Assert.Null(moboPwm);
     }
 }
+
+public class Slv3BindProtocolTests
+{
+    private static readonly byte[] DeviceMac = [0x56, 0x2A, 0x10, 0x7A, 0x4E, 0xE0];
+    private static readonly byte[] MasterMac = [0x54, 0x44, 0x0E, 0x7A, 0x4E, 0xE0];
+
+    [Fact]
+    public void BuildBindRfData_CarriesTargetMasterAndRx()
+    {
+        var pwm = new byte[] { 160, 160, 0, 0 };
+
+        var data = Slv3Protocol.BuildBindRfData(DeviceMac, MasterMac, targetRx: 5, masterChannel: 8, pwm);
+
+        Assert.Equal(Slv3Protocol.RfDataSize, data.Length);
+        Assert.Equal(Slv3Protocol.RfSelect, data[0]);
+        Assert.Equal(Slv3Protocol.RfPwmCmd, data[1]);
+        Assert.Equal(DeviceMac, data[2..8]);
+        Assert.Equal(MasterMac, data[8..14]);
+        Assert.Equal(5, data[14]);
+        Assert.Equal(8, data[15]);
+        Assert.Equal(5, data[16]); // rx repeats in the sequence slot for binds
+        Assert.Equal(pwm, data[17..21]);
+    }
+
+    [Fact]
+    public void BuildSaveConfigRfData_BroadcastsToAllDevices()
+    {
+        var data = Slv3Protocol.BuildSaveConfigRfData(MasterMac);
+
+        Assert.Equal(Slv3Protocol.RfSelect, data[0]);
+        Assert.Equal(0x15, data[1]);
+        Assert.All(data[2..8], b => Assert.Equal(0xFF, b));
+        Assert.Equal(MasterMac, data[8..14]);
+        Assert.Equal(0xFF, data[14]);
+    }
+}

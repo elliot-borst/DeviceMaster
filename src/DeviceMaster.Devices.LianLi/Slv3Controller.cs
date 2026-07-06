@@ -443,6 +443,68 @@ public sealed class Slv3Controller : IDisposable
         _trace?.Invoke($"RGB #{r:X2}{g:X2}{b:X2} -> {device.MacText} ({ledCount} LEDs, {compressed.Length}B compressed)");
     }
 
+    /// <summary>
+    /// Re-pairs a group to this dongle: bind packets (6× per attempt), telemetry-verified
+    /// convergence, then a broadcast SaveConfig so the pairing survives power cycles.
+    /// Ported from lian-li-linux bind.rs. Returns true when telemetry confirms the pairing.
+    /// </summary>
+    public bool BindDevice(Slv3Device device, Action<string>? log = null)
+    {
+        var targetRx = NextUnusedRxType();
+        log?.Invoke($"SL V3 group {device.MacText[..4]}: re-pairing to this dongle (rx {targetRx}, channel {MasterChannel})");
+
+        var deadline = Environment.TickCount64 + 4_000;
+        var converged = false;
+        while (!converged && Environment.TickCount64 < deadline)
+        {
+            var bind = Slv3Protocol.BuildBindRfData(device.Mac, MasterMac, targetRx, MasterChannel, device.CurrentPwm);
+            for (var i = 0; i < 6; i++)
+            {
+                SendRfChunks(bind, device.Channel, device.RxType);
+                Thread.Sleep(30);
+            }
+
+            Thread.Sleep(150);
+            if (TryReadDeviceList() is { } fresh)
+            {
+                MergeDevices(fresh);
+                if (fresh.FirstOrDefault(d => d.MacText == device.MacText) is { } observed)
+                {
+                    device = observed; // keep channel/rx current between attempts
+                    converged = observed.IsBoundTo(MasterMac) && observed.RxType == targetRx;
+                }
+            }
+        }
+
+        // persist bindings to the fans' flash regardless — the reference does the same
+        var save = Slv3Protocol.BuildSaveConfigRfData(MasterMac);
+        for (var round = 0; round < 3; round++)
+        {
+            SendRfChunks(save, MasterChannel, 0xFF);
+            Thread.Sleep(200);
+        }
+
+        log?.Invoke(converged
+            ? $"SL V3 group {device.MacText[..4]} re-paired and persisted"
+            : $"SL V3 group {device.MacText[..4]} did not confirm the pairing within 4 s (will retry later)");
+        return converged;
+    }
+
+    /// <summary>First rx endpoint (1-14) not used by a group bound to this dongle.</summary>
+    private byte NextUnusedRxType()
+    {
+        var used = Devices.Where(d => d.IsBoundTo(MasterMac)).Select(d => d.RxType).ToHashSet();
+        for (byte rx = 1; rx < 15; rx++)
+        {
+            if (!used.Contains(rx))
+            {
+                return rx;
+            }
+        }
+
+        return 1;
+    }
+
     /// <summary>1 Hz heartbeat; without it fan firmware drifts into autonomous fallback with RPM spikes.</summary>
     public void SendMasterClock() =>
         SendRfChunks(Slv3Protocol.BuildMasterClockRfData(MasterMac), MasterChannel, 0xFF);

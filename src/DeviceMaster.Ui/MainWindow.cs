@@ -87,12 +87,12 @@ public sealed class MainWindow : Window
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
-    // hardware card — compact pills, two per row; rolled up behind a summary by default
-    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2, Visibility = Visibility.Collapsed };
+    // hardware card — compact pills, two per row; expanded by default (its column has room)
+    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2 };
     private readonly TextBlock _hwSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
     private TextBlock _hwExpandLink = null!;
     private TextBlock _hwForgetLink = null!;
-    private bool _hwExpanded;
+    private bool _hwExpanded = true;
     private List<string> _lastHardwareKeys = [];
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
@@ -109,6 +109,7 @@ public sealed class MainWindow : Window
         Height = 860;
         MinWidth = 1280;
         MinHeight = 720;
+        WindowState = WindowState.Maximized; // full screen by default (owner preference)
         Background = Theme.Bg;
         try
         {
@@ -254,14 +255,14 @@ public sealed class MainWindow : Window
 
         var fanColumn = new StackPanel { Margin = new Thickness(0, 0, 7, 0) };
         fanColumn.Children.Add(BuildFanCard());
+        var pumpCard = BuildPumpCard();
+        pumpCard.Margin = new Thickness(0, 14, 0, 0);
+        fanColumn.Children.Add(pumpCard);
         Grid.SetColumn(fanColumn, 0);
         grid.Children.Add(fanColumn);
 
         var middleColumn = new StackPanel { Margin = new Thickness(7, 0, 7, 0) };
-        middleColumn.Children.Add(BuildPumpCard());
-        var rgbCard = BuildRgbCard();
-        rgbCard.Margin = new Thickness(0, 14, 0, 0);
-        middleColumn.Children.Add(rgbCard);
+        middleColumn.Children.Add(BuildRgbCard());
         var lcdCard = BuildLcdCard();
         lcdCard.Margin = new Thickness(0, 14, 0, 0);
         middleColumn.Children.Add(lcdCard);
@@ -591,7 +592,7 @@ public sealed class MainWindow : Window
         head.Children.Add(_rescanButton);
 
         var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        _hwExpandLink = LinkText("▸  details", () =>
+        _hwExpandLink = LinkText("▾  hide", () =>
         {
             _hwExpanded = !_hwExpanded;
             _hardwareRows.Visibility = _hwExpanded ? Visibility.Visible : Visibility.Collapsed;
@@ -763,7 +764,7 @@ public sealed class MainWindow : Window
     private void ShowFromTray()
     {
         Show();
-        WindowState = WindowState.Normal;
+        WindowState = WindowState.Maximized;
         Activate();
     }
 

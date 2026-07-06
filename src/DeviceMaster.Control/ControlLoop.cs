@@ -755,7 +755,10 @@ public sealed class ControlLoop : IDisposable
                 }
                 else
                 {
-                    _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+                    // 20 s steady-state refresh: one group has demonstrably weak RF reception
+                    // and drops its stored effect — bound-time-to-heal beats airtime here
+                    // (still nowhere near the v17 continuous-resend flood)
+                    _slv3RgbRefreshDue = Environment.TickCount64 + 20_000;
                 }
             }
         }
@@ -871,11 +874,12 @@ public sealed class ControlLoop : IDisposable
         {
             _log?.Invoke($"{applied} fan LCD(s) set to {mode}");
 
-            // the LCD node lives inside the fan — LCD commands can reset the fan's stored
-            // RGB effect (observed live: a group went rainbow right after LCD writes).
-            // Re-push colors shortly after any fan-LCD burst.
-            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 2_000);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
+            // the LCD node lives inside the fan — LCD commands reset the fan's stored RGB
+            // effect AND leave its radio deaf for several seconds (observed live twice on the
+            // weakest group). Re-push colors starting 3 s after the burst, with extra
+            // confirmations spanning the deaf window.
+            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 3);
         }
     }
 
@@ -1113,6 +1117,9 @@ public sealed class ControlLoop : IDisposable
 
     private readonly Dictionary<string, bool> _slv3TelemetryFresh = [];
     private readonly Dictionary<string, bool> _slv3BoundState = [];
+    private readonly Dictionary<string, int> _slv3UnpairedPolls = [];
+    private readonly Dictionary<string, long> _slv3RebindNotBefore = [];
+    private readonly HashSet<string> _slv3EverBound = [];
 
     private void ApplySlv3(int duty, List<DeviceReading> readings, List<string> warnings)
     {
@@ -1150,8 +1157,37 @@ public sealed class ControlLoop : IDisposable
                     if (!bound)
                     {
                         warnings.Add($"SL V3 group {device.MacText[..4]} is not paired to this dongle — fans on firmware defaults");
+
+                        // auto-repair: after 5 consecutive unpaired polls (filters telemetry
+                        // glitches), re-pair — but never steal a group that telemetry says
+                        // belongs to a DIFFERENT master unless we saw it bound to us before
+                        var strikes = _slv3UnpairedPolls.GetValueOrDefault(device.MacText) + 1;
+                        _slv3UnpairedPolls[device.MacText] = strikes;
+                        var masterless = device.MasterMac.All(b => b == 0);
+                        var oursBefore = _slv3EverBound.Contains(device.MacText);
+                        if (strikes >= 5 && (masterless || oursBefore)
+                            && Environment.TickCount64 >= _slv3RebindNotBefore.GetValueOrDefault(device.MacText))
+                        {
+                            _slv3RebindNotBefore[device.MacText] = Environment.TickCount64 + 120_000;
+                            try
+                            {
+                                if (_slv3.BindDevice(device, _log))
+                                {
+                                    _appliedSlv3Rgb.Remove(device.MacText); // colors re-send next tick
+                                    _slv3UnpairedPolls.Remove(device.MacText);
+                                }
+                            }
+                            catch (Exception bex)
+                            {
+                                _log?.Invoke($"SL V3 group {device.MacText[..4]} re-pair attempt failed: {bex.Message}");
+                            }
+                        }
+
                         continue;
                     }
+
+                    _slv3UnpairedPolls.Remove(device.MacText);
+                    _slv3EverBound.Add(device.MacText);
 
                     var fresh = _slv3.LastSeenAgeMs(device) <= Slv3StaleAfterMs;
                     if (_slv3TelemetryFresh.TryGetValue(device.MacText, out var was) && was != fresh)
