@@ -239,16 +239,24 @@ public sealed class LinkHub : IDisposable
 
         lock (_ioLock)
         {
+            // The reference (OpenLinkHub) ignores the responses to these two entirely — on
+            // fw 3.10 the hub answers 0x03 (incorrect mode) yet color writes still work.
             try
             {
                 SendCommand(LinkHubProtocol.Commands.CloseEndpoint, LinkHubProtocol.Endpoints.SetColor);
             }
             catch (LinkHubException)
             {
-                // color endpoint wasn't open yet — fine
             }
 
-            SendCommand(LinkHubProtocol.Commands.OpenColorEndpoint, LinkHubProtocol.Endpoints.SetColor);
+            try
+            {
+                SendCommand(LinkHubProtocol.Commands.OpenColorEndpoint, LinkHubProtocol.Endpoints.SetColor);
+            }
+            catch (LinkHubException ex)
+            {
+                _trace?.Invoke($"color endpoint open answered: {ex.Message} (continuing — reference ignores this)");
+            }
         }
 
         _colorReady = true;

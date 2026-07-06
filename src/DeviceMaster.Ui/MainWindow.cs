@@ -31,10 +31,15 @@ public sealed class MainWindow : Window
 
     // header / updater
     private Border _checkButton = null!;
+    private TextBlock _checkLabel = null!;
+    private Border _installButton = null!;
+    private TextBlock _installLabel = null!;
     private StackPanel _updateNotice = null!;
     private TextBlock _updateNoticeText = null!;
     private UpdateInfo? _pendingUpdate;
-    private readonly TextBlock _status = new() { FontSize = 12, Foreground = Theme.Faint, Margin = new Thickness(4, 12, 4, 0) };
+    private bool _checkBusy;
+    private bool _downloading;
+    private int _downloadDots;
 
     // fan control card
     private DmDropdown _modeDrop = null!;
@@ -52,8 +57,8 @@ public sealed class MainWindow : Window
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
-    // hardware card
-    private readonly StackPanel _hardwareRows = new();
+    // hardware card — compact pills, two per row
+    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2 };
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
 
@@ -65,10 +70,10 @@ public sealed class MainWindow : Window
     public MainWindow()
     {
         Title = $"DeviceMaster v{AppVersion}";
-        Width = 1000;
-        Height = 760;
-        MinWidth = 940;
-        MinHeight = 620;
+        Width = 1480;
+        Height = 860;
+        MinWidth = 1280;
+        MinHeight = 720;
         Background = Theme.Bg;
         try
         {
@@ -85,7 +90,14 @@ public sealed class MainWindow : Window
         CreateTrayIcon();
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        timer.Tick += (_, _) => UpdateControlStatus();
+        timer.Tick += (_, _) =>
+        {
+            UpdateControlStatus();
+            if (_downloading)
+            {
+                _installLabel.Text = "Downloading" + new string('.', 1 + _downloadDots++ % 3);
+            }
+        };
         timer.Start();
 
         // Not tied to Loaded — with --minimized the window is never shown, but fan
@@ -154,7 +166,8 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(versionBox, Dock.Left);
         header.Children.Add(versionBox);
 
-        _checkButton = Theme.Btn("↻  Check for updates", primary: false, () => _ = CheckForUpdatesAsync(auto: false));
+        _checkButton = Theme.Btn("↻  Check for Updates", primary: false, () => _ = CheckForUpdatesAsync(auto: false));
+        _checkLabel = (TextBlock)_checkButton.Child;
         DockPanel.SetDock(_checkButton, Dock.Right);
         header.Children.Add(_checkButton);
 
@@ -162,41 +175,39 @@ public sealed class MainWindow : Window
         _updateNotice.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(5), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
         _updateNoticeText = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
         _updateNotice.Children.Add(_updateNoticeText);
-        var install = Theme.Btn("↓  Download & install", primary: true, () => _ = StartUpdateAsync());
-        install.Margin = new Thickness(14, 0, 0, 0);
-        _updateNotice.Children.Add(install);
-        var later = Theme.Btn("Later", primary: false, DismissUpdateNotice);
-        later.Margin = new Thickness(8, 0, 0, 0);
-        _updateNotice.Children.Add(later);
+        _installButton = Theme.Btn("↓  Download & Install", primary: true, () => _ = StartUpdateAsync());
+        _installLabel = (TextBlock)_installButton.Child;
+        _installButton.Margin = new Thickness(14, 0, 0, 0);
+        _updateNotice.Children.Add(_installButton);
         DockPanel.SetDock(_updateNotice, Dock.Right);
         header.Children.Add(_updateNotice);
 
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
 
-        DockPanel.SetDock(_status, Dock.Bottom);
-        root.Children.Add(_status);
-
-        // ---- two-column card grid ----
+        // ---- three-column card grid (everything on one screen) ----
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.05, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
 
-        var leftColumn = new StackPanel { Margin = new Thickness(0, 0, 9, 0) };
-        leftColumn.Children.Add(BuildFanCard());
-        var pumpCard = BuildPumpCard();
-        pumpCard.Margin = new Thickness(0, 16, 0, 0);
-        leftColumn.Children.Add(pumpCard);
+        var fanColumn = new StackPanel { Margin = new Thickness(0, 0, 7, 0) };
+        fanColumn.Children.Add(BuildFanCard());
+        Grid.SetColumn(fanColumn, 0);
+        grid.Children.Add(fanColumn);
+
+        var middleColumn = new StackPanel { Margin = new Thickness(7, 0, 7, 0) };
+        middleColumn.Children.Add(BuildPumpCard());
         var rgbCard = BuildRgbCard();
-        rgbCard.Margin = new Thickness(0, 16, 0, 0);
-        leftColumn.Children.Add(rgbCard);
-        Grid.SetColumn(leftColumn, 0);
-        grid.Children.Add(leftColumn);
+        rgbCard.Margin = new Thickness(0, 14, 0, 0);
+        middleColumn.Children.Add(rgbCard);
+        Grid.SetColumn(middleColumn, 1);
+        grid.Children.Add(middleColumn);
 
-        var rightColumn = new StackPanel { Margin = new Thickness(9, 0, 0, 0) };
-        rightColumn.Children.Add(BuildHardwareCard());
-        Grid.SetColumn(rightColumn, 1);
-        grid.Children.Add(rightColumn);
+        var hardwareColumn = new StackPanel { Margin = new Thickness(7, 0, 0, 0) };
+        hardwareColumn.Children.Add(BuildHardwareCard());
+        Grid.SetColumn(hardwareColumn, 2);
+        grid.Children.Add(hardwareColumn);
 
         root.Children.Add(new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         return root;
@@ -224,7 +235,7 @@ public sealed class MainWindow : Window
 
     private Border BuildFanCard()
     {
-        var card = Theme.CardShell("✻", "Fan control", "curves & manual duty · both ecosystems", out var body, out var head);
+        var card = Theme.CardShell("✻", "Fan Control", "curves & manual duty · both ecosystems", out var body, out var head);
         var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
         badge.VerticalAlignment = VerticalAlignment.Top;
         DockPanel.SetDock(badge, Dock.Right);
@@ -256,7 +267,7 @@ public sealed class MainWindow : Window
 
     private Border BuildPumpCard()
     {
-        var card = Theme.CardShell("≋", "Pump", "independent duty · never below 50%", out var body, out _);
+        var card = Theme.CardShell("≋", "Pump Control", "independent duty · never below 50%", out var body, out _);
 
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
         _pumpSlider = new DmSlider(50, 100, Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100), 200);
@@ -286,7 +297,7 @@ public sealed class MainWindow : Window
 
     private Border BuildRgbCard()
     {
-        var card = Theme.CardShell("◈", "Lighting", "static color · both ecosystems", out var body, out var head);
+        var card = Theme.CardShell("◈", "Lighting Control", "static color · both ecosystems", out var body, out var head);
 
         var toggle = Theme.Toggle(_controlSettings.RgbEnabled, on =>
         {
@@ -367,6 +378,54 @@ public sealed class MainWindow : Window
         panel.Children.Add(Theme.SmallLabel(label));
         panel.Children.Add(element);
         return panel;
+    }
+
+    /// <summary>Compact two-per-row chip for the hardware inventory.</summary>
+    private static Border HardwarePill(string name, string? id, string tag)
+    {
+        var stack = new StackPanel();
+        var top = new DockPanel { LastChildFill = false };
+        var title = new TextBlock
+        {
+            Text = name,
+            Foreground = Theme.Text,
+            FontSize = 11.5,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 210,
+        };
+        DockPanel.SetDock(title, Dock.Left);
+        top.Children.Add(title);
+        var badge = new TextBlock
+        {
+            Text = tag,
+            Foreground = Theme.Dim,
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        DockPanel.SetDock(badge, Dock.Right);
+        top.Children.Add(badge);
+        stack.Children.Add(top);
+        stack.Children.Add(new TextBlock
+        {
+            Text = id ?? "?",
+            Foreground = Theme.Faint,
+            FontFamily = Theme.Mono,
+            FontSize = 10,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 2, 0, 0),
+        });
+
+        return new Border
+        {
+            Margin = new Thickness(0, 0, 6, 6),
+            Padding = new Thickness(10, 7, 10, 7),
+            CornerRadius = new CornerRadius(9),
+            Background = Theme.Inset,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            Child = stack,
+        };
     }
 
     private static Border DeviceRow(string name, string? id, string value, Brush valueBrush)
@@ -539,27 +598,28 @@ public sealed class MainWindow : Window
                 .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
                 .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
             {
-                _hardwareRows.Children.Add(DeviceRow("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", Theme.Dim));
+                _hardwareRows.Children.Add(HardwarePill("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID"));
             }
 
             foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
             {
-                _hardwareRows.Children.Add(DeviceRow("Corsair pump/res LCD", lcd.SerialNumber, "HID", Theme.Dim));
+                _hardwareRows.Children.Add(HardwarePill("Corsair pump/res LCD", lcd.SerialNumber, "HID"));
             }
 
             foreach (var (name, id, tag) in chainRows)
             {
-                _hardwareRows.Children.Add(DeviceRow(name, Shorten(id), tag, tag == "pump" ? Theme.Accent2 : Theme.Dim));
+                _hardwareRows.Children.Add(HardwarePill(name, Shorten(id), tag));
             }
 
             if (chainPending)
             {
                 _hardwareRows.Children.Add(new TextBlock
                 {
-                    Text = "Link chain devices appear here once fan control has started…",
+                    Text = "Link chain devices appear once fan control has started…",
                     Foreground = Theme.Faint,
-                    FontSize = 12,
-                    Margin = new Thickness(2, 0, 0, 7),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(2, 4, 0, 7),
                 });
             }
 
@@ -569,7 +629,7 @@ public sealed class MainWindow : Window
                 .OrderBy(n => n.UsbId!.Value.Pid))
             {
                 var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX · control" : "RX · telemetry";
-                _hardwareRows.Children.Add(DeviceRow($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB", Theme.Dim));
+                _hardwareRows.Children.Add(HardwarePill($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB"));
             }
 
             var fanNodes = scan.UsbTree
@@ -580,12 +640,12 @@ public sealed class MainWindow : Window
                 .ToList();
             for (var i = 0; i < fanNodes.Count; i++)
             {
-                _hardwareRows.Children.Add(DeviceRow($"Lian Li SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", Theme.Dim));
+                _hardwareRows.Children.Add(HardwarePill($"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB"));
             }
 
             foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
             {
-                _hardwareRows.Children.Add(DeviceRow("Turzx/Turing screen", screen.SerialHint, screen.ComPort, Theme.Accent2));
+                _hardwareRows.Children.Add(HardwarePill("Turzx/Turing screen", screen.SerialHint, screen.ComPort));
             }
 
             if (_hardwareRows.Children.Count == 0)
@@ -797,69 +857,76 @@ public sealed class MainWindow : Window
 
     private async Task CheckForUpdatesAsync(bool auto)
     {
-        if (!auto)
+        if (_checkBusy)
         {
-            SetStatus("Checking for updates…", Theme.Dim);
-        }
-
-        var info = await Updater.CheckLatestAsync();
-        if (info is null)
-        {
-            if (!auto)
-            {
-                SetStatus($"Update check failed: {Updater.LastError}", Theme.Warn);
-            }
-
             return;
         }
 
+        if (!auto)
+        {
+            _checkBusy = true;
+            _checkButton.IsHitTestVisible = false;
+            _checkButton.Opacity = 0.7;
+            _checkLabel.Text = "↻  Checking…";
+        }
+
+        var info = await Updater.CheckLatestAsync();
+
         var current = WholeVersion.Parse(AppVersion);
-        if (WholeVersion.Compare(info.Version, current) > 0 && info.SetupUrl is not null)
+        if (info is not null && WholeVersion.Compare(info.Version, current) > 0 && info.SetupUrl is not null)
         {
             _pendingUpdate = info;
             _updateNoticeText.Text = $"Version {info.Tag.TrimStart('v', 'V')} is available";
             _checkButton.Visibility = Visibility.Collapsed;
             _updateNotice.Visibility = Visibility.Visible;
-            SetStatus($"Update available: {info.Tag} (you have v{AppVersion})", Theme.Good);
+            RestoreCheckButton();
+            return;
         }
-        else
+
+        if (!auto)
         {
-            SetStatus($"Up to date — v{AppVersion} is the latest version.", Theme.Faint);
+            // brief feedback in the button itself, then revert
+            _checkLabel.Text = info is null ? $"⚠  {Updater.LastError}" : "✓  Up to date";
+            await Task.Delay(3000);
+            RestoreCheckButton();
         }
+    }
+
+    private void RestoreCheckButton()
+    {
+        _checkBusy = false;
+        _checkButton.IsHitTestVisible = true;
+        _checkButton.Opacity = 1.0;
+        _checkLabel.Text = "↻  Check for Updates";
     }
 
     private async Task StartUpdateAsync()
     {
-        if (_pendingUpdate?.SetupUrl is not { } setupUrl)
+        if (_downloading || _pendingUpdate?.SetupUrl is not { } setupUrl)
         {
             return;
         }
 
-        SetStatus("Downloading update…", Theme.Dim);
+        // show progress immediately — the download takes a while before the installer opens
+        _downloading = true;
+        _installButton.IsHitTestVisible = false;
+        _installButton.Opacity = 0.7;
+        _installLabel.Text = "Downloading.";
+
         var installerPath = await Updater.DownloadInstallerAsync(setupUrl);
         if (installerPath is null)
         {
-            SetStatus("Download failed — opening the releases page instead.", Theme.Warn);
+            _downloading = false;
+            _installButton.IsHitTestVisible = true;
+            _installButton.Opacity = 1.0;
+            _installLabel.Text = "↓  Download & Install";
             Process.Start(new ProcessStartInfo(_pendingUpdate.PageUrl) { UseShellExecute = true });
             return;
         }
 
-        SetStatus("Starting installer…", Theme.Dim);
+        _installLabel.Text = "Starting installer…";
         PrepareExit(); // release devices and the tray icon before the installer replaces us
         Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
         Application.Current.Shutdown();
-    }
-
-    private void DismissUpdateNotice()
-    {
-        _updateNotice.Visibility = Visibility.Collapsed;
-        _checkButton.Visibility = Visibility.Visible;
-        SetStatus(_pendingUpdate is { } p ? $"Update {p.Tag} postponed — use Check for updates any time." : "", Theme.Dim);
-    }
-
-    private void SetStatus(string text, Brush brush)
-    {
-        _status.Text = text;
-        _status.Foreground = brush;
     }
 }
