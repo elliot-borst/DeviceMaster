@@ -18,8 +18,18 @@ AMD Ryzen 7 9800X3D, NVIDIA RTX 5090). Re-run any time with:
   possibly an XD5 Elite LCD unit, or shared firmware identity). Report sizes in=512 **out=1024**
   feature=32 match OpenLinkHub's LCD image framing (1024-byte chunks).
 - It is a **direct USB device**, not reached through the Link hub — Stage 4 talks to it directly.
-- Which fans/pump sit on which of the two hubs requires opening the hubs and querying
-  sub-devices (Stage 1 — the Link protocol enumerates chain devices with names and IDs).
+
+### Link chain map (live enumeration via our protocol port, 2026-07-06, both hubs fw 3.10.636)
+
+| Hub | Channel | Device | Notes |
+|---|---|---|---|
+| `16EEFF38…` | 1, 2, 3, 14 | RX MAX RGB Fan ×4 | ch1 and ch14 never report RPM (investigate — possibly stacked/secondary fans in a magnetized group); ch2/ch3 report ~1200 RPM |
+| `C9FB9CB3…` | 13 | XD5 Elite LCD display module | chain model `0x0E` (identified via OpenLinkHub lsh.go type 14); excluded from speed writes |
+| `C9FB9CB3…` | 14 | Pump (model `0x19`, "XD6" in FanControl's catalog) | **coolant temperature sensor** (23.6 °C at scan) + pump RPM (~2180 hw mode); LCD USB device says "XD5 ELITE LCD Pump", owner says XD7 — physical identity still to reconcile, treatment identical (pump) |
+
+- Hardware-mode endpoint reads are rejected (error `0x03`) — chain enumeration and telemetry
+  require software mode. Verified live: fixed-duty writes work (fans 65% → RPM ramp observed),
+  pump channel force-held at 100%, `EnterHardwareMode` cleanly returns the hub to its own curves.
 
 ## Lian Li — UNI FAN SL V3 *wireless* ecosystem (not a classic Uni Hub!)
 

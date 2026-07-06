@@ -10,8 +10,11 @@ namespace DeviceMaster.Devices.CorsairLink;
 /// </summary>
 public static class CorsairLinkFamily
 {
+    /// <summary>The hub's command interface is the one with output reports (MI_00); MI_01 is input-only.</summary>
     public static IEnumerable<DiscoveredDevice> FindHubs(IEnumerable<DiscoveredDevice> hidDevices) =>
-        hidDevices.Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.Transport == DeviceTransport.Hid);
+        hidDevices.Where(d => d.Kind == DeviceKind.CorsairLinkHub
+            && d.Transport == DeviceTransport.Hid
+            && d.MaxOutputReportLength > 0);
 
     public static IEnumerable<DiscoveredDevice> FindLcdModules(IEnumerable<DiscoveredDevice> hidDevices) =>
         hidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd && d.Transport == DeviceTransport.Hid);

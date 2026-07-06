@@ -1,0 +1,325 @@
+using DeviceMaster.Core.Devices;
+using DeviceMaster.Devices.CorsairLink.Protocol;
+using HidSharp;
+
+namespace DeviceMaster.Devices.CorsairLink;
+
+public sealed class LinkHubException : Exception
+{
+    public LinkHubException(string message, byte? errorCode = null, Exception? inner = null)
+        : base(message, inner)
+    {
+        ErrorCode = errorCode;
+    }
+
+    public byte? ErrorCode { get; }
+
+    public bool IsIncorrectMode => ErrorCode == LinkHubProtocol.ResponseStatus.IncorrectModeError;
+}
+
+/// <summary>
+/// An open session to one iCUE LINK System Hub. Transport and sequencing ported from
+/// EvanMulawski/FanControl.CorsairLink (MIT).
+/// Safety: construction refuses devices that aren't a positively identified Link hub;
+/// speed writes go through <see cref="LinkDutyPlanner"/> (pump always 100%, unknowns abort);
+/// Dispose restores hardware mode if this session put the hub into software mode.
+/// </summary>
+public sealed class LinkHub : IDisposable
+{
+    private const int IoTimeoutMs = 500;
+    private const int WaitForDataTypeTimeoutMs = 500;
+
+    private readonly HidDevice _device;
+    private readonly Action<string>? _trace;
+    private readonly object _ioLock = new();
+    private HidStream? _stream;
+    private bool _inSoftwareMode;
+    private bool _supportsAdditionalSubDevices;
+    private List<LinkChannel> _channels = [];
+
+    private LinkHub(HidDevice device, Action<string>? trace)
+    {
+        var usbId = new UsbId((ushort)device.VendorID, (ushort)device.ProductID);
+        if (KnownDeviceRegistry.Identify(usbId)?.Kind != DeviceKind.CorsairLinkHub
+            || !KnownDeviceRegistry.IsWriteAllowed(usbId))
+        {
+            throw new InvalidOperationException($"Device {usbId} is not a recognized iCUE LINK hub; refusing to open.");
+        }
+
+        _device = device;
+        _trace = trace;
+        SerialNumber = TryGet(device.GetSerialNumber) ?? "?";
+        ProductName = TryGet(device.GetProductName) ?? "iCUE LINK System Hub";
+        DevicePath = device.DevicePath;
+
+        static string? TryGet(Func<string> get)
+        {
+            try { return get(); } catch { return null; }
+        }
+    }
+
+    public string SerialNumber { get; }
+    public string ProductName { get; }
+    public string DevicePath { get; }
+    public string FirmwareVersion { get; private set; } = "?";
+    public bool InSoftwareMode => _inSoftwareMode;
+    public IReadOnlyList<LinkChannel> Channels => _channels;
+    public bool HasUnknownChannels => _channels.Any(c => !c.IsKnown);
+
+    /// <summary>All Link hub command interfaces present (the hub's MI_00 with output reports).</summary>
+    public static IReadOnlyList<HidDevice> FindHubDevices() =>
+        DeviceList.Local.GetHidDevices(KnownDeviceRegistry.CorsairVid, 0x0C3F)
+            .Where(d =>
+            {
+                try { return d.GetMaxOutputReportLength() > 0; }
+                catch { return false; }
+            })
+            .ToList();
+
+    public static LinkHub Open(HidDevice device, Action<string>? trace = null)
+    {
+        var hub = new LinkHub(device, trace);
+        try
+        {
+            if (!device.TryOpen(out var stream))
+            {
+                throw new LinkHubException($"Could not open HID stream for hub {hub.SerialNumber} — is another program holding it?");
+            }
+
+            stream.ReadTimeout = IoTimeoutMs;
+            stream.WriteTimeout = IoTimeoutMs;
+            hub._stream = stream;
+
+            hub.FirmwareVersion = LinkHubParser.GetFirmwareVersion(hub.SendCommand(LinkHubProtocol.Commands.ReadFirmwareVersion));
+            hub._supportsAdditionalSubDevices = SupportsAdditionalSubDevices(hub.FirmwareVersion);
+            return hub;
+        }
+        catch
+        {
+            hub.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Firmware 2.5+ returns the sub-device list across two endpoint reads (up to 24 devices).</summary>
+    public static bool SupportsAdditionalSubDevices(string firmwareVersion)
+    {
+        var parts = firmwareVersion.Split('.');
+        return parts.Length >= 2
+            && int.TryParse(parts[0], out var major)
+            && int.TryParse(parts[1], out var minor)
+            && (major > 2 || (major == 2 && minor >= 5));
+    }
+
+    /// <summary>
+    /// Enumerates the Link chain. If the hub rejects the read in hardware mode and
+    /// <paramref name="allowEnterSoftwareMode"/> is set, switches to software mode and retries.
+    /// Returns true if the mode switch happened.
+    /// </summary>
+    public bool EnumerateChannels(bool allowEnterSoftwareMode)
+    {
+        try
+        {
+            LoadSubDevices();
+            return false;
+        }
+        catch (LinkHubException ex) when (ex.IsIncorrectMode && allowEnterSoftwareMode)
+        {
+            EnterSoftwareMode();
+            LoadSubDevices();
+            return true;
+        }
+    }
+
+    public void EnterSoftwareMode()
+    {
+        SendCommand(LinkHubProtocol.Commands.EnterSoftwareMode);
+        _inSoftwareMode = true;
+    }
+
+    public void EnterHardwareMode()
+    {
+        SendCommand(LinkHubProtocol.Commands.EnterHardwareMode);
+        _inSoftwareMode = false;
+    }
+
+    public IReadOnlyList<LinkSpeedReading> ReadSpeeds() =>
+        LinkHubParser.ParseSpeeds(ReadEndpoint(LinkHubProtocol.Endpoints.GetSpeeds, LinkHubProtocol.DataTypes.Speeds));
+
+    public IReadOnlyList<LinkTemperatureReading> ReadTemperatures() =>
+        LinkHubParser.ParseTemperatures(ReadEndpoint(LinkHubProtocol.Endpoints.GetTemperatures, LinkHubProtocol.DataTypes.Temperatures));
+
+    /// <summary>
+    /// Writes fixed duties for every populated channel (the hub expects the full map each time).
+    /// Pump channels are forced to 100% and unknown devices abort — see <see cref="LinkDutyPlanner"/>.
+    /// </summary>
+    public IReadOnlyDictionary<int, byte> WriteFixedDuties(IReadOnlyDictionary<int, int>? requestedDuties = null)
+    {
+        if (_channels.Count == 0)
+        {
+            throw new InvalidOperationException("Channels not enumerated — call EnumerateChannels first.");
+        }
+
+        var duties = LinkDutyPlanner.BuildDutyMap(_channels, requestedDuties);
+        var data = LinkHubPackets.CreateSoftwareSpeedFixedPercentData(duties);
+        WriteEndpoint(LinkHubProtocol.Endpoints.SoftwareSpeedFixedPercent, LinkHubProtocol.DataTypes.SoftwareSpeedFixedPercent, data);
+        return duties;
+    }
+
+    /// <summary>Fans to the reference default (50%), pumps to 100% — a defined, safe state.</summary>
+    public IReadOnlyDictionary<int, byte> WriteSafeDefaults() => WriteFixedDuties();
+
+    public void Dispose()
+    {
+        if (_stream is not null && _inSoftwareMode)
+        {
+            try
+            {
+                EnterHardwareMode();
+            }
+            catch
+            {
+                // Best effort: the hub also recovers to hardware defaults on its own power cycle.
+            }
+        }
+
+        _stream?.Dispose();
+        _stream = null;
+    }
+
+    private void LoadSubDevices()
+    {
+        byte[] first;
+        byte[]? continuation = null;
+
+        lock (_ioLock)
+        {
+            if (!_supportsAdditionalSubDevices)
+            {
+                first = ReadEndpoint(LinkHubProtocol.Endpoints.GetSubDevices, LinkHubProtocol.DataTypes.SubDevices);
+            }
+            else
+            {
+                SendCommand(LinkHubProtocol.Commands.CloseEndpoint, LinkHubProtocol.Endpoints.GetSubDevices);
+                SendCommand(LinkHubProtocol.Commands.OpenEndpoint, LinkHubProtocol.Endpoints.GetSubDevices);
+                first = SendCommand(LinkHubProtocol.Commands.Read, waitForDataType: LinkHubProtocol.DataTypes.SubDevices);
+                continuation = SendCommand(LinkHubProtocol.Commands.Read);
+                SendCommand(LinkHubProtocol.Commands.CloseEndpoint, LinkHubProtocol.Endpoints.GetSubDevices);
+            }
+        }
+
+        _channels = LinkHubParser.ParseSubDevices(first, continuation ?? default)
+            .Select(d => new LinkChannel(d.Channel, d.Id, d.Model, d.Variant, LinkDeviceCatalog.Find(d.Model, d.Variant)))
+            .ToList();
+    }
+
+    private byte[] ReadEndpoint(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType)
+    {
+        lock (_ioLock)
+        {
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+            SendCommand(LinkHubProtocol.Commands.OpenEndpoint, endpoint);
+            var response = SendCommand(LinkHubProtocol.Commands.Read, waitForDataType: dataType);
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+            return response;
+        }
+    }
+
+    private void WriteEndpoint(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType, ReadOnlySpan<byte> data)
+    {
+        var writeData = LinkHubPackets.CreateWriteData(dataType, data);
+
+        lock (_ioLock)
+        {
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+            SendCommand(LinkHubProtocol.Commands.OpenEndpoint, endpoint);
+            SendCommand(LinkHubProtocol.Commands.Write, writeData);
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+        }
+    }
+
+    private byte[] SendCommand(ReadOnlySpan<byte> command, ReadOnlySpan<byte> data = default, ReadOnlySpan<byte> waitForDataType = default)
+    {
+        var stream = _stream ?? throw new InvalidOperationException("Hub session is not open.");
+        var packet = LinkHubPackets.CreateCommandPacket(command, data);
+        var response = new byte[LinkHubProtocol.PacketSize];
+
+        lock (_ioLock)
+        {
+            DrainPendingReports(stream);
+
+            Trace("WRITE", packet);
+            stream.Write(packet, 0, packet.Length);
+            ReadPacket(stream, response);
+            Trace("READ ", response);
+
+            var errorCode = response[4];
+            if (errorCode != LinkHubProtocol.ResponseStatus.Ok)
+            {
+                throw new LinkHubException(
+                    $"Hub returned error 0x{errorCode:X2} for command {Convert.ToHexString(command)}"
+                    + (errorCode == LinkHubProtocol.ResponseStatus.IncorrectModeError ? " (incorrect device mode)" : ""),
+                    errorCode);
+            }
+
+            if (waitForDataType.Length == 2)
+            {
+                var deadline = Environment.TickCount64 + WaitForDataTypeTimeoutMs;
+                while (!response.AsSpan(5, 2).SequenceEqual(waitForDataType))
+                {
+                    if (Environment.TickCount64 > deadline)
+                    {
+                        throw new LinkHubException(
+                            $"Timed out waiting for data type {Convert.ToHexString(waitForDataType)} from the hub.");
+                    }
+
+                    ReadPacket(stream, response);
+                    Trace("READ ", response);
+                }
+            }
+
+            return response.AsSpan(1).ToArray();
+        }
+    }
+
+    /// <summary>A HID stream returns exactly one input report per Read call — one call is the whole packet.</summary>
+    private static void ReadPacket(HidStream stream, byte[] buffer)
+    {
+#pragma warning disable CA2022 // inexact read is the correct unit for HID report streams
+        _ = stream.Read(buffer, 0, buffer.Length);
+#pragma warning restore CA2022
+    }
+
+    /// <summary>Discards queued input reports so the next read matches the next write (reference behaviour).</summary>
+    private static void DrainPendingReports(HidStream stream)
+    {
+        var originalTimeout = stream.ReadTimeout;
+        stream.ReadTimeout = 1;
+        try
+        {
+            while (true)
+            {
+                _ = stream.Read();
+            }
+        }
+        catch (TimeoutException)
+        {
+            // queue is empty
+        }
+        finally
+        {
+            stream.ReadTimeout = originalTimeout;
+        }
+    }
+
+    private void Trace(string direction, byte[] buffer)
+    {
+        if (_trace is null)
+        {
+            return;
+        }
+
+        var significant = buffer.AsSpan(0, Math.Min(buffer.Length, 48));
+        _trace($"{direction} {SerialNumber[..Math.Min(8, SerialNumber.Length)]}: {Convert.ToHexString(significant)}...");
+    }
+}
