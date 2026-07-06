@@ -105,6 +105,34 @@ public static class LinkHubParser
         return readings;
     }
 
+    /// <summary>
+    /// Parses the GetLeds payload: [6]=channel count, then per channel (1-based, 4 bytes each
+    /// starting at [7]+i*4): [status u16le (2 = connected), led count u16le]. Returns
+    /// channel → LED count for connected channels (OpenLinkHub getLedDevices).
+    /// </summary>
+    public static IReadOnlyDictionary<int, int> ParseLedCounts(ReadOnlySpan<byte> packet)
+    {
+        var counts = new Dictionary<int, int>();
+        var channels = packet[6];
+        var data = packet.Slice(7);
+        for (var i = 1; i <= channels; i++)
+        {
+            if (i * 4 + 4 > data.Length)
+            {
+                break;
+            }
+
+            var connected = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(i * 4, 2)) == 2;
+            if (connected)
+            {
+                var leds = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(i * 4 + 2, 2));
+                counts[i] = Math.Min((int)leds, 50); // reference caps at 50 per device
+            }
+        }
+
+        return counts;
+    }
+
     /// <summary>Parses the GetTemperatures payload: [6]=sensor count, then per sensor [status, temp*10 int16le].</summary>
     public static IReadOnlyList<LinkTemperatureReading> ParseTemperatures(ReadOnlySpan<byte> packet)
     {

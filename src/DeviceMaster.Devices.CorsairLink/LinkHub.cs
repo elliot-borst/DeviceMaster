@@ -141,6 +141,7 @@ public sealed class LinkHub : IDisposable
     {
         SendCommand(LinkHubProtocol.Commands.EnterHardwareMode);
         _inSoftwareMode = false;
+        _colorReady = false;
     }
 
     public IReadOnlyList<LinkSpeedReading> ReadSpeeds() =>
@@ -171,6 +172,96 @@ public sealed class LinkHub : IDisposable
 
     /// <summary>Fans to the reference default (50%), pumps to 100% — a defined, safe state.</summary>
     public IReadOnlyDictionary<int, byte> WriteSafeDefaults() => WriteFixedDuties();
+
+    // ---- RGB (ported from OpenLinkHub) ----
+
+    private bool _colorReady;
+    private IReadOnlyDictionary<int, int> _ledCounts = new Dictionary<int, int>();
+
+    /// <summary>Total LEDs across all connected chain devices (0 before the first color write).</summary>
+    public int TotalLeds => _ledCounts.Values.Sum();
+
+    /// <summary>
+    /// Sets every LED on the chain to one static color. Lazily reads per-channel LED counts
+    /// (endpoint 0x20) and opens the color endpoint (0x22, handle 0) on first use.
+    /// The color buffer is interleaved R,G,B per LED in ascending channel order, wrapped in
+    /// the write envelope and chunked at 508 bytes (first chunk 0x06 0x00, rest 0x07 0x00).
+    /// </summary>
+    public void ApplyStaticColor(byte r, byte g, byte b)
+    {
+        EnsureColorReady();
+
+        var total = TotalLeds;
+        if (total == 0)
+        {
+            return;
+        }
+
+        var data = new byte[total * 3];
+        for (var i = 0; i < total; i++)
+        {
+            data[i * 3] = r;
+            data[i * 3 + 1] = g;
+            data[i * 3 + 2] = b;
+        }
+
+        var envelope = LinkHubPackets.CreateWriteData(LinkHubProtocol.DataTypes.SetColor, data);
+
+        lock (_ioLock)
+        {
+            var offset = 0;
+            var first = true;
+            while (offset < envelope.Length)
+            {
+                var length = Math.Min(LinkHubProtocol.MaxColorChunk, envelope.Length - offset);
+                SendCommand(
+                    first ? LinkHubProtocol.Commands.WriteColor : LinkHubProtocol.Commands.WriteColorNext,
+                    envelope.AsSpan(offset, length));
+                first = false;
+                offset += length;
+            }
+        }
+    }
+
+    private void EnsureColorReady()
+    {
+        if (_colorReady)
+        {
+            return;
+        }
+
+        var ledResponse = ReadEndpointOnce(LinkHubProtocol.Endpoints.GetLeds);
+        _ledCounts = LinkHubParser.ParseLedCounts(ledResponse);
+
+        lock (_ioLock)
+        {
+            try
+            {
+                SendCommand(LinkHubProtocol.Commands.CloseEndpoint, LinkHubProtocol.Endpoints.SetColor);
+            }
+            catch (LinkHubException)
+            {
+                // color endpoint wasn't open yet — fine
+            }
+
+            SendCommand(LinkHubProtocol.Commands.OpenColorEndpoint, LinkHubProtocol.Endpoints.SetColor);
+        }
+
+        _colorReady = true;
+    }
+
+    /// <summary>Close/open/read without waiting for a specific data type (single response read).</summary>
+    private byte[] ReadEndpointOnce(ReadOnlySpan<byte> endpoint)
+    {
+        lock (_ioLock)
+        {
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+            SendCommand(LinkHubProtocol.Commands.OpenEndpoint, endpoint);
+            var response = SendCommand(LinkHubProtocol.Commands.Read);
+            SendCommand(LinkHubProtocol.Commands.CloseEndpoint, endpoint);
+            return response;
+        }
+    }
 
     public void Dispose()
     {

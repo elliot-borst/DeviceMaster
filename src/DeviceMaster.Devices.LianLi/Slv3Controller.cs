@@ -281,6 +281,32 @@ public sealed class Slv3Controller : IDisposable
         return pwm[0];
     }
 
+    /// <summary>
+    /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
+    /// and loops the effect, so this is sent once per color change, not per frame.
+    /// </summary>
+    public void ApplyStaticColor(Slv3Device device, byte r, byte g, byte b, ReadOnlySpan<byte> effectIndex)
+    {
+        var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
+        var raw = new byte[ledCount * 3];
+        for (var i = 0; i < ledCount; i++)
+        {
+            raw[i * 3] = r;
+            raw[i * 3 + 1] = g;
+            raw[i * 3 + 2] = b;
+        }
+
+        var compressed = TinyUz.Compress(raw);
+        foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
+            device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: 1, intervalMs: 5000))
+        {
+            SendRfChunks(payload, device.Channel, device.RxType);
+            Thread.Sleep(2);
+        }
+
+        _trace?.Invoke($"RGB #{r:X2}{g:X2}{b:X2} -> {device.MacText} ({ledCount} LEDs, {compressed.Length}B compressed)");
+    }
+
     /// <summary>1 Hz heartbeat; without it fan firmware drifts into autonomous fallback with RPM spikes.</summary>
     public void SendMasterClock() =>
         SendRfChunks(Slv3Protocol.BuildMasterClockRfData(MasterMac), MasterChannel, 0xFF);

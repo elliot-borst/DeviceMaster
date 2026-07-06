@@ -156,6 +156,39 @@ public static class Theme
         Margin = new Thickness(0, 0, 8, 0),
     };
 
+    /// <summary>StarMaster-style toggle switch (gradient track when on).</summary>
+    public static Border Toggle(bool initial, Action<bool> changed)
+    {
+        var state = initial;
+        var knob = new Border
+        {
+            Width = 16,
+            Height = 16,
+            CornerRadius = new CornerRadius(8),
+            Background = Text,
+            Margin = new Thickness(3),
+            HorizontalAlignment = initial ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+        };
+        var track = new Border
+        {
+            Width = 40,
+            Height = 22,
+            CornerRadius = new CornerRadius(11),
+            Cursor = Cursors.Hand,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = initial ? AccentGrad() : Line2,
+            Child = knob,
+        };
+        track.MouseLeftButtonUp += (_, _) =>
+        {
+            state = !state;
+            track.Background = state ? (Brush)AccentGrad() : Line2;
+            knob.HorizontalAlignment = state ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+            changed(state);
+        };
+        return track;
+    }
+
     /// <summary>Slim dark scrollbar (the WPF default is light and clashes with the theme).</summary>
     public static Style DarkScrollBarStyle()
     {

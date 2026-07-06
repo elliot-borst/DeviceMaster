@@ -203,6 +203,11 @@ public sealed class ControlLoop : IDisposable
         ApplyCorsair(duty, pumpDuty, readings, warnings);
         ApplySlv3(duty, readings, warnings);
 
+        if (settings.RgbEnabled)
+        {
+            ApplyRgb(settings, warnings);
+        }
+
         var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
             ? sourceTemp
             : TryReadCoolant();
@@ -241,6 +246,7 @@ public sealed class ControlLoop : IDisposable
                     }
 
                     _hubs.Add(hub);
+                    _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
                     _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… ({hub.Channels.Count} devices)");
                 }
                 catch (Exception ex)
@@ -256,6 +262,7 @@ public sealed class ControlLoop : IDisposable
             {
                 _slv3 = Slv3Controller.Open();
                 _slv3.PollDevices();
+                _appliedSlv3Rgb.Clear(); // reapply color after a reconnect
                 _log?.Invoke($"control: opened SL V3 dongles (master {_slv3.MasterMacText})");
             }
             catch (Exception ex)
@@ -289,6 +296,70 @@ public sealed class ControlLoop : IDisposable
         _lhm?.Dispose();
         _lhm = null;
         _lastWrittenCorsairDuty = -1;
+    }
+
+    // ---- RGB (static color, both families) ----
+
+    private readonly Dictionary<string, string> _appliedHubRgb = [];
+    private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
+    private long _slv3RgbRefreshDue;
+
+    private void ApplyRgb(ControlSettings settings, List<string> warnings)
+    {
+        var key = $"{settings.RgbR},{settings.RgbG},{settings.RgbB}";
+        var (r, g, b) = ((byte)Math.Clamp(settings.RgbR, 0, 255),
+                        (byte)Math.Clamp(settings.RgbG, 0, 255),
+                        (byte)Math.Clamp(settings.RgbB, 0, 255));
+
+        foreach (var hub in _hubs.ToList())
+        {
+            if (_appliedHubRgb.GetValueOrDefault(hub.SerialNumber) == key)
+            {
+                continue;
+            }
+
+            try
+            {
+                hub.ApplyStaticColor(r, g, b);
+                _appliedHubRgb[hub.SerialNumber] = key;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"RGB write to hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
+            }
+        }
+
+        if (_slv3 is null)
+        {
+            return;
+        }
+
+        // wireless effects live in fan firmware; refresh periodically in case a group resets
+        var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
+        foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+        {
+            if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
+            {
+                continue;
+            }
+
+            try
+            {
+                var ticks = Environment.TickCount64;
+                Span<byte> effectIndex = [(byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks];
+                _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
+                _appliedSlv3Rgb[device.MacText] = key;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"RGB write to SL V3 {device.MacText[..4]} failed: {ex.Message}");
+            }
+        }
+
+        if (refreshDue)
+        {
+            _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+        }
     }
 
     private double? TryReadCoolant()

@@ -40,6 +40,10 @@ public static class Slv3Protocol
     public const byte RfSelect = 0x12;
     public const byte RfPwmCmd = 0x10;
     public const byte RfMasterClock = 0x14;
+    public const byte RfSetRgb = 0x20;
+
+    /// <summary>SL V3 fans carry 40 addressable LEDs each.</summary>
+    public const int LedsPerFan = 40;
 
     public const int UsbPacketSize = 64;
     public const int RfDataSize = 240;
@@ -150,6 +154,73 @@ public static class Slv3Protocol
         data[1] = RfMasterClock;
         masterMac.CopyTo(data.AsSpan(8));
         return data;
+    }
+
+    /// <summary>
+    /// Builds the RF payload sequence for an RGB effect (ported from lian-li-linux rgb.rs):
+    /// header packet [0]=0x12,[1]=0x20, MACs, [14-17]=effect index, [18]=packet index,
+    /// [19]=total packets+1, [20-23]=compressed length BE, [25-26]=frame count BE,
+    /// [27]=led count, [32-33]=interval ms BE — repeated for RF reliability — then data
+    /// packets carrying 220-byte chunks of the TinyUZ-compressed RGB stream at offset 20.
+    /// The firmware stores the blob and loops it (send once, not per frame).
+    /// </summary>
+    public static List<byte[]> BuildRgbRfPayloads(
+        ReadOnlySpan<byte> deviceMac, ReadOnlySpan<byte> masterMac, ReadOnlySpan<byte> effectIndex,
+        ReadOnlySpan<byte> compressed, byte ledCount, ushort totalFrames, ushort intervalMs,
+        int headerRepeats = 3)
+    {
+        if (deviceMac.Length != 6 || masterMac.Length != 6 || effectIndex.Length != 4)
+        {
+            throw new ArgumentException("deviceMac/masterMac must be 6 bytes and effectIndex 4 bytes.");
+        }
+
+        const int chunkLength = 220;
+        var totalPackets = (byte)Math.Ceiling(compressed.Length / (double)chunkLength);
+        var payloads = new List<byte[]>();
+
+        var offset = 0;
+        byte index = 0;
+        while (offset < compressed.Length || index == 0)
+        {
+            var rf = new byte[RfDataSize];
+            rf[0] = RfSelect;
+            rf[1] = RfSetRgb;
+            deviceMac.CopyTo(rf.AsSpan(2));
+            masterMac.CopyTo(rf.AsSpan(8));
+            effectIndex.CopyTo(rf.AsSpan(14));
+            rf[18] = index;
+            rf[19] = (byte)(totalPackets + 1);
+
+            if (index == 0)
+            {
+                var length = (uint)compressed.Length;
+                rf[20] = (byte)(length >> 24);
+                rf[21] = (byte)(length >> 16);
+                rf[22] = (byte)(length >> 8);
+                rf[23] = (byte)length;
+                rf[25] = (byte)(totalFrames >> 8);
+                rf[26] = (byte)totalFrames;
+                rf[27] = ledCount;
+                rf[32] = (byte)(intervalMs >> 8);
+                rf[33] = (byte)intervalMs;
+
+                for (var repeat = 0; repeat < Math.Max(headerRepeats, 1); repeat++)
+                {
+                    payloads.Add(rf);
+                }
+            }
+            else
+            {
+                var chunk = Math.Min(chunkLength, compressed.Length - offset);
+                compressed.Slice(offset, chunk).CopyTo(rf.AsSpan(20));
+                offset += chunkLength;
+                payloads.Add(rf);
+            }
+
+            index++;
+        }
+
+        return payloads;
     }
 
     /// <summary>

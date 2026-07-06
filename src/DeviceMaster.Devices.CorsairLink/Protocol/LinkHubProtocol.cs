@@ -13,6 +13,9 @@ public static class LinkHubProtocol
 
     public const byte HandleId = 0x01;
 
+    /// <summary>RGB writes go through a second endpoint handle (0), per OpenLinkHub.</summary>
+    public const int MaxColorChunk = 508;
+
     public static class Commands
     {
         public static ReadOnlySpan<byte> EnterSoftwareMode => new byte[] { 0x01, 0x03, 0x00, 0x02 };
@@ -22,6 +25,11 @@ public static class LinkHubProtocol
         public static ReadOnlySpan<byte> CloseEndpoint => new byte[] { 0x05, 0x01, HandleId };
         public static ReadOnlySpan<byte> Read => new byte[] { 0x08, HandleId };
         public static ReadOnlySpan<byte> Write => new byte[] { 0x06, HandleId };
+
+        // color path (ported from OpenLinkHub)
+        public static ReadOnlySpan<byte> OpenColorEndpoint => new byte[] { 0x0d, 0x00 };
+        public static ReadOnlySpan<byte> WriteColor => new byte[] { 0x06, 0x00 };
+        public static ReadOnlySpan<byte> WriteColorNext => new byte[] { 0x07, 0x00 };
     }
 
     public static class Endpoints
@@ -30,6 +38,8 @@ public static class LinkHubProtocol
         public static ReadOnlySpan<byte> GetTemperatures => new byte[] { 0x21 };
         public static ReadOnlySpan<byte> SoftwareSpeedFixedPercent => new byte[] { 0x18 };
         public static ReadOnlySpan<byte> GetSubDevices => new byte[] { 0x36 };
+        public static ReadOnlySpan<byte> GetLeds => new byte[] { 0x20 };
+        public static ReadOnlySpan<byte> SetColor => new byte[] { 0x22 };
     }
 
     public static class DataTypes
@@ -38,6 +48,7 @@ public static class LinkHubProtocol
         public static ReadOnlySpan<byte> Temperatures => new byte[] { 0x10, 0x00 };
         public static ReadOnlySpan<byte> SoftwareSpeedFixedPercent => new byte[] { 0x07, 0x00 };
         public static ReadOnlySpan<byte> SubDevices => new byte[] { 0x21, 0x00 };
+        public static ReadOnlySpan<byte> SetColor => new byte[] { 0x12, 0x00 };
     }
 
     public static class ResponseStatus

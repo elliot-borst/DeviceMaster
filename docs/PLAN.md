@@ -69,7 +69,11 @@ Revisit a service split only if pre-login control or multi-user support becomes 
     in software mode.
   - ⬜ Per-family/per-channel curves and an in-app curve editor (currently one global
     curve; Stage 6 territory).
-- **Stage 2 — RGB static colors** on both families (OpenLinkHub for Link; SL V3 research).
+- **Stage 2 — RGB static colors** on both families: ✅ shipped v12 (2026-07-06). Corsair:
+  LED counts from endpoint 0x20, interleaved RGB buffer to endpoint 0x22 (handle 0),
+  508-byte chunks. SL V3: TinyUZ-compressed one-frame effect over RF (0x12 0x20), stored
+  and looped by fan firmware, refreshed every 60 s. Lighting card in the app (toggle +
+  swatches). Effects/animations remain for Stage 6.
 - **Stage 3 — pump speed control** via the Link hub (pump-bearing chain devices), floor-clamped.
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
   then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.

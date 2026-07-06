@@ -32,6 +32,13 @@ public sealed class ControlSettings
     public CurveSource Source { get; set; } = CurveSource.Coolant;
     public List<CurvePoint> CurvePoints { get; set; } = FanCurve.DefaultCoolant.Points.ToList();
 
+    /// <summary>When enabled, DeviceMaster drives all lighting with one static color.</summary>
+    public bool RgbEnabled { get; set; }
+
+    public int RgbR { get; set; } = 86;
+    public int RgbG { get; set; } = 130;
+    public int RgbB { get; set; } = 255;
+
     [JsonIgnore]
     public FanCurve Curve => new(CurvePoints.Count > 0 ? CurvePoints : FanCurve.DefaultCoolant.Points);
 

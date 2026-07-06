@@ -187,6 +187,9 @@ public sealed class MainWindow : Window
         var pumpCard = BuildPumpCard();
         pumpCard.Margin = new Thickness(0, 16, 0, 0);
         leftColumn.Children.Add(pumpCard);
+        var rgbCard = BuildRgbCard();
+        rgbCard.Margin = new Thickness(0, 16, 0, 0);
+        leftColumn.Children.Add(rgbCard);
         Grid.SetColumn(leftColumn, 0);
         grid.Children.Add(leftColumn);
 
@@ -268,6 +271,82 @@ public sealed class MainWindow : Window
         body.Children.Add(_pumpCoolant);
         body.Children.Add(_pumpRows);
         return card;
+    }
+
+    // lighting card
+    private readonly WrapPanel _swatchPanel = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _rgbStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
+
+    private static readonly (byte R, byte G, byte B)[] SwatchColors =
+    [
+        (255, 255, 255), (255, 64, 64), (255, 140, 0), (255, 220, 0), (64, 220, 100),
+        (34, 211, 238), (86, 130, 255), (168, 85, 247), (255, 105, 180),
+    ];
+
+    private Border BuildRgbCard()
+    {
+        var card = Theme.CardShell("◈", "Lighting", "static color · both ecosystems", out var body, out var head);
+
+        var toggle = Theme.Toggle(_controlSettings.RgbEnabled, on =>
+        {
+            _controlSettings.RgbEnabled = on;
+            OnControlSettingChanged();
+        });
+        toggle.HorizontalAlignment = HorizontalAlignment.Right;
+        DockPanel.SetDock(toggle, Dock.Right);
+        head.Children.Add(toggle);
+
+        RebuildSwatches();
+        body.Children.Add(_swatchPanel);
+        body.Children.Add(_rgbStatus);
+        UpdateRgbStatusText();
+        return card;
+    }
+
+    private void RebuildSwatches()
+    {
+        _swatchPanel.Children.Clear();
+        foreach (var (r, g, b) in SwatchColors)
+        {
+            var selected = _controlSettings.RgbR == r && _controlSettings.RgbG == g && _controlSettings.RgbB == b;
+            var swatch = new Border
+            {
+                Width = 26,
+                Height = 26,
+                CornerRadius = new CornerRadius(7),
+                Background = new SolidColorBrush(Color.FromRgb(r, g, b)),
+                BorderBrush = selected ? Theme.Accent : Theme.Line2,
+                BorderThickness = new Thickness(selected ? 2 : 1),
+                Margin = new Thickness(0, 0, 8, 0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            var (cr, cg, cb) = (r, g, b);
+            swatch.MouseLeftButtonUp += (_, _) =>
+            {
+                _controlSettings.RgbR = cr;
+                _controlSettings.RgbG = cg;
+                _controlSettings.RgbB = cb;
+                RebuildSwatches();
+                OnControlSettingChanged();
+            };
+            _swatchPanel.Children.Add(swatch);
+        }
+    }
+
+    private void UpdateRgbStatusText()
+    {
+        if (!_controlSettings.RgbEnabled)
+        {
+            _rgbStatus.Text = "Lighting off — devices keep their own colors.";
+        }
+        else if (_controlSettings.Mode == ControlMode.Off)
+        {
+            _rgbStatus.Text = "Waiting for fan control — set Mode to Manual or Curve to apply lighting.";
+        }
+        else
+        {
+            _rgbStatus.Text = $"Static color #{_controlSettings.RgbR:X2}{_controlSettings.RgbG:X2}{_controlSettings.RgbB:X2} on all Corsair and Lian Li LEDs.";
+        }
     }
 
     private Border BuildHardwareCard()
@@ -564,6 +643,7 @@ public sealed class MainWindow : Window
             // non-fatal — settings just won't persist
         }
 
+        UpdateRgbStatusText();
         ApplyControlState();
     }
 
