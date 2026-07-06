@@ -329,7 +329,14 @@ public sealed class MainWindow : Window
             // no icon in odd hosting scenarios — the tray entry still works
         }
 
-        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
+        // single left-click opens the window; right-click keeps the context menu
+        _trayIcon.MouseClick += (_, e) =>
+        {
+            if (e.Button == WinForms.MouseButtons.Left)
+            {
+                ShowFromTray();
+            }
+        };
         var menu = new WinForms.ContextMenuStrip();
         var open = menu.Items.Add("Open DeviceMaster", null, (_, _) => ShowFromTray());
         open.Font = new System.Drawing.Font(open.Font, System.Drawing.FontStyle.Bold);
@@ -664,7 +671,9 @@ public sealed class MainWindow : Window
         {
             var tip = status.FailsafeActive
                 ? "DeviceMaster — FAILSAFE, fans 100%"
-                : $"DeviceMaster — {status.SourceName} {temp} → {status.TargetDutyPercent}%";
+                : status.Mode == ControlMode.Manual
+                    ? $"DeviceMaster — manual → {status.TargetDutyPercent}%"
+                    : $"DeviceMaster — {status.SourceName} {temp} → {status.TargetDutyPercent}%";
             _trayIcon.Text = tip.Length > 63 ? tip[..63] : tip;
         }
     }
