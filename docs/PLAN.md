@@ -1,0 +1,88 @@
+# DeviceMaster — architecture and staged plan
+
+A custom Windows application that fully replaces Corsair iCUE, Lian Li L-Connect, and the
+Turzx vendor software: raw HID/WinUSB/serial to the hardware, no vendor services at runtime.
+
+## Solution structure
+
+```
+DeviceMaster.sln
+├── src/
+│   ├── DeviceMaster.Core/               abstractions, device registry (VID/PID truth),
+│   │                                    discovery, safety rules, conflict checker
+│   ├── DeviceMaster.Sensors/            LibreHardwareMonitor wrapper (ISensorSource)
+│   ├── DeviceMaster.Devices.CorsairLink/  iCUE Link hubs: fans, pump, coolant temp, RGB; LCD
+│   ├── DeviceMaster.Devices.LianLi/     UNI FAN SL V3 wireless ecosystem (WinUSB)
+│   ├── DeviceMaster.Devices.Turzx/      Turing-family 8.8" screen (serial)
+│   ├── DeviceMaster.Rendering/          (added in Stage 4) shared display pipeline that
+│   │                                    renders metric layouts to both the Corsair LCD
+│   │                                    and the Turzx screen
+│   └── DeviceMaster.App/                composition root/host — console now, tray app later
+└── tests/
+    └── DeviceMaster.Core.Tests/         registry, safety-clamp, and parsing tests
+                                         (per-protocol packet-builder tests added per stage)
+```
+
+Rules:
+- `Core` contains no protocol code and no vendor-specific I/O.
+- Each protocol family is its own project; packet builders are pure static functions with
+  unit tests; the I/O wrapper around them stays thin.
+- `App` is only wiring/hosting, so the host model can change without touching logic.
+
+## Host model: tray app vs Windows service (decision)
+
+**Start as a single tray app** (auto-start at login, run elevated via a scheduled task so
+LibreHardwareMonitor's kernel driver loads). Reasons:
+- Crash safety does not depend on our process staying alive — it depends on hardware
+  fallback behaviour (see safety section), which we must verify anyway.
+- A service + IPC + separate UI triples the plumbing before any device code exists.
+- LHM, HID, and rendering all work fine in an elevated user session.
+
+Revisit a service split only if pre-login control or multi-user support becomes a real need.
+`App` stays a pure composition root so the split stays cheap.
+
+## Stages
+
+- **Stage 0 — DONE (2026-07-06):** repo scaffolding, device enumeration (`discover`),
+  LHM sensor polling (`monitor`), Serilog logging, safety primitives, unit tests.
+- **Stage 1 — fan speed control.** Port iCUE Link speed/sensor protocol from
+  FanControl.CorsairLink (device handshake, sub-device enumeration → which fans are on which
+  hub, RPM/temp reads, fixed duty writes). Research SL V3 wireless protocol (see
+  REFERENCES.md — biggest unknown of the project). Then temperature curves with the failsafe
+  rules below. **Must verify the Link hub's keepalive/hardware-fallback behaviour here.**
+- **Stage 2 — RGB static colors** on both families (OpenLinkHub for Link; SL V3 research).
+- **Stage 3 — pump speed control** via the Link hub (pump + XD5/XD7 res pump), floor-clamped.
+- **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
+  then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.
+- **Stage 5 — Turzx 8.8"** via the same rendering pipeline, serial protocol from
+  turing-smart-screen-python / Tedd.TuringScreen.
+- **Stage 6 — UI polish**, effects, profiles, tray UX.
+
+A stage is done when it builds, its tests pass, and it has been exercised against the real
+hardware.
+
+## Non-negotiable safety rules (water-cooled loop)
+
+Implemented in `DeviceMaster.Core.Safety` and enforced at the lowest write layer:
+
+1. **Pump floor:** pump duty is never written below `SafetyLimits.PumpMinimumDutyPercent`
+   (50%). Any error state ⇒ 100%.
+2. **Sensor failure ⇒ failsafe:** if a curve's temperature source fails to read — including
+   *implausible* values (LHM returns 0.0 °C for CPU when not elevated; treat ≤ 0 °C or
+   > 115 °C as failure) — fans and pump go to 100%.
+3. **Hardware fallback on crash/exit:** before shipping Stage 1, verify from
+   FanControl.CorsairLink sources + live testing how the Link hub behaves when the host stops
+   talking (keepalive interval, revert-to-hardware-mode timeout), and design writes so that
+   "DeviceMaster died" leaves devices on hardware-default curves. Same question for the SL V3
+   RX once its protocol is understood.
+4. **Write gate:** no bytes are ever written to a device unless
+   `KnownDeviceRegistry.IsWriteAllowed(vid:pid)` — positively identified, support-planned
+   hardware only. Discovery itself is strictly read-only.
+5. **Conflict check at startup:** warn if Corsair/Lian Li/Turing software is running
+   (`ConflictingSoftwareChecker`), since two writers on one device is undefined behaviour.
+
+## Sensor sources
+
+- LHM (CPU/GPU temps, motherboard fans) — requires elevation for CPU temps.
+- Coolant temperature comes from the Link hub's own sensor once Stage 1 lands — it is a
+  first-class `ISensorSource`, usable as a curve input like any other.
