@@ -181,26 +181,24 @@ public sealed class LinkHub : IDisposable
     /// <summary>Total LEDs across all connected chain devices (0 before the first color write).</summary>
     public int TotalLeds => _ledCounts.Values.Sum();
 
-    /// <summary>Per-channel LED counts from the last endpoint 0x20 read (diagnostics).</summary>
+    /// <summary>Per-channel LED counts the color buffer was sized from (diagnostics).</summary>
     public IReadOnlyDictionary<int, int> LedCounts => _ledCounts;
 
     /// <summary>
-    /// Sets every LED on the chain to one static color. Lazily reads per-channel LED counts
-    /// (endpoint 0x20) and opens the color endpoint (0x22, handle 0) on first use.
+    /// Sets every LED on the chain to one static color. On first use, sizes the per-channel
+    /// LED map, opens the color endpoint (0x22, handle 0), and writes a black reset frame.
     /// The color buffer is interleaved R,G,B per LED in ascending channel order, wrapped in
     /// the write envelope and chunked at 508 bytes (first chunk 0x06 0x00, rest 0x07 0x00).
     /// </summary>
     public void ApplyStaticColor(byte r, byte g, byte b)
     {
         EnsureColorReady();
+        WriteColorBuffer(r, g, b);
+    }
 
+    private void WriteColorBuffer(byte r, byte g, byte b)
+    {
         var total = TotalLeds;
-        if (total == 0)
-        {
-            _colorReady = false; // retry the LED read on the next attempt
-            throw new LinkHubException("hub reported 0 connected LEDs — RGB unavailable (will retry)");
-        }
-
         var data = new byte[total * 3];
         for (var i = 0; i < total; i++)
         {
@@ -234,8 +232,48 @@ public sealed class LinkHub : IDisposable
             return;
         }
 
-        var ledResponse = ReadEndpointOnce(LinkHubProtocol.Endpoints.GetLeds);
-        _ledCounts = LinkHubParser.ParseLedCounts(ledResponse);
+        if (_channels.Count == 0)
+        {
+            throw new InvalidOperationException("Channels not enumerated — call EnumerateChannels first.");
+        }
+
+        // LED counts come from the device catalog, as in OpenLinkHub (its endpoint 0x20 read
+        // only ever overrides Commander Duo counts). On fw 3.10 that endpoint reports every
+        // channel as disconnected, so it must not gate the color write.
+        var counts = new Dictionary<int, int>();
+        foreach (var channel in _channels)
+        {
+            if (channel.Info is { LedCount: > 0 } info)
+            {
+                counts[channel.Channel] = info.LedCount;
+            }
+        }
+
+        try
+        {
+            var reported = LinkHubParser.ParseLedCounts(ReadEndpointOnce(LinkHubProtocol.Endpoints.GetLeds));
+            _trace?.Invoke($"endpoint 0x20 reports: {(reported.Count == 0 ? "no connected LEDs" : string.Join(", ", reported.Select(kv => $"ch{kv.Key}={kv.Value}")))}");
+            foreach (var (channel, leds) in reported)
+            {
+                // trust the hardware only where the catalog has no count (dynamic devices
+                // like Commander Duo); catalog counts stay authoritative otherwise
+                if (leds > 0 && !counts.ContainsKey(channel))
+                {
+                    counts[channel] = leds;
+                }
+            }
+        }
+        catch (LinkHubException ex)
+        {
+            _trace?.Invoke($"LED enumeration read failed: {ex.Message} (continuing with catalog counts)");
+        }
+
+        if (counts.Values.Sum() == 0)
+        {
+            throw new LinkHubException("no RGB-capable devices on this chain — RGB unavailable (will retry)");
+        }
+
+        _ledCounts = counts;
 
         lock (_ioLock)
         {
@@ -260,6 +298,20 @@ public sealed class LinkHub : IDisposable
         }
 
         _colorReady = true;
+
+        // Reference quirk (OpenLinkHub setDeviceColor): mixed QX/RX chains randomly stay dark
+        // unless a reset frame is sent and 40 ms pass before the first real color packet.
+        try
+        {
+            WriteColorBuffer(0, 0, 0);
+        }
+        catch (LinkHubException ex)
+        {
+            _colorReady = false;
+            throw new LinkHubException($"initial reset frame failed: {ex.Message}", ex.ErrorCode);
+        }
+
+        Thread.Sleep(40);
     }
 
     /// <summary>Close/open/read without waiting for a specific data type (single response read).</summary>

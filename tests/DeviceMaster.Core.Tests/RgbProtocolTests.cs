@@ -1,3 +1,4 @@
+using DeviceMaster.Devices.CorsairLink;
 using DeviceMaster.Devices.CorsairLink.Protocol;
 using DeviceMaster.Devices.LianLi;
 
@@ -70,6 +71,31 @@ public class Slv3RgbPacketTests
         Assert.Equal(2, data2[18]);
         Assert.Equal(compressed[220..300], data2[20..100]);
     }
+}
+
+public class LinkLedCatalogTests
+{
+    // LED counts per model from OpenLinkHub's device metadata (lsh.json) — the hub's own
+    // LED enumeration reports 0 connected on fw 3.10, so the catalog sizes the color buffer.
+    [Theory]
+    [InlineData((byte)LinkDeviceModel.FanQxSeries, (byte)0x00, 34)]
+    [InlineData((byte)LinkDeviceModel.FanLxSeries, (byte)0x00, 18)]
+    [InlineData((byte)LinkDeviceModel.FanRxMaxRgbSeries, (byte)0x00, 8)]
+    [InlineData((byte)LinkDeviceModel.FanRxRgbSeries, (byte)0x00, 8)]
+    [InlineData((byte)LinkDeviceModel.PumpXd5Series, (byte)0x00, 22)]
+    [InlineData((byte)LinkDeviceModel.PumpXd6Series, (byte)0x00, 22)]
+    [InlineData((byte)LinkDeviceModel.WaterBlockXc7Series, (byte)0x00, 24)]
+    [InlineData((byte)LinkDeviceModel.LiquidCoolerHSeries, (byte)0x02, 20)]
+    public void RgbModels_HaveReferenceLedCounts(byte model, byte variant, int expectedLeds) =>
+        Assert.Equal(expectedLeds, LinkDeviceCatalog.Find(model, variant)!.LedCount);
+
+    [Theory]
+    [InlineData((byte)LinkDeviceModel.FanRxSeries, (byte)0x00)]        // non-RGB RX
+    [InlineData((byte)LinkDeviceModel.FanRxMaxSeries, (byte)0x00)]     // non-RGB RX MAX
+    [InlineData((byte)LinkDeviceModel.LcdXd5Elite, (byte)0x00)]        // display module
+    [InlineData((byte)LinkDeviceModel.CommanderDuoSeries, (byte)0x00)] // dynamic count via endpoint 0x20
+    public void NonRgbModels_HaveZeroLeds(byte model, byte variant) =>
+        Assert.Equal(0, LinkDeviceCatalog.Find(model, variant)!.LedCount);
 }
 
 public class LinkLedParsingTests

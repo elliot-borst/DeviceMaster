@@ -305,6 +305,16 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private long _slv3RgbRefreshDue;
 
+    // effect-index watchdog: what we last uploaded per group, and how long telemetry has
+    // disagreed with it (a group that reboots/loses RF falls back to its built-in rainbow).
+    // Only armed once a group has been seen echoing an uploaded index — firmware that never
+    // echoes must not put the watchdog into a permanent re-send loop.
+    private readonly Dictionary<string, (byte[] EffectIndex, long SentAt)> _slv3SentEffect = [];
+    private readonly Dictionary<string, int> _slv3EffectMismatches = [];
+    private readonly HashSet<string> _slv3EchoConfirmed = [];
+    private const int Slv3EffectMismatchTicks = 3;     // consecutive polls before re-sending
+    private const int Slv3EffectSettleMs = 5_000;      // grace period after an upload
+
     private void ApplyRgb(ControlSettings settings, List<string> warnings)
     {
         var key = $"{settings.RgbR},{settings.RgbG},{settings.RgbB}";
@@ -349,17 +359,29 @@ public sealed class ControlLoop : IDisposable
         var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
         foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
         {
+            var reverted = false;
             if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
             {
-                continue;
+                reverted = EffectRevertDetected(device);
+                if (!reverted)
+                {
+                    continue;
+                }
             }
 
             try
             {
                 var ticks = Environment.TickCount64;
-                Span<byte> effectIndex = [(byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks];
+                var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
                 _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
                 _appliedSlv3Rgb[device.MacText] = key;
+                _slv3SentEffect[device.MacText] = (effectIndex, ticks);
+                _slv3EffectMismatches.Remove(device.MacText);
+                if (reverted)
+                {
+                    _log?.Invoke($"SL V3 group {device.MacText[..4]} reverted to its built-in effect "
+                        + $"(reports {Convert.ToHexString(device.EffectIndex)}) — color re-sent");
+                }
             }
             catch (Exception ex)
             {
@@ -371,6 +393,37 @@ public sealed class ControlLoop : IDisposable
         {
             _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
         }
+    }
+
+    /// <summary>
+    /// True when a group's telemetry has stopped echoing the effect index we uploaded for
+    /// several consecutive polls — the firmware lost the stored effect (power blip, missed RF)
+    /// and is looping its built-in rainbow. Guarded by a settle window after each upload and
+    /// a consecutive-mismatch threshold so a stale poll can't trigger a spurious re-send.
+    /// </summary>
+    private bool EffectRevertDetected(Slv3Device device)
+    {
+        if (!_slv3SentEffect.TryGetValue(device.MacText, out var sent)
+            || Environment.TickCount64 - sent.SentAt < Slv3EffectSettleMs)
+        {
+            return false;
+        }
+
+        if (device.EffectIndex.AsSpan().SequenceEqual(sent.EffectIndex))
+        {
+            _slv3EchoConfirmed.Add(device.MacText);
+            _slv3EffectMismatches.Remove(device.MacText);
+            return false;
+        }
+
+        if (!_slv3EchoConfirmed.Contains(device.MacText))
+        {
+            return false; // this group has never echoed an index — leave healing to the refresh
+        }
+
+        var misses = _slv3EffectMismatches.GetValueOrDefault(device.MacText) + 1;
+        _slv3EffectMismatches[device.MacText] = misses;
+        return misses >= Slv3EffectMismatchTicks;
     }
 
     private double? TryReadCoolant()

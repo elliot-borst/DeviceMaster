@@ -77,16 +77,19 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 - **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
   hard-floored at 50%, live coolant + pump RPM display).
 
-### Status snapshot (2026-07-06, v14 released)
+### Status snapshot (2026-07-06, v15 released)
 
 Desktop app (WPF, tray-resident, auto-updating whole-number releases via GitHub setup-exe
 assets) covers: fan curves/manual on both ecosystems, pump control, static RGB on both
 ecosystems, per-device hardware inventory, identify-pulse per Corsair channel,
-three-column one-screen layout.
+three-column one-screen layout that sizes its minimum to the detected-hardware list.
 
 **Outstanding, in priority order:**
-1. Verify Corsair RGB on hardware after the v14 fix (color-endpoint 0x03 quirk).
-2. Motherboard fan headers (v15 candidate): LibreHardwareMonitor Control sensors —
+1. Verify Corsair RGB on hardware after the v15 fix (v14's endpoint-open fix exposed the
+   next fw 3.10 quirk: LED enumeration reports 0 connected — v15 sizes the color buffer
+   from catalog LED counts, as OpenLinkHub does). Also confirm the SL V3 effect-index
+   watchdog arms (log: "reverted to its built-in effect") after a group rainbow-fallback.
+2. Motherboard fan headers (v16 candidate): LibreHardwareMonitor Control sensors —
    autodetects SuperIO chips; requires the app to run elevated (add an installer/startup
    elevation option).
 3. Motherboard RGB headers: port OpenRGB's AuraUSB HID protocol (ASUS `0B05:19AF` already

@@ -673,7 +673,40 @@ public sealed class MainWindow : Window
         {
             _rescanButton.IsHitTestVisible = true;
             _rescanButton.Opacity = 1.0;
+            FitMinSizeToContent();
         }
+    }
+
+    /// <summary>
+    /// Raises the window minimum height until the card grid — the detected-hardware list is
+    /// the tallest column — fits without the outer ScrollViewer scrolling, capped to the
+    /// monitor work area. Re-run after every hardware refresh because the list length
+    /// depends on what's plugged in.
+    /// </summary>
+    private void FitMinSizeToContent()
+    {
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            if (Content is not FrameworkElement root)
+            {
+                return;
+            }
+
+            var contentWidth = root.ActualWidth > 0 ? root.ActualWidth : Width;
+            root.Measure(new Size(contentWidth, double.PositiveInfinity));
+
+            // window chrome (title bar + resize frame) from the current arrangement;
+            // before first show fall back to the standard caption height
+            var chrome = ActualHeight > 0 && root.ActualHeight > 0
+                ? Math.Max(ActualHeight - root.ActualHeight, 0)
+                : SystemParameters.WindowCaptionHeight + 2 * SystemParameters.ResizeFrameHorizontalBorderHeight;
+
+            MinHeight = Math.Min(root.DesiredSize.Height + chrome, SystemParameters.WorkArea.Height);
+            if (WindowState == WindowState.Normal && Height < MinHeight)
+            {
+                Height = MinHeight;
+            }
+        }, DispatcherPriority.Loaded);
     }
 
     private static string? Shorten(string? id) =>
