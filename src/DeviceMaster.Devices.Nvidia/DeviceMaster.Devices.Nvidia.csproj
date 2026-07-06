@@ -3,7 +3,4 @@
     <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
-  </ItemGroup>
 </Project>

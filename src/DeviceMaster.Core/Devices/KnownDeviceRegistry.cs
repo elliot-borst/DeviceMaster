@@ -43,9 +43,9 @@ public static class KnownDeviceRegistry
         Entry(0x1A86, 0xCA88, DeviceKind.TurzxScreen, "Turzx/Turing 8.8\" smart screen", supportPlanned: true,
             "*USB serial (usbser), device serial string CT88INCH. Protocol revision confirmed in Stage 5."),
 
-        // ---- Recognized but permanently out of scope ----
-        Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: false,
-            "*Out of scope — never written to."),
+        // ---- ASUS Aura (motherboard RGB) ----
+        Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: true,
+            "*HID, 65-byte reports (0xEC prefix). Mainboard-class protocol (OpenRGB AuraMainboardController)."),
     }.ToDictionary(d => d.Id);
 
     private static readonly Dictionary<ushort, string> VendorNames = new()

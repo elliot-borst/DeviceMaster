@@ -44,9 +44,12 @@ public class KnownDeviceRegistryTests
 
     [Fact]
     public void WriteGate_DeniesRecognizedButOutOfScopeDevices() =>
-        Assert.False(KnownDeviceRegistry.IsWriteAllowed(new UsbId(0x0B05, 0x19AF)));
+        Assert.False(KnownDeviceRegistry.IsWriteAllowed(new UsbId(0x0CF2, 0x7750))); // classic Uni Hub — recognized, unimplemented
 
     [Fact]
-    public void WriteGate_AllowsIdentifiedTargets() =>
+    public void WriteGate_AllowsIdentifiedTargets()
+    {
         Assert.True(KnownDeviceRegistry.IsWriteAllowed(new UsbId(0x1B1C, 0x0C3F)));
+        Assert.True(KnownDeviceRegistry.IsWriteAllowed(new UsbId(0x0B05, 0x19AF))); // Aura — supported since v16
+    }
 }

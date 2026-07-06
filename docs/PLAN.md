@@ -77,29 +77,32 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 - **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
   hard-floored at 50%, live coolant + pump RPM display).
 
-### Status snapshot (2026-07-06, v15 released)
+### Status snapshot (2026-07-06, v16 released)
 
-Desktop app (WPF, tray-resident, auto-updating whole-number releases via GitHub setup-exe
-assets) covers: fan curves/manual on both ecosystems, pump control, static RGB on both
-ecosystems, per-device hardware inventory, identify-pulse per Corsair channel,
-three-column one-screen layout that sizes its minimum to the detected-hardware list.
+Desktop app (WPF, tray-resident, elevated, auto-updating whole-number releases via GitHub
+setup-exe assets) covers: fan curves/manual on Corsair + Lian Li + motherboard SuperIO
+headers + GPU coolers, pump control, static RGB on Corsair + Lian Li + ASUS Aura ARGB
+headers + ENE RAM sticks + ASUS GPU, per-device hardware inventory (incl. DIMMs via SPD
+and GPU board partner), three-column layout sized to the hardware list.
+
+v15→v16 verified on hardware: Corsair RGB (catalog LED counts fixed it — pump + fans
+lighting), Aura ARGB headers, 4× ENE RAM controllers (0x77 remap flow), GPU fan ramp +
+restore, SuperIO 7-header write + BIOS restore.
+
+v16 RGB verified by owner on every surface: Corsair (pump + connected fans), Lian Li,
+Aura ARGB headers, 4× RAM sticks, ASUS GPU (after the NvAPI block count-byte fix).
 
 **Outstanding, in priority order:**
-1. Verify Corsair RGB on hardware after the v15 fix (v14's endpoint-open fix exposed the
-   next fw 3.10 quirk: LED enumeration reports 0 connected — v15 sizes the color buffer
-   from catalog LED counts, as OpenLinkHub does). Also confirm the SL V3 effect-index
-   watchdog arms (log: "reverted to its built-in effect") after a group rainbow-fallback.
-2. Motherboard fan headers (v16 candidate): LibreHardwareMonitor Control sensors —
-   autodetects SuperIO chips; requires the app to run elevated (add an installer/startup
-   elevation option).
-3. Motherboard RGB headers: port OpenRGB's AuraUSB HID protocol (ASUS `0B05:19AF` already
-   in the registry); other vendors later.
-4. RAM LEDs + GPU RGB: SMBus/I2C territory (kernel driver, strict address whitelisting,
-   read-only probing first). Need the GPU's board partner to pick the right controller.
-5. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
-   Stage 5: Turzx 8.8" via shared renderer → Stage 6: effects, per-device colors,
-   curve editor, profiles.
-6. Corsair hub crash-fallback kill test (graceful-exit restore is verified; kill-test not).
+1. Confirm SL V3 effect-index watchdog arms (log: "reverted to its built-in effect")
+   after a group rainbow-fallback.
+2. Corsair: 4 fans dark + missing RPM on the same channels — physical junction reseat
+   (owner), then all six light up; software path is verified.
+3. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
+   Stage 5: Turzx 8.8" via shared renderer + 11× SL V3 per-fan LCDs (JPEG over USB bulk,
+   DES-CBC headers) → Stage 6: effects, per-device colors, curve editor, profiles.
+4. Corsair hub crash-fallback kill test (graceful-exit restore is verified; kill-test not).
+5. Other GPU board partners (MSI/Gigabyte/Zotac/Palit/PNY/FE) — detection in place,
+   write paths pending hardware access.
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
   then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.
 - **Stage 5 — Turzx 8.8"** via the same rendering pipeline, serial protocol from

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <!-- Administrator required: motherboard/GPU fan control and RAM RGB need SuperIO/SMBus
+       access through the PawnIO kernel driver, and CPU temperatures need LHM's ring0 path.
+       Auto-start uses a highest-privilege scheduled task (see StartupTask) because Windows
+       skips elevated apps in shell:startup. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+  </ItemGroup>
+</Project>

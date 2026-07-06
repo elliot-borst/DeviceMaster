@@ -18,6 +18,8 @@ public static class Program
             return;
         }
 
+        StartupTask.EnsureElevatedAutostart();
+
         // Closing the window hides to the system tray, so app lifetime is explicit
         // (tray menu Exit or the updater hand-off end it).
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };

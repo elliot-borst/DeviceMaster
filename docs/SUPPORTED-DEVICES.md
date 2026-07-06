@@ -51,6 +51,53 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   fail-safe on application crash.
 - Classic wired Uni Hubs (VID `0CF2`) are recognized in the registry but not implemented.
 
+## ASUS Aura motherboard RGB
+
+| Device | VID:PID | Transport |
+|---|---|---|
+| Aura LED controller (mainboard class) | `0B05:19AF` | HID, 65-byte reports, `0xEC` prefix |
+
+- Protocol ported from OpenRGB's `AuraMainboardController`: firmware query `0x82`, config
+  table `0xB0` (onboard LED count at `[0x1B]`, ARGB header count at `[0x02]`), init
+  `0x52 0x53 0x00 0x01`, effect select `0x35` + effect color `0x36`, direct `0x40`
+  (20 LEDs/packet, `0x80` apply bit), commit `0x3F 0x55` (persists across reboot).
+- Boards without onboard LEDs (config `[0x1B]` = 0) still use the mainboard protocol —
+  never the `0x3B` addressable-only variant, even when only ARGB headers exist.
+
+## RGB DRAM (ENE controllers — Klevv/Essencore, GSkill, Geil, …)
+
+- ENE (Aura-compatible) controllers found by SMBus probing, not brand: unconfigured chips
+  answer at `0x77` and are remapped one per stick (registers `0x80F8`/`0x80F9`) to free
+  candidate addresses; a chip is confirmed by registers `0xA0..0xAF` reading `0x00..0x0F`.
+  DeviceMaster fingerprints **before** the remap writes (stricter than the reference).
+- ENE registers are 16-bit, tunnelled over SMBus (`0x00` = set pointer word, high byte
+  first; `0x81` read; `0x01` write; `0x03` block ≤ 3 bytes). Colors are stored **R,B,G**
+  per LED; static = mode `1` at `0x8021`, apply `0x80A0=0x01`, flash save `0x80A0=0xAA`.
+  Version string at `0x1000` picks the register generation ("AUDA…" ⇒ colors at `0x8160`).
+- Transport: RAMSPDToolkit's SMBus transactions over LibreHardwareMonitor's PawnIO driver
+  (AMD FCH exposes two ports; both are scanned). SPD EEPROM addresses are never written.
+  All transactions hold the `Global\Access_SMBUS.HTP.Method` mutex.
+
+## NVIDIA GPU RGB (board-partner controllers)
+
+- Board partner identified via `NvAPI_GPU_GetPCIIdentifiers` (PCI subsystem vendor).
+  ASUS cards (subvendor `0x1043`) carry the same ENE controller on GPU I2C port 1 at
+  address `0x67` — driven through `NvAPI_I2CWriteEx/ReadEx` (user mode, no extra driver).
+  ASUS GPU firmware ("AUMA0-E6K5-11xx") stores its LED count at config offset `0x03`.
+- Other partners (MSI/Gigabyte/Zotac/Palit/PNY/NVIDIA FE) are detected and named but not
+  yet driven; each needs its own controller port when such a card is available.
+
+## Motherboard fan headers + GPU fans
+
+- LibreHardwareMonitor `Control` sensors: SuperIO chips (Nuvoton NCT67xx on ASUS AM5) and
+  NVIDIA coolers, written as percent via `Control.SetSoftware`, restored to BIOS/driver
+  automatic control via `SetDefault` on exit.
+- **Requires administrator + the PawnIO kernel driver** (pawnio.eu, installed system-wide;
+  LHM 0.9.6 no longer bundles WinRing0). Without either, header control is skipped.
+- Safety: SuperIO has no hardware fallback — a killed process leaves the last duty in
+  place — so header/GPU duties are floored at 30% (`SafetyLimits.HeaderMinimumDutyPercent`)
+  and every touched control is restored on shutdown.
+
 ## Turzx / Turing-family smart screens
 
 | Device | VID:PID | Transport |

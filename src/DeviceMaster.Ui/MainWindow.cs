@@ -84,6 +84,8 @@ public sealed class MainWindow : Window
             // worst case: default scrollbars
         }
 
+        Grid.SetIsSharedSizeScope(_fanRows, true);
+        Grid.SetIsSharedSizeScope(_pumpRows, true);
         Content = BuildLayout();
         _uiReady = true;
 
@@ -235,7 +237,7 @@ public sealed class MainWindow : Window
 
     private Border BuildFanCard()
     {
-        var card = Theme.CardShell("✻", "Fan Control", "curves & manual duty · both ecosystems", out var body, out var head);
+        var card = Theme.CardShell("✻", "Fan Control", "curves & manual duty · every fan in the system", out var body, out var head);
         var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
         badge.VerticalAlignment = VerticalAlignment.Top;
         DockPanel.SetDock(badge, Dock.Right);
@@ -297,7 +299,7 @@ public sealed class MainWindow : Window
 
     private Border BuildRgbCard()
     {
-        var card = Theme.CardShell("◈", "Lighting Control", "static color · both ecosystems", out var body, out var head);
+        var card = Theme.CardShell("◈", "Lighting Control", "static color · every LED in the system", out var body, out var head);
 
         var toggle = Theme.Toggle(_controlSettings.RgbEnabled, on =>
         {
@@ -357,7 +359,8 @@ public sealed class MainWindow : Window
         }
         else
         {
-            _rgbStatus.Text = $"Static color #{_controlSettings.RgbR:X2}{_controlSettings.RgbG:X2}{_controlSettings.RgbB:X2} on all Corsair and Lian Li LEDs.";
+            _rgbStatus.Text = $"Static color #{_controlSettings.RgbR:X2}{_controlSettings.RgbG:X2}{_controlSettings.RgbB:X2} "
+                + "on Corsair, Lian Li, motherboard ARGB, RAM and GPU LEDs.";
         }
     }
 
@@ -428,28 +431,42 @@ public sealed class MainWindow : Window
         };
     }
 
+    // Rows are 3-column grids; the id and value columns share size groups (scoped per card
+    // panel) so every row's full device id lines up in one central column.
     private static Border DeviceRow(string name, string? id, string value, Brush valueBrush)
     {
-        var row = new DockPanel { LastChildFill = false };
-        var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        left.Children.Add(new TextBlock { Text = name, Foreground = Theme.Text, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center });
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DeviceId" });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DeviceValue" });
+
+        row.Children.Add(new TextBlock { Text = name, Foreground = Theme.Text, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center });
+
         if (id is { Length: > 0 })
         {
-            left.Children.Add(new TextBlock
+            var idBlock = new TextBlock
             {
                 Text = id,
                 Foreground = Theme.Faint,
                 FontFamily = Theme.Mono,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(9, 1, 0, 0),
-            });
+                Margin = new Thickness(12, 1, 14, 0),
+            };
+            Grid.SetColumn(idBlock, 1);
+            row.Children.Add(idBlock);
         }
 
-        DockPanel.SetDock(left, Dock.Left);
-        row.Children.Add(left);
-        var right = new TextBlock { Text = value, Foreground = valueBrush, FontSize = 12.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(right, Dock.Right);
+        var right = new TextBlock
+        {
+            Text = value,
+            Foreground = valueBrush,
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        Grid.SetColumn(right, 2);
         row.Children.Add(right);
         return Theme.InsetRow(row);
     }
@@ -550,8 +567,15 @@ public sealed class MainWindow : Window
             {
                 foreach (var device in snapshot.Devices)
                 {
-                    chainRows.Add(($"{device.Family} · {device.Name}", device.Id,
-                        device.IsPump ? "pump" : device.Family == "Corsair" ? "fan" : "wireless"));
+                    var tag = device.IsPump ? "pump" : device.Family switch
+                    {
+                        "Corsair" => "fan",
+                        "Lian Li" => "wireless",
+                        "Motherboard" => "header",
+                        "GPU" => "fan",
+                        _ => "?",
+                    };
+                    chainRows.Add(($"{device.Family} · {device.Name}", device.Id, tag));
                 }
             }
             else if (_controlSettings.Mode != ControlMode.Off)
@@ -646,6 +670,28 @@ public sealed class MainWindow : Window
             foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
             {
                 _hardwareRows.Children.Add(HardwarePill("Turzx/Turing screen", screen.SerialHint, screen.ComPort));
+            }
+
+            foreach (var aura in scan.HidDevices.Where(d => d.Kind == DeviceKind.MotherboardRgbController)
+                .DistinctBy(d => d.UsbId))
+            {
+                _hardwareRows.Children.Add(HardwarePill("ASUS Aura LED controller", aura.UsbId.ToString(), "HID"));
+            }
+
+            foreach (var gpu in _loop?.GpuInventory ?? [])
+            {
+                _hardwareRows.Children.Add(HardwarePill(
+                    gpu.Gpu.Name,
+                    $"{gpu.Gpu.SubVendor:X4}:{gpu.Gpu.SubDevice:X4} · {gpu.Partner}",
+                    gpu.Ene is not null ? "RGB" : "GPU"));
+            }
+
+            foreach (var stick in _loop?.RamInventory ?? [])
+            {
+                _hardwareRows.Children.Add(HardwarePill(
+                    $"RAM · {stick.Manufacturer} {stick.PartNumber}",
+                    $"SPD 0x{stick.SpdAddress:X2} · {stick.BusName}",
+                    "SMBus"));
             }
 
             if (_hardwareRows.Children.Count == 0)
@@ -818,31 +864,7 @@ public sealed class MainWindow : Window
         {
             var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm";
             var brush = device.Rpm is null ? Theme.Faint : Theme.Accent2;
-            var row = DeviceRow($"{device.Family} · {device.Name}", ShortId(device.Id), $"{rpm} @ {device.AppliedDutyPercent}%", brush);
-
-            // Corsair channels get an "identify" pulse (100% for a few seconds) to map
-            // channels to physical fans
-            if (device is { Family: "Corsair", HubSerial: not null, Channel: not null } && row.Child is DockPanel rowPanel)
-            {
-                var identify = new TextBlock
-                {
-                    Text = "◉ identify",
-                    Foreground = Theme.Faint,
-                    FontSize = 11,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 0, 0, 0),
-                    Cursor = System.Windows.Input.Cursors.Hand,
-                    ToolTip = "Run this fan at 100% for 6 seconds",
-                };
-                identify.MouseEnter += (_, _) => identify.Foreground = Theme.Accent;
-                identify.MouseLeave += (_, _) => identify.Foreground = Theme.Faint;
-                var (hubSerial, channel) = (device.HubSerial, device.Channel.Value);
-                identify.MouseLeftButtonUp += (_, _) => _loop?.PulseChannel(hubSerial, channel);
-                DockPanel.SetDock(identify, Dock.Right);
-                rowPanel.Children.Add(identify);
-            }
-
-            _fanRows.Children.Add(row);
+            _fanRows.Children.Add(DeviceRow($"{device.Family} · {device.Name}", device.Id, $"{rpm} @ {device.AppliedDutyPercent}%", brush));
         }
 
         foreach (var warning in status.Warnings)
@@ -857,7 +879,7 @@ public sealed class MainWindow : Window
         foreach (var pump in status.Devices.Where(d => d.IsPump))
         {
             var rpm = pump.Rpm is { } r ? $"{r} rpm" : "no rpm";
-            _pumpRows.Children.Add(DeviceRow($"{pump.Family} · {pump.Name}", ShortId(pump.Id), $"{rpm} @ {pump.AppliedDutyPercent}%", Theme.Accent2));
+            _pumpRows.Children.Add(DeviceRow($"{pump.Family} · {pump.Name}", pump.Id, $"{rpm} @ {pump.AppliedDutyPercent}%", Theme.Accent2));
         }
 
         if (_pumpRows.Children.Count == 0)
@@ -875,9 +897,6 @@ public sealed class MainWindow : Window
             _trayIcon.Text = tip.Length > 63 ? tip[..63] : tip;
         }
     }
-
-    private static string? ShortId(string? id) =>
-        id is { Length: > 8 } ? "…" + id[^8..] : id;
 
     private void SetBadge(string text, Brush color)
     {

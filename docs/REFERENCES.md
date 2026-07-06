@@ -58,6 +58,21 @@ Architecture (confirmed against our enumeration):
   `CT88INCH`) and port init/orientation/bitmap-push commands.
 - **tedd/Tedd.TuringScreen** (C#) — C# framing conventions, likely 3.5"-oriented; adapt.
 
+## ASUS Aura motherboard RGB (`0B05:19AF`), ENE RAM RGB, NVIDIA GPU RGB
+
+- **OpenRGB** (GPLv2 — port byte-level facts, don't copy code; cloned under `refs/OpenRGB`):
+  - `Controllers/AsusAuraUSBController/AsusAuraMainboardController` — the 19AF HID protocol
+    (65-byte `0xEC` reports, effect 0x35/0x36, direct 0x40, commit 0x3F 0x55).
+  - `Controllers/ENESMBusController` — ENE register map + 0x77 remap detection for RGB DRAM
+    and ASUS GPUs (colors R,B,G; apply 0x80A0).
+  - `i2c_smbus/Windows/i2c_smbus_nvapi.cpp` + `dependencies/NVFC/nvapi.{h,cpp}` — NvAPI I2C
+    (NV_I2C_INFO_V3, interface ids, port 1, SMBus mode packing — block data carries a count
+    byte first).
+- **RAMSPDToolkit** (bundled with LHM 0.9.6) — public SMBus transactions + SPD readout;
+  rides LibreHardwareMonitor's PawnIO driver registration (enable the Memory group first).
+
 ## Sensor stack
 
-- **LibreHardwareMonitorLib** — CPU/GPU/motherboard sensors (elevation required for CPU).
+- **LibreHardwareMonitorLib** — CPU/GPU/motherboard sensors (elevation required for CPU),
+  and `Control` sensors for SuperIO fan headers + NVIDIA coolers (SetSoftware/SetDefault).
+  Requires the separately installed PawnIO driver (pawnio.eu) since 0.9.6.

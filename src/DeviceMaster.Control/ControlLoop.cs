@@ -1,8 +1,11 @@
 using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Safety;
 using DeviceMaster.Core.Sensors;
+using DeviceMaster.Devices.AsusAura;
 using DeviceMaster.Devices.CorsairLink;
+using DeviceMaster.Devices.EneRgb;
 using DeviceMaster.Devices.LianLi;
+using DeviceMaster.Devices.Nvidia;
 using DeviceMaster.Sensors;
 
 namespace DeviceMaster.Control;
@@ -51,9 +54,24 @@ public sealed class ControlLoop : IDisposable
 
     private readonly List<LinkHub> _hubs = [];
     private Slv3Controller? _slv3;
+    private AuraController? _aura;
     private LhmSensorSource? _lhm;
+    private LhmFanController? _headers;
+    private bool _headersUnavailableWarned;
+    private EneRamScanner? _ramScanner;
+    private IReadOnlyList<EneRgbDevice> _ramRgb = [];
+    private IReadOnlyList<GpuRgb> _gpuRgb = [];
+    private bool _chipRgbScanned;
+
+    /// <summary>Detected memory modules (SPD identity), for the hardware inventory. Filled once per session.</summary>
+    public IReadOnlyList<RamStick> RamInventory { get; private set; } = [];
+
+    /// <summary>Detected NVIDIA GPUs with board partner and RGB reachability, for the hardware inventory.</summary>
+    public IReadOnlyList<GpuRgb> GpuInventory => _gpuRgb;
     private int _lastWrittenCorsairDuty = -1;
     private int _ticksSinceCorsairWrite;
+    private int _lastWrittenHeaderDuty = -1;
+    private int _ticksSinceHeaderWrite;
 
     // "identify this fan" pulses: (hub serial, channel) -> expiry tick
     private readonly Dictionary<(string Hub, int Channel), long> _pulses = [];
@@ -202,6 +220,7 @@ public sealed class ControlLoop : IDisposable
         var readings = new List<DeviceReading>();
         ApplyCorsair(duty, pumpDuty, readings, warnings);
         ApplySlv3(duty, readings, warnings);
+        ApplyHeaders(duty, readings, warnings);
 
         if (settings.RgbEnabled)
         {
@@ -270,6 +289,79 @@ public sealed class ControlLoop : IDisposable
                 warnings.Add($"SL V3 open failed: {ex.Message}");
             }
         }
+
+        if (_aura is null && AuraController.FindDevices().FirstOrDefault() is { } auraDevice)
+        {
+            try
+            {
+                _aura = AuraController.Open(auraDevice);
+                _appliedAuraRgb = null; // reapply color after a reconnect
+                _log?.Invoke($"control: opened Aura controller (fw {_aura.FirmwareName}, {_aura.Zones.Count} zones)");
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Aura open failed: {ex.Message}");
+            }
+        }
+
+        // chip-level RGB (RAM sticks over SMBus, GPU over NvAPI I2C): scan once — these
+        // don't hot-plug, and the SMBus scan is too expensive to repeat every tick
+        if (!_chipRgbScanned)
+        {
+            _chipRgbScanned = true;
+            try
+            {
+                _gpuRgb = GpuRgbLocator.Scan(_log);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"GPU RGB scan failed: {ex.Message}");
+            }
+
+            if (LhmFanController.IsElevated)
+            {
+                try
+                {
+                    _ramScanner = new EneRamScanner(_log);
+                    RamInventory = _ramScanner.ReadSticks();
+                    _ramRgb = _ramScanner.FindRgbControllers();
+                    _log?.Invoke($"control: {RamInventory.Count} DIMM(s), {_ramRgb.Count} ENE RAM RGB controller(s)");
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"RAM RGB scan failed: {ex.Message}");
+                }
+            }
+        }
+
+        if (_headers is null)
+        {
+            if (!LhmFanController.IsElevated)
+            {
+                if (!_headersUnavailableWarned)
+                {
+                    _headersUnavailableWarned = true;
+                    _log?.Invoke("motherboard/GPU fan control skipped — not running as administrator");
+                }
+            }
+            else
+            {
+                try
+                {
+                    _headers = new LhmFanController();
+                    _lastWrittenHeaderDuty = -1;
+                    _log?.Invoke($"control: opened SuperIO/GPU fan controls ({_headers.MotherboardName})");
+                }
+                catch (Exception ex)
+                {
+                    if (!_headersUnavailableWarned)
+                    {
+                        _headersUnavailableWarned = true;
+                        warnings.Add($"motherboard/GPU fan control unavailable: {ex.Message}");
+                    }
+                }
+            }
+        }
     }
 
     private void ReleaseHardware()
@@ -293,9 +385,22 @@ public sealed class ControlLoop : IDisposable
         _slv3?.Dispose(); // fans revert to firmware defaults once keepalive stops
         _slv3 = null;
 
+        _aura?.Dispose(); // committed colors persist in the controller on their own
+        _aura = null;
+
+        _ramScanner?.Dispose(); // ENE colors are saved to the controllers' flash
+        _ramScanner = null;
+        _ramRgb = [];
+        _gpuRgb = [];
+        _chipRgbScanned = false;
+
+        _headers?.Dispose(); // restores BIOS/driver-automatic control on every touched header
+        _headers = null;
+
         _lhm?.Dispose();
         _lhm = null;
         _lastWrittenCorsairDuty = -1;
+        _lastWrittenHeaderDuty = -1;
     }
 
     // ---- RGB (static color, both families) ----
@@ -303,6 +408,9 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, string> _appliedHubRgb = [];
     private readonly Dictionary<string, long> _hubRgbRetryAt = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
+    private string? _appliedAuraRgb;
+    private string? _appliedChipRgb;
+    private long _chipRgbRetryAt;
     private long _slv3RgbRefreshDue;
 
     // effect-index watchdog: what we last uploaded per group, and how long telemetry has
@@ -347,6 +455,50 @@ public sealed class ControlLoop : IDisposable
             {
                 _hubRgbRetryAt[hub.SerialNumber] = Environment.TickCount64 + 10_000;
                 warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
+            }
+        }
+
+        if (_aura is not null && _appliedAuraRgb != key)
+        {
+            try
+            {
+                _aura.ApplyStaticColor(r, g, b);
+                _appliedAuraRgb = key;
+                _log?.Invoke($"RGB applied on Aura ({_aura.Zones.Count} zones)");
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"RGB on Aura failed: {ex.Message}");
+                _aura.Dispose();
+                _aura = null; // reopen next tick
+            }
+        }
+
+        if (_appliedChipRgb != key
+            && Environment.TickCount64 >= _chipRgbRetryAt
+            && (_ramRgb.Count > 0 || _gpuRgb.Any(g2 => g2.Ene is not null)))
+        {
+            try
+            {
+                foreach (var ram in _ramRgb)
+                {
+                    ram.ApplyStaticColor(r, g, b, persist: true);
+                }
+
+                foreach (var gpu in _gpuRgb)
+                {
+                    gpu.Ene?.ApplyStaticColor(r, g, b, persist: true);
+                }
+
+                _appliedChipRgb = key;
+                _log?.Invoke($"RGB applied on {_ramRgb.Count} RAM controller(s) + {_gpuRgb.Count(g2 => g2.Ene is not null)} GPU(s)");
+            }
+            catch (Exception ex)
+            {
+                // cool down before retrying — every apply persists to controller flash,
+                // which has limited write endurance
+                _chipRgbRetryAt = Environment.TickCount64 + 30_000;
+                warnings.Add($"RAM/GPU RGB failed: {ex.Message} (will retry)");
             }
         }
 
@@ -586,6 +738,50 @@ public sealed class ControlLoop : IDisposable
         }
     }
 
+    /// <summary>
+    /// Motherboard headers + GPU coolers via LHM (elevated only). Same global duty as the
+    /// fan families, floored at 30% in the device layer because SuperIO has no hardware
+    /// fallback. Write-on-change plus a periodic refresh, like the Corsair path.
+    /// </summary>
+    private void ApplyHeaders(int duty, List<DeviceReading> readings, List<string> warnings)
+    {
+        if (_headers is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var mustWrite = duty != _lastWrittenHeaderDuty || ++_ticksSinceHeaderWrite >= CorsairRefreshTicks;
+            if (mustWrite)
+            {
+                _headers.SetAllDuties(duty);
+                _lastWrittenHeaderDuty = duty;
+                _ticksSinceHeaderWrite = 0;
+            }
+
+            var applied = SafetyGuard.ClampHeaderDuty(duty);
+            foreach (var fan in _headers.Enumerate())
+            {
+                readings.Add(new DeviceReading(fan.Family, fan.Name, fan.Rpm, applied, IsPump: false, fan.Id));
+            }
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"header/GPU fan control failed: {ex.Message} — reopening next tick");
+            try
+            {
+                _headers.Dispose();
+            }
+            catch
+            {
+                // BIOS control returns on reboot regardless
+            }
+
+            _headers = null;
+        }
+    }
+
     private void TryFailsafe()
     {
         try
@@ -598,6 +794,7 @@ public sealed class ControlLoop : IDisposable
             }
 
             _slv3?.SendKeepalive(SafetyLimits.FailsafeDutyPercent);
+            _headers?.SetAllDuties(SafetyLimits.FailsafeDutyPercent);
         }
         catch
         {

@@ -52,3 +52,8 @@ Name: "{userstartup}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; Parameters: "
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "Launch DeviceMaster now"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; The app migrates the startup shortcut to a highest-privilege logon task (elevated apps
+; can't launch from shell:startup); clean it up on uninstall.
+Filename: "schtasks"; Parameters: "/Delete /TN ""DeviceMaster"" /F"; Flags: runhidden; RunOnceId: "RemoveStartupTask"
