@@ -38,3 +38,15 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
 - Discovery: `dotnet run --project src/DeviceMaster.App -- discover`
 - Sensors:  `dotnet run --project src/DeviceMaster.App -- monitor --seconds 2 --count 5`
   (CPU temps require an elevated terminal)
+- Fan control CLI: `... -- link status|set`, `... -- slv3 status|set`
+
+## Releasing (whole-number versions: 1, 2, 3, …)
+
+1. Bump `<Version>` major in `src/DeviceMaster.Ui/DeviceMaster.Ui.csproj` (single source;
+   the UI shows it and the updater compares against the release tag) and update
+   `MainWindow.VersionDate`.
+2. `.\build-installer.ps1` → `dist\DeviceMaster-Setup.exe` (Inno Setup 6 required).
+3. Commit + push (plain messages, authored as the repo owner — never AI attribution).
+4. `gh release create v<N> dist\DeviceMaster-Setup.exe --title "DeviceMaster <N>" --notes ...`
+   The release asset MUST be the setup exe (the in-app updater looks for an .exe asset with
+   "setup" in the name); do not ship zips.

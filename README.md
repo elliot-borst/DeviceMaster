@@ -15,14 +15,20 @@ no vendor software or services at runtime.
 Details and protocol notes: [docs/SUPPORTED-DEVICES.md](docs/SUPPORTED-DEVICES.md) ·
 Roadmap: [docs/PLAN.md](docs/PLAN.md) · Protocol sources: [docs/REFERENCES.md](docs/REFERENCES.md)
 
-## Quick start
+## Install
 
-Download `DeviceMaster` from the latest release (self-contained, no .NET required), or build
-from source:
+Download **DeviceMaster-Setup.exe** from the
+[latest release](https://github.com/elliot-borst/DeviceMaster/releases/latest) and run it —
+installs per-user (no admin needed), optional desktop/start-with-Windows shortcuts,
+uninstaller included. The app shows its version, checks for updates on launch, and offers
+one-click **Download & install** when a new version ships (whole-number versions: 1, 2, 3…).
+
+## Build from source
 
 ```powershell
 dotnet build
 dotnet test
+.\build-installer.ps1   # produces dist\DeviceMaster-Setup.exe (requires Inno Setup 6)
 ```
 
 ```powershell
