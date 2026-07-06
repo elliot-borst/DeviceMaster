@@ -318,10 +318,14 @@ public sealed class ControlLoop : IDisposable
                         var (codes, leds) = hub.ReadLedDeviceInfo();
                         _log?.Invoke($"hub {hub.SerialNumber[..8]}… 0x1E raw: {Convert.ToHexString(codes.AsSpan(0, 48))}");
                         _log?.Invoke($"hub {hub.SerialNumber[..8]}… 0x1D raw: {Convert.ToHexString(leds.AsSpan(0, 48))}");
+
+                        // the registry is persisted hub-side and goes stale when the chain is
+                        // re-arranged — sync it so colors reach the channels that exist NOW
+                        hub.SyncLedRegistry(_log);
                     }
                     catch (Exception ex)
                     {
-                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… LED info read failed: {ex.Message}");
+                        _log?.Invoke($"hub {hub.SerialNumber[..8]}… LED registry check failed: {ex.Message}");
                     }
                 }
                 catch (Exception ex)
@@ -785,6 +789,11 @@ public sealed class ControlLoop : IDisposable
                         _appliedHubRgb.Remove(hub.SerialNumber);
                         _lastWrittenCorsairDuty = -1;
                         _log?.Invoke($"Link chain changed on hub {hub.SerialNumber[..8]}… — re-applying duties and colors");
+                    }
+
+                    if (hub.SyncLedRegistry(_log))
+                    {
+                        _appliedHubRgb.Remove(hub.SerialNumber);
                     }
                 }
 

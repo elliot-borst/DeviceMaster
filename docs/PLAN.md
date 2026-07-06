@@ -77,7 +77,7 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 - **Stage 3 — pump speed control**: ✅ shipped v5/v7 (independent pump duty slider,
   hard-floored at 50%, live coolant + pump RPM display).
 
-### Status snapshot (2026-07-06, v18 released)
+### Status snapshot (2026-07-06, v19 released)
 
 Desktop app (WPF, tray-resident, elevated, auto-updating whole-number releases via GitHub
 setup-exe assets) covers: fan curves/manual on Corsair + Lian Li + motherboard SuperIO
@@ -92,14 +92,17 @@ restore, SuperIO 7-header write + BIOS restore.
 v16 RGB verified by owner on every surface: Corsair (pump + connected fans), Lian Li,
 Aura ARGB headers, 4× RAM sticks, ASUS GPU (after the NvAPI block count-byte fix).
 
+Corsair dark-fan ROOT CAUSE (found via v18's 0x1E log dump): the hub persists a per-channel
+LED registry in flash that only vendor software rewrites; after chain re-arrangements it
+pointed at {2,3,13,15} while fans sat on {1,2,3,13,14,15} — ch1/ch14 never got color
+(ch14 = the observed dark fan between two lit ones). v19 syncs the registry to the
+enumerated chain + ResetLedPower, at hub open and every 30 s.
+
 **Outstanding, in priority order:**
-1. Corsair fans/RGB still not fully working (owner, post-v17): some channels no RPM, RGB
-   incomplete; a dark fan can sit BETWEEN two lit ones (junction theory disproved for
-   RGB). v18 logs the hub's own per-channel LED data (0x1E/0x1D) + chain map to
-   %LOCALAPPDATA%\DeviceMaster\logs\app.log at hub open, and tags fan rows with their
-   hub — diagnose from that log, then fix the LED/count mapping.
-2. Verify v17/v18 behaviour: snappy colors, no rainbow fallbacks, silent start + silent
-   auto-update, in-app Start-with-Windows toggle.
+1. Verify v19: all six connected Corsair fans light; snappy colors; no rainbow; silent
+   start + silent auto-update; Start-with-Windows toggle.
+2. Some Corsair channels still report no RPM — separate issue (tach lines / physical);
+   revisit once lighting is confirmed.
 3. Stage 4: pump/res LCD rendering (OpenLinkHub framing, 1024-byte HID chunks) →
    Stage 5: Turzx 8.8" via shared renderer + 11× SL V3 per-fan LCDs (JPEG over USB bulk,
    DES-CBC headers) → Stage 6: effects, per-device colors, curve editor, profiles.

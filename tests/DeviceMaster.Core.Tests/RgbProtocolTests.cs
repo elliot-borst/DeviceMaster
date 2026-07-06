@@ -98,6 +98,55 @@ public class LinkLedCatalogTests
         Assert.Equal(0, LinkDeviceCatalog.Find(model, variant)!.LedCount);
 }
 
+public class LinkLedRegistryTests
+{
+    /// <summary>0x1E payload captured from a live fan hub (fw 3.10.636) with a stale registry.</summary>
+    private static byte[] CapturedFanHubRegistry()
+    {
+        var packet = new byte[64];
+        Convert.FromHexString("000008000D00100000011901190000000000000000000119000119000000").CopyTo(packet, 0);
+        return packet;
+    }
+
+    [Fact]
+    public void ParseLedRegistry_DecodesLiveCapture()
+    {
+        var registry = LinkHubParser.ParseLedRegistry(CapturedFanHubRegistry());
+
+        // the hub believed LED devices lived on channels 2, 3, 13, 15 (all code 0x19) while
+        // the chain actually carried fans on 1, 2, 3, 13, 14, 15 — ch1/ch14 stayed dark
+        Assert.Equal(new Dictionary<int, byte> { [2] = 0x19, [3] = 0x19, [13] = 0x19, [15] = 0x19 }, registry);
+    }
+
+    [Fact]
+    public void ParseLedRegistry_PumpHubSingleDevice()
+    {
+        var packet = new byte[64];
+        Convert.FromHexString("000008000D000F000000000000000000000000000001110000").CopyTo(packet, 0);
+
+        var registry = LinkHubParser.ParseLedRegistry(packet);
+
+        Assert.Equal(new Dictionary<int, byte> { [14] = 0x11 }, registry);
+    }
+
+    [Fact]
+    public void CreateLedRegistryData_RoundTripsThroughParser()
+    {
+        var codes = new Dictionary<int, byte> { [1] = 0x19, [2] = 0x19, [3] = 0x19, [13] = 0x19, [14] = 0x19, [15] = 0x19 };
+
+        var data = LinkHubPackets.CreateLedRegistryData(maxChannel: 15, codes);
+
+        // wrap as a response payload: registry entries start at [7], count at [6]
+        var packet = new byte[7 + data.Length];
+        packet[6] = data[0];
+        data.AsSpan(1).CopyTo(packet.AsSpan(7));
+
+        Assert.Equal(16, data[0]);         // slots = max channel + 1
+        Assert.Equal(0x00, data[1]);       // channel 0 always empty
+        Assert.Equal(codes, LinkHubParser.ParseLedRegistry(packet));
+    }
+}
+
 public class LinkLedParsingTests
 {
     [Fact]

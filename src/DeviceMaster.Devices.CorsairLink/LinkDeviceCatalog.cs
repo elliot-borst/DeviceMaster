@@ -39,7 +39,12 @@ public enum LinkDeviceFlags
 /// the model has no addressable LEDs (or, for Commander Duo, a dynamic count the
 /// endpoint read supplies).
 /// </param>
-public sealed record LinkDeviceInfo(LinkDeviceModel Model, byte Variant, string Name, LinkDeviceFlags Flags, int LedCount = 0)
+/// <param name="LedCommandCode">
+/// The LED command code the hub's persisted registry (endpoint 0x1E) uses for this model.
+/// Only set for models where the code has been read back from real hardware — the registry
+/// rewrite never invents codes. 0 = unknown.
+/// </param>
+public sealed record LinkDeviceInfo(LinkDeviceModel Model, byte Variant, string Name, LinkDeviceFlags Flags, int LedCount = 0, byte LedCommandCode = 0)
 {
     /// <summary>
     /// Pump-bearing devices get the pump duty floor and are excluded from fan control.
@@ -71,7 +76,8 @@ public static class LinkDeviceCatalog
         new LinkDeviceInfo(LinkDeviceModel.FanRxSeries, 0x00, "RX Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed),
         new LinkDeviceInfo(LinkDeviceModel.FanRxRgbSeries, 0x00, "RX RGB Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed, LedCount: 8),
         new LinkDeviceInfo(LinkDeviceModel.FanRxMaxSeries, 0x00, "RX MAX Fan", LinkDeviceFlags.All),
-        new LinkDeviceInfo(LinkDeviceModel.FanRxMaxRgbSeries, 0x00, "RX MAX RGB Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed, LedCount: 8),
+        // LedCommandCode 0x19 read back from a live hub's LED registry (dev rig, fw 3.10.636)
+        new LinkDeviceInfo(LinkDeviceModel.FanRxMaxRgbSeries, 0x00, "RX MAX RGB Fan", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed, LedCount: 8, LedCommandCode: 0x19),
         new LinkDeviceInfo(LinkDeviceModel.PumpXd5Series, 0x00, "XD5", LinkDeviceFlags.All, LedCount: 22),
         new LinkDeviceInfo(LinkDeviceModel.PumpXd5Series, 0x01, "XD5 (white)", LinkDeviceFlags.All, LedCount: 22),
         // Verified on real hardware: the XD5 Elite LCD screen module enumerates as its own
@@ -85,7 +91,8 @@ public static class LinkDeviceCatalog
         new LinkDeviceInfo(LinkDeviceModel.LiquidCoolerTitanSeries, 0x04, "TITAN AIO", LinkDeviceFlags.All, LedCount: 20),
         new LinkDeviceInfo(LinkDeviceModel.LiquidCoolerTitanSeries, 0x05, "TITAN 360 RX RGB AIO (white)", LinkDeviceFlags.All, LedCount: 20),
         new LinkDeviceInfo(LinkDeviceModel.CapSwapModuleVrmFan, 0x00, "VRM Fan CapSwap Module", LinkDeviceFlags.ControlsSpeed | LinkDeviceFlags.ReportsSpeed),
-        new LinkDeviceInfo(LinkDeviceModel.PumpXd6Series, 0x00, "XD6", LinkDeviceFlags.All, LedCount: 22),
+        // LedCommandCode 0x11 read back from a live hub's LED registry (dev rig, fw 3.10.636)
+        new LinkDeviceInfo(LinkDeviceModel.PumpXd6Series, 0x00, "XD6", LinkDeviceFlags.All, LedCount: 22, LedCommandCode: 0x11),
         new LinkDeviceInfo(LinkDeviceModel.PumpXd6Series, 0x01, "XD6 (white)", LinkDeviceFlags.All, LedCount: 22),
         new LinkDeviceInfo(LinkDeviceModel.CommanderDuoSeries, 0x00, "COMMANDER DUO", LinkDeviceFlags.All),
         new LinkDeviceInfo(LinkDeviceModel.PsuHxiShiftSeries, 0x00, "HXi SHIFT PSU", LinkDeviceFlags.All),

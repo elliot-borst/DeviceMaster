@@ -394,6 +394,91 @@ public sealed class LinkHub : IDisposable
         }
     }
 
+    /// <summary>
+    /// The hub persists its LED registry (which channels carry an LED device, endpoint 0x1E)
+    /// in flash, and only vendor software ever rewrites it — re-arranging the chain leaves it
+    /// pointing at phantom channels, so color data never reaches the fans that moved.
+    /// This compares the registry against the enumerated chain and rewrites it when they
+    /// disagree, then pulses LED power (0x15 0x01) so the hub re-registers its devices.
+    /// Command codes come from the catalog or the hub's own current table — never invented;
+    /// channels whose code is unknown keep their existing entry.
+    /// Returns true when the registry was rewritten (colors must be re-applied).
+    /// </summary>
+    public bool SyncLedRegistry(Action<string>? log = null)
+    {
+        if (_channels.Count == 0)
+        {
+            return false;
+        }
+
+        IReadOnlyDictionary<int, byte> current;
+        lock (_ioLock)
+        {
+            current = LinkHubParser.ParseLedRegistry(ReadViaColorHandle(0x1E));
+        }
+
+        // codes we can trust: catalog first, then whatever the hub already uses for the model
+        var codeByModel = new Dictionary<byte, byte>();
+        foreach (var channel in _channels)
+        {
+            if (current.TryGetValue(channel.Channel, out var existing) && existing != 0)
+            {
+                codeByModel.TryAdd(channel.Model, existing);
+            }
+        }
+
+        var target = new Dictionary<int, byte>();
+        foreach (var channel in _channels)
+        {
+            if (channel.Info is not { LedCount: > 0 } info)
+            {
+                continue;
+            }
+
+            if (info.LedCommandCode != 0)
+            {
+                target[channel.Channel] = info.LedCommandCode;
+            }
+            else if (codeByModel.TryGetValue(channel.Model, out var learned))
+            {
+                target[channel.Channel] = learned;
+            }
+            else if (current.TryGetValue(channel.Channel, out var existing))
+            {
+                target[channel.Channel] = existing; // keep what's there rather than guess
+            }
+            else
+            {
+                log?.Invoke($"hub {SerialNumber[..8]}… ch{channel.Channel} ({channel.Name}): no known LED command code — leaving the registry slot empty");
+            }
+        }
+
+        if (target.Count == current.Count && target.All(kv => current.TryGetValue(kv.Key, out var c) && c == kv.Value))
+        {
+            return false; // registry already matches the chain
+        }
+
+        var maxChannel = Math.Max(
+            _channels.Max(c => c.Channel),
+            current.Keys.DefaultIfEmpty(0).Max());
+        log?.Invoke($"hub {SerialNumber[..8]}… LED registry stale: hub has [{Describe(current)}], chain needs [{Describe(target)}] — rewriting");
+
+        lock (_ioLock)
+        {
+            WriteEndpoint(
+                [0x1E],
+                LinkHubProtocol.DataTypes.LedRegistry,
+                LinkHubPackets.CreateLedRegistryData(maxChannel, target));
+            SendCommand(LinkHubProtocol.Commands.ResetLedPower);
+        }
+
+        _colorReady = false; // LED map changed — rebuild the color path on the next apply
+        return true;
+
+        static string Describe(IReadOnlyDictionary<int, byte> registry) =>
+            string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
+    }
+
     private byte[] ReadViaColorHandle(byte endpoint)
     {
         // open (0x0d 0x00 + endpoint) → read (0x08 0x00) → close (0x05 0x01); responses to

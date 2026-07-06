@@ -44,6 +44,31 @@ public static class LinkHubPackets
     }
 
     /// <summary>
+    /// Builds the LED registry data block (endpoint 0x1E, data type 0x0D 0x00):
+    /// [0]=slot count (max channel + 1), then per channel 0..max — channel 0 always empty —
+    /// 0x00 for no LED device or 0x01 followed by the device's LED command code.
+    /// Mirrors OpenLinkHub's UpdateExternalAdapter write (its buffer[1]=0x00 is channel 0).
+    /// </summary>
+    public static byte[] CreateLedRegistryData(int maxChannel, IReadOnlyDictionary<int, byte> codes)
+    {
+        var data = new List<byte> { (byte)(maxChannel + 1) };
+        for (var channel = 0; channel <= maxChannel; channel++)
+        {
+            if (codes.TryGetValue(channel, out var code))
+            {
+                data.Add(0x01);
+                data.Add(code);
+            }
+            else
+            {
+                data.Add(0x00);
+            }
+        }
+
+        return [.. data];
+    }
+
+    /// <summary>
     /// Builds the fixed-percent speed data block:
     /// [0]=channel count, then per channel [id, 0x00, percent, 0x00].
     /// Duties must already be safety-clamped by the caller — this is a dumb serializer.

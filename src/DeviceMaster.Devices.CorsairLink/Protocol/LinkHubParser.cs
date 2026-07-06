@@ -133,6 +133,34 @@ public static class LinkHubParser
         return counts;
     }
 
+    /// <summary>
+    /// Parses the hub's LED registry (endpoint 0x1E via the color handle): [6]=slot count
+    /// (max channel + 1), then per channel — 0-based, channel 0 always empty — either
+    /// 0x00 (no LED device) or 0x01 followed by the device's LED command code.
+    /// This table is persisted in hub flash and only rewritten by vendor software; it goes
+    /// stale when the chain is re-arranged, leaving LEDs mapped to phantom channels.
+    /// </summary>
+    public static IReadOnlyDictionary<int, byte> ParseLedRegistry(ReadOnlySpan<byte> packet)
+    {
+        var registry = new Dictionary<int, byte>();
+        int slots = packet[6];
+        var offset = 7;
+        for (var channel = 0; channel < slots && offset < packet.Length; channel++)
+        {
+            if (packet[offset] == 0x01 && offset + 1 < packet.Length)
+            {
+                registry[channel] = packet[offset + 1];
+                offset += 2;
+            }
+            else
+            {
+                offset += 1;
+            }
+        }
+
+        return registry;
+    }
+
     /// <summary>Parses the GetTemperatures payload: [6]=sensor count, then per sensor [status, temp*10 int16le].</summary>
     public static IReadOnlyList<LinkTemperatureReading> ParseTemperatures(ReadOnlySpan<byte> packet)
     {

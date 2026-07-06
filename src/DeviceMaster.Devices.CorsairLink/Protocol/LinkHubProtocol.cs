@@ -30,6 +30,9 @@ public static class LinkHubProtocol
         public static ReadOnlySpan<byte> OpenColorEndpoint => new byte[] { 0x0d, 0x00 };
         public static ReadOnlySpan<byte> WriteColor => new byte[] { 0x06, 0x00 };
         public static ReadOnlySpan<byte> WriteColorNext => new byte[] { 0x07, 0x00 };
+
+        /// <summary>Re-registers LED devices after the registry (0x1E) is rewritten.</summary>
+        public static ReadOnlySpan<byte> ResetLedPower => new byte[] { 0x15, 0x01 };
     }
 
     public static class Endpoints
@@ -49,6 +52,9 @@ public static class LinkHubProtocol
         public static ReadOnlySpan<byte> SoftwareSpeedFixedPercent => new byte[] { 0x07, 0x00 };
         public static ReadOnlySpan<byte> SubDevices => new byte[] { 0x21, 0x00 };
         public static ReadOnlySpan<byte> SetColor => new byte[] { 0x12, 0x00 };
+
+        /// <summary>LED registry writes (endpoint 0x1E) — OpenLinkHub's dataTypeCommandMode.</summary>
+        public static ReadOnlySpan<byte> LedRegistry => new byte[] { 0x0d, 0x00 };
     }
 
     public static class ResponseStatus
