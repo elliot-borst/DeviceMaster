@@ -41,9 +41,12 @@ public sealed class ControlSettings
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public static string ConfigPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DeviceMaster", "config.json");
+    public static string ConfigPath =>
+        Environment.GetEnvironmentVariable("DEVICEMASTER_CONFIG") is { Length: > 0 } overridePath
+            ? overridePath
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "DeviceMaster", "config.json");
 
     public static ControlSettings Load()
     {

@@ -3,14 +3,16 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DeviceMaster.Control;
-using WinForms = System.Windows.Forms;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
 using DeviceMaster.Core.Updating;
+using WinForms = System.Windows.Forms;
 
 namespace DeviceMaster.Ui;
 
@@ -22,36 +24,39 @@ public sealed class MainWindow : Window
 
     public const string VersionDate = "2026-07-06";
 
-    private static readonly Brush Bg = Solid(0x0F, 0x11, 0x15);
-    private static readonly Brush Card = Solid(0x18, 0x1B, 0x21);
-    private static readonly Brush Fg = Solid(0xE6, 0xE9, 0xEE);
-    private static readonly Brush Dim = Solid(0x96, 0x9C, 0xA5);
-    private static readonly Brush Accent = Solid(0x56, 0x9C, 0xFF);
-    private static readonly Brush Good = Solid(0x3F, 0xB9, 0x50);
-    private static readonly Brush Warn = Solid(0xF0, 0xB4, 0x3C);
+    private readonly ControlSettings _controlSettings = ControlSettings.Load();
+    private ControlLoop? _loop;
+    private bool _uiReady;
 
-    private readonly TextBlock _status = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), Margin = new Thickness(2, 10, 2, 0) };
-    private readonly TextBlock _deviceSummary = new() { FontSize = 13, Foreground = Solid(0xE6, 0xE9, 0xEE), TextWrapping = TextWrapping.Wrap, LineHeight = 24 };
-    private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Solid(0xF0, 0xB4, 0x3C), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
-
-    private Button _checkButton = null!;
-    private Button _refreshButton = null!;
+    // header / updater
+    private Border _checkButton = null!;
     private StackPanel _updateNotice = null!;
     private TextBlock _updateNoticeText = null!;
     private UpdateInfo? _pendingUpdate;
+    private readonly TextBlock _status = new() { FontSize = 12, Foreground = Theme.Faint, Margin = new Thickness(4, 12, 4, 0) };
 
-    private readonly ControlSettings _controlSettings = ControlSettings.Load();
-    private ControlLoop? _loop;
-    private ComboBox _modeBox = null!;
-    private ComboBox _sourceBox = null!;
-    private Slider _dutySlider = null!;
+    // fan control card
+    private DmDropdown _modeDrop = null!;
+    private DmDropdown _sourceDrop = null!;
+    private DmSlider _dutySlider = null!;
     private TextBlock _dutyLabel = null!;
-    private Slider _pumpSlider = null!;
+    private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
+    private readonly StackPanel _fanRows = new();
+    private Border _fanDot = null!;
+    private TextBlock _fanBadge = null!;
+
+    // pump card
+    private DmSlider _pumpSlider = null!;
     private TextBlock _pumpLabel = null!;
-    private readonly TextBlock _pumpStatus = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20, Margin = new Thickness(0, 10, 0, 0) };
-    private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Solid(0xE6, 0xE9, 0xEE), Margin = new Thickness(0, 12, 0, 4) };
-    private readonly TextBlock _controlDevices = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
-    private bool _uiReady;
+    private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
+    private readonly StackPanel _pumpRows = new();
+
+    // hardware card
+    private readonly StackPanel _hardwareRows = new();
+    private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
+    private Border _rescanButton = null!;
+
+    // tray
     private WinForms.NotifyIcon? _trayIcon;
     private bool _exitRequested;
     private bool _trayHintShown;
@@ -59,11 +64,11 @@ public sealed class MainWindow : Window
     public MainWindow()
     {
         Title = $"DeviceMaster v{AppVersion}";
-        Width = 840;
-        Height = 680;
-        MinWidth = 840;  // below this the header/controls clip
-        MinHeight = 600;
-        Background = Bg;
+        Width = 1000;
+        Height = 760;
+        MinWidth = 940;
+        MinHeight = 620;
+        Background = Theme.Bg;
         Content = BuildLayout();
         _uiReady = true;
 
@@ -81,17 +86,230 @@ public sealed class MainWindow : Window
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
         });
+
+        SourceInitialized += (_, _) =>
+        {
+            // dark title bar to match the theme
+            var dark = 1;
+            _ = DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, 20, ref dark, sizeof(int));
+        };
     }
 
-    // ---- system tray ----
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    // ---------- layout ----------
+
+    private UIElement BuildLayout()
+    {
+        var root = new DockPanel { Margin = new Thickness(24, 20, 24, 16) };
+
+        // ---- header ----
+        var header = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 0, 0, 20) };
+
+        var logo = new Border
+        {
+            Width = 46,
+            Height = 46,
+            CornerRadius = new CornerRadius(12),
+            Background = Theme.Card2,
+            BorderBrush = Theme.Line2,
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = BuildLogoGlyph(),
+        };
+        DockPanel.SetDock(logo, Dock.Left);
+        header.Children.Add(logo);
+
+        var titles = new StackPanel { Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        titles.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 21, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
+        titles.Children.Add(new TextBlock { Text = "PC cooling & RGB toolkit", FontSize = 11.5, Foreground = Theme.Faint });
+        DockPanel.SetDock(titles, Dock.Left);
+        header.Children.Add(titles);
+
+        var versionBox = new Border
+        {
+            Margin = new Thickness(26, 0, 0, 0),
+            Padding = new Thickness(16, 9, 16, 9),
+            CornerRadius = new CornerRadius(12),
+            Background = Theme.Card,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var versionStack = new StackPanel();
+        versionStack.Children.Add(new TextBlock { Text = $"Version {AppVersion}", Foreground = Theme.Accent2, FontSize = 13, FontWeight = FontWeights.SemiBold });
+        versionStack.Children.Add(new TextBlock { Text = $"Released {VersionDate}", Foreground = Theme.Faint, FontSize = 11 });
+        versionBox.Child = versionStack;
+        DockPanel.SetDock(versionBox, Dock.Left);
+        header.Children.Add(versionBox);
+
+        _checkButton = Theme.Btn("↻  Check for updates", primary: false, () => _ = CheckForUpdatesAsync(auto: false));
+        DockPanel.SetDock(_checkButton, Dock.Right);
+        header.Children.Add(_checkButton);
+
+        _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
+        _updateNotice.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(5), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+        _updateNoticeText = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
+        _updateNotice.Children.Add(_updateNoticeText);
+        var install = Theme.Btn("↓  Download & install", primary: true, () => _ = StartUpdateAsync());
+        install.Margin = new Thickness(14, 0, 0, 0);
+        _updateNotice.Children.Add(install);
+        var later = Theme.Btn("Later", primary: false, DismissUpdateNotice);
+        later.Margin = new Thickness(8, 0, 0, 0);
+        _updateNotice.Children.Add(later);
+        DockPanel.SetDock(_updateNotice, Dock.Right);
+        header.Children.Add(_updateNotice);
+
+        DockPanel.SetDock(header, Dock.Top);
+        root.Children.Add(header);
+
+        DockPanel.SetDock(_status, Dock.Bottom);
+        root.Children.Add(_status);
+
+        // ---- two-column card grid ----
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var leftColumn = new StackPanel { Margin = new Thickness(0, 0, 9, 0) };
+        leftColumn.Children.Add(BuildFanCard());
+        var pumpCard = BuildPumpCard();
+        pumpCard.Margin = new Thickness(0, 16, 0, 0);
+        leftColumn.Children.Add(pumpCard);
+        Grid.SetColumn(leftColumn, 0);
+        grid.Children.Add(leftColumn);
+
+        var rightColumn = new StackPanel { Margin = new Thickness(9, 0, 0, 0) };
+        rightColumn.Children.Add(BuildHardwareCard());
+        Grid.SetColumn(rightColumn, 1);
+        grid.Children.Add(rightColumn);
+
+        root.Children.Add(new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        return root;
+    }
+
+    private UIElement BuildLogoGlyph()
+    {
+        try
+        {
+            using var icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
+            if (icon is not null)
+            {
+                var source = Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty,
+                    BitmapSizeOptions.FromWidthAndHeight(30, 30));
+                return new Image { Source = source, Width = 30, Height = 30, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            }
+        }
+        catch
+        {
+            // fall through to the glyph
+        }
+
+        return new TextBlock { Text = "✻", FontSize = 22, Foreground = Theme.AccentGrad(), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    private Border BuildFanCard()
+    {
+        var card = Theme.CardShell("✻", "Fan control", "curves & manual duty · both ecosystems", out var body, out var head);
+        var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
+        badge.VerticalAlignment = VerticalAlignment.Top;
+        DockPanel.SetDock(badge, Dock.Right);
+        head.Children.Add(badge);
+
+        var controls = new WrapPanel { Orientation = Orientation.Horizontal };
+
+        _modeDrop = new DmDropdown(Enum.GetNames<ControlMode>(), (int)_controlSettings.Mode, 104);
+        _modeDrop.SelectionChanged += _ => OnControlSettingChanged();
+        controls.Children.Add(LabelledInline("Mode", _modeDrop));
+
+        _sourceDrop = new DmDropdown(Enum.GetNames<CurveSource>(), (int)_controlSettings.Source, 104);
+        _sourceDrop.SelectionChanged += _ => OnControlSettingChanged();
+        controls.Children.Add(LabelledInline("Curve source", _sourceDrop));
+
+        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 170);
+        _dutySlider.ValueChanged += _ => OnControlSettingChanged();
+        _dutyLabel = new TextBlock { Text = $"{_controlSettings.ManualDutyPercent}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
+        var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        dutyRow.Children.Add(_dutySlider);
+        dutyRow.Children.Add(_dutyLabel);
+        controls.Children.Add(LabelledInline("Manual duty", dutyRow));
+
+        body.Children.Add(controls);
+        body.Children.Add(_controlStatus);
+        body.Children.Add(_fanRows);
+        return card;
+    }
+
+    private Border BuildPumpCard()
+    {
+        var card = Theme.CardShell("≋", "Pump", "independent duty · never below 50%", out var body, out _);
+
+        var controls = new WrapPanel { Orientation = Orientation.Horizontal };
+        _pumpSlider = new DmSlider(50, 100, Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100), 200);
+        _pumpSlider.ValueChanged += _ => OnControlSettingChanged();
+        _pumpLabel = new TextBlock { Text = $"{Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100)}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
+        var pumpRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        pumpRow.Children.Add(_pumpSlider);
+        pumpRow.Children.Add(_pumpLabel);
+        controls.Children.Add(LabelledInline("Pump duty", pumpRow));
+
+        body.Children.Add(controls);
+        body.Children.Add(_pumpCoolant);
+        body.Children.Add(_pumpRows);
+        return card;
+    }
+
+    private Border BuildHardwareCard()
+    {
+        var card = Theme.CardShell("⚙", "Detected hardware", "every device with its unique id", out var body, out var head);
+        _rescanButton = Theme.Btn("↻  Rescan", primary: false, () => _ = RefreshDevicesAsync());
+        DockPanel.SetDock(_rescanButton, Dock.Right);
+        head.Children.Add(_rescanButton);
+        body.Children.Add(_hardwareRows);
+        body.Children.Add(_conflictSummary);
+        return card;
+    }
+
+    private static StackPanel LabelledInline(string label, UIElement element)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 20, 8), VerticalAlignment = VerticalAlignment.Center };
+        panel.Children.Add(Theme.SmallLabel(label));
+        panel.Children.Add(element);
+        return panel;
+    }
+
+    private static Border DeviceRow(string name, string? id, string value, Brush valueBrush)
+    {
+        var row = new DockPanel { LastChildFill = false };
+        var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(new TextBlock { Text = name, Foreground = Theme.Text, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center });
+        if (id is { Length: > 0 })
+        {
+            left.Children.Add(new TextBlock
+            {
+                Text = id,
+                Foreground = Theme.Faint,
+                FontFamily = Theme.Mono,
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(9, 1, 0, 0),
+            });
+        }
+
+        DockPanel.SetDock(left, Dock.Left);
+        row.Children.Add(left);
+        var right = new TextBlock { Text = value, Foreground = valueBrush, FontSize = 12.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(right, Dock.Right);
+        row.Children.Add(right);
+        return Theme.InsetRow(row);
+    }
+
+    // ---------- system tray ----------
 
     private void CreateTrayIcon()
     {
-        _trayIcon = new WinForms.NotifyIcon
-        {
-            Text = "DeviceMaster",
-            Visible = true,
-        };
+        _trayIcon = new WinForms.NotifyIcon { Text = "DeviceMaster", Visible = true };
         try
         {
             _trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
@@ -159,280 +377,88 @@ public sealed class MainWindow : Window
         Application.Current.Shutdown();
     }
 
-    private UIElement BuildLayout()
+    // ---------- device scan ----------
+
+    private async Task RefreshDevicesAsync()
     {
-        var root = new DockPanel { Margin = new Thickness(20) };
-
-        // ---- header: name + version on the left, update controls on the right ----
-        var header = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 0, 0, 16) };
-
-        var titleBlock = new StackPanel();
-        titleBlock.Children.Add(new TextBlock
+        _rescanButton.IsHitTestVisible = false;
+        _rescanButton.Opacity = 0.5;
+        try
         {
-            Text = "DeviceMaster",
-            FontSize = 24,
-            FontWeight = FontWeights.Bold,
-            Foreground = Fg,
-        });
-        var versionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(1, 4, 0, 0) };
-        versionRow.Children.Add(new TextBlock
-        {
-            Text = $"Version {AppVersion}",
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Accent,
-        });
-        versionRow.Children.Add(new TextBlock
-        {
-            Text = $"   released {VersionDate}",
-            FontSize = 12,
-            Foreground = Dim,
-            VerticalAlignment = VerticalAlignment.Bottom,
-        });
-        titleBlock.Children.Add(versionRow);
-        DockPanel.SetDock(titleBlock, Dock.Left);
-        header.Children.Add(titleBlock);
+            var (scan, conflicts) = await Task.Run(() =>
+                (DeviceScanner.ScanAll(), ConflictingSoftwareChecker.FindConflicts()));
 
-        _checkButton = MakeButton("↻  Check for updates", primary: false);
-        _checkButton.Click += async (_, _) => await CheckForUpdatesAsync(auto: false);
-        _checkButton.VerticalAlignment = VerticalAlignment.Center;
-        DockPanel.SetDock(_checkButton, Dock.Right);
-        header.Children.Add(_checkButton);
+            _hardwareRows.Children.Clear();
 
-        // inline "update available" notice — replaces the check button when an update is pending
-        _updateNotice = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Visibility = Visibility.Collapsed,
-        };
-        _updateNotice.Children.Add(new Border
-        {
-            Width = 9,
-            Height = 9,
-            CornerRadius = new CornerRadius(5),
-            Background = Good,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 0),
-        });
-        _updateNoticeText = new TextBlock
-        {
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Fg,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        _updateNotice.Children.Add(_updateNoticeText);
-        var install = MakeButton("↓  Download && install", primary: true);
-        install.Margin = new Thickness(14, 0, 0, 0);
-        install.Click += async (_, _) => await StartUpdateAsync();
-        _updateNotice.Children.Add(install);
-        var later = MakeButton("Later", primary: false);
-        later.Margin = new Thickness(8, 0, 0, 0);
-        later.Click += (_, _) => DismissUpdateNotice();
-        _updateNotice.Children.Add(later);
-        DockPanel.SetDock(_updateNotice, Dock.Right);
-        header.Children.Add(_updateNotice);
+            foreach (var hub in scan.HidDevices
+                .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
+                .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
+            {
+                _hardwareRows.Children.Add(DeviceRow("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", Theme.Dim));
+            }
 
-        DockPanel.SetDock(header, Dock.Top);
-        root.Children.Add(header);
+            foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
+            {
+                _hardwareRows.Children.Add(DeviceRow("Corsair pump/res LCD", lcd.SerialNumber, "HID", Theme.Dim));
+            }
 
-        // ---- fan control card ----
-        var controlCard = new Border
-        {
-            Background = Card,
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(18),
-            Margin = new Thickness(0, 0, 0, 14),
-        };
-        var controlPanel = new StackPanel();
+            foreach (var dongle in scan.UsbTree
+                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
+                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3Controller)
+                .OrderBy(n => n.UsbId!.Value.Pid))
+            {
+                var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX · control" : "RX · telemetry";
+                _hardwareRows.Children.Add(DeviceRow($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB", Theme.Dim));
+            }
 
-        var controlRow = new WrapPanel { Orientation = Orientation.Horizontal };
-        controlRow.Children.Add(new TextBlock
-        {
-            Text = "Fan control",
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Fg,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 18, 0),
-        });
+            var fanNodes = scan.UsbTree
+                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
+                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3FanNode)
+                .Select(n => n.PnpInstanceId.Split('\\').LastOrDefault() ?? "?")
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToList();
+            for (var i = 0; i < fanNodes.Count; i++)
+            {
+                _hardwareRows.Children.Add(DeviceRow($"Lian Li SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", Theme.Dim));
+            }
 
-        _modeBox = MakeCombo(Enum.GetNames<ControlMode>());
-        _modeBox.SelectedIndex = (int)_controlSettings.Mode;
-        _modeBox.SelectionChanged += (_, _) => OnControlSettingChanged();
-        controlRow.Children.Add(Labelled("Mode", _modeBox));
+            foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
+            {
+                _hardwareRows.Children.Add(DeviceRow("Turzx/Turing screen", screen.SerialHint, screen.ComPort, Theme.Accent2));
+            }
 
-        _sourceBox = MakeCombo(Enum.GetNames<CurveSource>());
-        _sourceBox.SelectedIndex = (int)_controlSettings.Source;
-        _sourceBox.SelectionChanged += (_, _) => OnControlSettingChanged();
-        controlRow.Children.Add(Labelled("Curve source", _sourceBox));
+            if (_hardwareRows.Children.Count == 0)
+            {
+                _hardwareRows.Children.Add(new TextBlock { Text = "No supported devices found.", Foreground = Theme.Dim, FontSize = 12.5 });
+            }
 
-        _dutySlider = new Slider
-        {
-            Minimum = 0,
-            Maximum = 100,
-            Value = _controlSettings.ManualDutyPercent,
-            Width = 180,
-            IsSnapToTickEnabled = true,
-            TickFrequency = 5,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        _dutySlider.ValueChanged += (_, _) => OnControlSettingChanged();
-        _dutyLabel = new TextBlock
-        {
-            Text = $"{_controlSettings.ManualDutyPercent}%",
-            FontSize = 13,
-            Foreground = Fg,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0),
-            MinWidth = 38,
-        };
-        var sliderRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        sliderRow.Children.Add(_dutySlider);
-        sliderRow.Children.Add(_dutyLabel);
-        controlRow.Children.Add(Labelled("Manual duty", sliderRow));
-
-        controlPanel.Children.Add(controlRow);
-        controlPanel.Children.Add(_controlStatus);
-        controlPanel.Children.Add(_controlDevices);
-        controlCard.Child = controlPanel;
-        DockPanel.SetDock(controlCard, Dock.Top);
-        root.Children.Add(controlCard);
-
-        // ---- pump card (separate from fans by design: its own duty, never below 50%) ----
-        var pumpCard = new Border
-        {
-            Background = Card,
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(18),
-            Margin = new Thickness(0, 0, 0, 14),
-        };
-        var pumpPanel = new StackPanel();
-        var pumpRow = new WrapPanel { Orientation = Orientation.Horizontal };
-        pumpRow.Children.Add(new TextBlock
-        {
-            Text = "Pump",
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Fg,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 18, 0),
-        });
-        _pumpSlider = new Slider
-        {
-            Minimum = 50, // hard safety floor — the write layer clamps to this too
-            Maximum = 100,
-            Value = Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100),
-            Width = 180,
-            IsSnapToTickEnabled = true,
-            TickFrequency = 5,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        _pumpSlider.ValueChanged += (_, _) => OnControlSettingChanged();
-        _pumpLabel = new TextBlock
-        {
-            Text = $"{Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100)}%",
-            FontSize = 13,
-            Foreground = Fg,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0),
-            MinWidth = 38,
-        };
-        var pumpSliderRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        pumpSliderRow.Children.Add(_pumpSlider);
-        pumpSliderRow.Children.Add(_pumpLabel);
-        pumpRow.Children.Add(Labelled("Pump duty", pumpSliderRow));
-        pumpPanel.Children.Add(pumpRow);
-        pumpPanel.Children.Add(_pumpStatus);
-        pumpCard.Child = pumpPanel;
-        DockPanel.SetDock(pumpCard, Dock.Top);
-        root.Children.Add(pumpCard);
-
-        // ---- status bar at the bottom ----
-        DockPanel.SetDock(_status, Dock.Bottom);
-        root.Children.Add(_status);
-
-        // ---- device card ----
-        var card = new Border
-        {
-            Background = Card,
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(18),
-        };
-        var cardContent = new DockPanel();
-
-        var cardHeader = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 0, 0, 12) };
-        var cardTitle = new TextBlock
-        {
-            Text = "Detected hardware",
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Fg,
-        };
-        DockPanel.SetDock(cardTitle, Dock.Left);
-        cardHeader.Children.Add(cardTitle);
-        _refreshButton = MakeButton("↻  Rescan", primary: false);
-        _refreshButton.Click += async (_, _) => await RefreshDevicesAsync();
-        DockPanel.SetDock(_refreshButton, Dock.Right);
-        cardHeader.Children.Add(_refreshButton);
-        DockPanel.SetDock(cardHeader, Dock.Top);
-        cardContent.Children.Add(cardHeader);
-
-        DockPanel.SetDock(_conflictSummary, Dock.Bottom);
-        cardContent.Children.Add(_conflictSummary);
-        cardContent.Children.Add(new ScrollViewer
-        {
-            Content = _deviceSummary,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        });
-
-        card.Child = cardContent;
-        root.Children.Add(card);
-        return root;
-    }
-
-    private static Button MakeButton(string label, bool primary) => new()
-    {
-        Content = label,
-        Padding = new Thickness(14, 7, 14, 7),
-        FontSize = 13,
-        FontWeight = primary ? FontWeights.SemiBold : FontWeights.Normal,
-        Foreground = primary ? Solid(0x10, 0x12, 0x16) : Fg,
-        Background = primary ? Accent : Solid(0x24, 0x28, 0x30),
-        BorderThickness = new Thickness(0),
-        Cursor = System.Windows.Input.Cursors.Hand,
-    };
-
-    private static SolidColorBrush Solid(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
-
-    private static ComboBox MakeCombo(IEnumerable<string> items)
-    {
-        var box = new ComboBox { MinWidth = 96, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var item in items)
-        {
-            box.Items.Add(item);
+            if (conflicts.Count > 0)
+            {
+                _conflictSummary.Text = "⚠  Vendor software is running and may fight over devices: "
+                    + string.Join(", ", conflicts.Select(c => c.Name).Distinct());
+                _conflictSummary.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                _conflictSummary.Visibility = Visibility.Collapsed;
+            }
         }
-
-        return box;
-    }
-
-    private static StackPanel Labelled(string label, UIElement element)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 22, 0), VerticalAlignment = VerticalAlignment.Center };
-        panel.Children.Add(new TextBlock
+        catch (Exception ex)
         {
-            Text = label,
-            FontSize = 12,
-            Foreground = Solid(0x96, 0x9C, 0xA5),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0),
-        });
-        panel.Children.Add(element);
-        return panel;
+            _hardwareRows.Children.Clear();
+            _hardwareRows.Children.Add(new TextBlock { Text = $"Scan failed: {ex.Message}", Foreground = Theme.Danger, FontSize = 12.5, TextWrapping = TextWrapping.Wrap });
+        }
+        finally
+        {
+            _rescanButton.IsHitTestVisible = true;
+            _rescanButton.Opacity = 1.0;
+        }
     }
 
-    // ---- fan control wiring ----
+    private static string? Shorten(string? id) =>
+        id is { Length: > 14 } ? id[..14] + "…" : id;
+
+    // ---------- fan control wiring ----------
 
     private void OnControlSettingChanged()
     {
@@ -441,8 +467,8 @@ public sealed class MainWindow : Window
             return;
         }
 
-        _controlSettings.Mode = (ControlMode)Math.Max(_modeBox.SelectedIndex, 0);
-        _controlSettings.Source = (CurveSource)Math.Max(_sourceBox.SelectedIndex, 0);
+        _controlSettings.Mode = (ControlMode)_modeDrop.SelectedIndex;
+        _controlSettings.Source = (CurveSource)_sourceDrop.SelectedIndex;
         _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
         _controlSettings.PumpDutyPercent = (int)Math.Round(_pumpSlider.Value);
         _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
@@ -462,9 +488,10 @@ public sealed class MainWindow : Window
 
     private void ApplyControlState()
     {
-        _dutySlider.IsEnabled = _controlSettings.Mode == ControlMode.Manual;
-        _sourceBox.IsEnabled = _controlSettings.Mode == ControlMode.Curve;
-        _pumpSlider.IsEnabled = _controlSettings.Mode != ControlMode.Off;
+        _dutySlider.Enabled = _controlSettings.Mode == ControlMode.Manual;
+        _sourceDrop.IsHitTestVisible = _controlSettings.Mode == ControlMode.Curve;
+        _sourceDrop.Opacity = _controlSettings.Mode == ControlMode.Curve ? 1.0 : 0.45;
+        _pumpSlider.Enabled = _controlSettings.Mode != ControlMode.Off;
 
         if (_controlSettings.Mode == ControlMode.Off)
         {
@@ -495,52 +522,59 @@ public sealed class MainWindow : Window
         var status = _loop?.Status;
         if (status is null || !status.Running)
         {
+            SetBadge("Off", Theme.Faint);
             _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
-            _controlStatus.Foreground = Dim;
-            _controlDevices.Text = "";
-            _pumpStatus.Text = "Control off — the pump follows the hub's own behaviour.";
+            _controlStatus.Foreground = Theme.Dim;
+            _fanRows.Children.Clear();
+            _pumpCoolant.Text = "Control off — the pump follows the hub's own behaviour.";
+            _pumpCoolant.Foreground = Theme.Dim;
+            _pumpRows.Children.Clear();
             return;
         }
 
         var temp = status.SourceTemperatureC is { } t ? $"{t:F1} °C" : "—";
-        _controlStatus.Text = status.FailsafeActive
-            ? $"FAILSAFE: {status.SourceName} unavailable — all fans at 100%"
-            : status.Mode == ControlMode.Manual
-                ? $"Manual: all fans at {status.TargetDutyPercent}%"
+        if (status.FailsafeActive)
+        {
+            SetBadge("FAILSAFE", Theme.Danger);
+            _controlStatus.Text = $"{status.SourceName} unavailable — all fans at 100%";
+            _controlStatus.Foreground = Theme.Warn;
+        }
+        else
+        {
+            SetBadge("Running", Theme.Good);
+            _controlStatus.Text = status.Mode == ControlMode.Manual
+                ? $"Manual — all fans at {status.TargetDutyPercent}%"
                 : $"{status.SourceName} {temp}  →  fans {status.TargetDutyPercent}%";
-        _controlStatus.Foreground = status.FailsafeActive ? Warn : Fg;
+            _controlStatus.Foreground = Theme.Text;
+        }
 
-        var lines = new List<string>();
+        _fanRows.Children.Clear();
         foreach (var device in status.Devices.Where(d => !d.IsPump))
         {
-            var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
-            var id = device.Id is { Length: > 0 } fullId
-                ? $"  ·  id {(fullId.Length > 8 ? "…" + fullId[^8..] : fullId)}"
-                : "";
-            lines.Add($"{device.Family} · {device.Name}: {rpm} @ {device.AppliedDutyPercent}%{id}");
+            var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm";
+            var brush = device.Rpm is null ? Theme.Faint : Theme.Accent2;
+            _fanRows.Children.Add(DeviceRow($"{device.Family} · {device.Name}", ShortId(device.Id), $"{rpm} @ {device.AppliedDutyPercent}%", brush));
         }
 
-        lines.AddRange(status.Warnings.Select(w => "⚠ " + w));
-        _controlDevices.Text = string.Join(Environment.NewLine, lines);
-
-        var pumpLines = new List<string>();
-        if (status.CoolantTemperatureC is { } coolant)
+        foreach (var warning in status.Warnings)
         {
-            pumpLines.Add($"Coolant {coolant:F1} °C");
+            _fanRows.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 4) });
         }
 
+        _pumpCoolant.Text = status.CoolantTemperatureC is { } coolant ? $"Coolant {coolant:F1} °C" : "Coolant temperature unavailable";
+        _pumpCoolant.Foreground = status.CoolantTemperatureC is null ? Theme.Dim : Theme.Text;
+
+        _pumpRows.Children.Clear();
         foreach (var pump in status.Devices.Where(d => d.IsPump))
         {
-            var rpm = pump.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
-            pumpLines.Add($"{pump.Family} · {pump.Name}: {rpm} @ {pump.AppliedDutyPercent}%");
+            var rpm = pump.Rpm is { } r ? $"{r} rpm" : "no rpm";
+            _pumpRows.Children.Add(DeviceRow($"{pump.Family} · {pump.Name}", ShortId(pump.Id), $"{rpm} @ {pump.AppliedDutyPercent}%", Theme.Accent2));
         }
 
-        if (pumpLines.Count == 0)
+        if (_pumpRows.Children.Count == 0)
         {
-            pumpLines.Add("No pump detected on the Link chain.");
+            _pumpRows.Children.Add(new TextBlock { Text = "No pump detected on the Link chain.", Foreground = Theme.Dim, FontSize = 12.5 });
         }
-
-        _pumpStatus.Text = string.Join(Environment.NewLine, pumpLines);
 
         if (_trayIcon is not null)
         {
@@ -551,103 +585,31 @@ public sealed class MainWindow : Window
         }
     }
 
-    // ---- device scan ----
+    private static string? ShortId(string? id) =>
+        id is { Length: > 8 } ? "…" + id[^8..] : id;
 
-    private async Task RefreshDevicesAsync()
+    private void SetBadge(string text, Brush color)
     {
-        _refreshButton.IsEnabled = false;
-        _deviceSummary.Text = "Scanning…";
-        try
-        {
-            var (scan, conflicts) = await Task.Run(() =>
-                (DeviceScanner.ScanAll(), ConflictingSoftwareChecker.FindConflicts()));
-
-            // one line per physical device, each with its unique id
-            var lines = new List<string>();
-
-            foreach (var hub in scan.HidDevices
-                .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
-                .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
-            {
-                lines.Add($"Corsair iCUE LINK hub  ·  serial {hub.SerialNumber ?? "?"}");
-            }
-
-            foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
-            {
-                lines.Add($"Corsair pump/res LCD ({lcd.Name})  ·  serial {lcd.SerialNumber ?? "?"}");
-            }
-
-            foreach (var dongle in scan.UsbTree
-                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
-                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3Controller)
-                .OrderBy(n => n.UsbId!.Value.Pid))
-            {
-                var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX (control)" : "RX (telemetry)";
-                lines.Add($"Lian Li SL V3 wireless dongle {role}  ·  {dongle.UsbId}");
-            }
-
-            var fanNodes = scan.UsbTree
-                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
-                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3FanNode)
-                .Select(n => n.PnpInstanceId.Split('\\').LastOrDefault() ?? "?")
-                .OrderBy(s => s, StringComparer.Ordinal)
-                .ToList();
-            for (var i = 0; i < fanNodes.Count; i++)
-            {
-                lines.Add($"Lian Li SL V3 fan LCD node {i + 1}/{fanNodes.Count}  ·  serial {fanNodes[i]}");
-            }
-
-            foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
-            {
-                lines.Add($"Turzx/Turing screen  ·  {screen.ComPort}, serial {screen.SerialHint ?? "?"}");
-            }
-
-            if (lines.Count == 0)
-            {
-                lines.Add("No supported devices found.");
-            }
-
-            _deviceSummary.Text = string.Join(Environment.NewLine, lines);
-
-            if (conflicts.Count > 0)
-            {
-                _conflictSummary.Text = "⚠  Vendor software is running and may fight over devices: "
-                    + string.Join(", ", conflicts.Select(c => c.Name).Distinct());
-                _conflictSummary.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                _conflictSummary.Visibility = Visibility.Collapsed;
-            }
-        }
-        catch (Exception ex)
-        {
-            _deviceSummary.Text = $"Scan failed: {ex.Message}";
-        }
-        finally
-        {
-            _refreshButton.IsEnabled = true;
-        }
+        _fanBadge.Text = text;
+        _fanBadge.Foreground = color;
+        _fanDot.Background = color;
     }
 
-    // ---- updates ----
+    // ---------- updates ----------
 
     private async Task CheckForUpdatesAsync(bool auto)
     {
-        _checkButton.IsEnabled = false;
         if (!auto)
         {
-            SetStatus("Checking for updates…", Dim);
+            SetStatus("Checking for updates…", Theme.Dim);
         }
 
         var info = await Updater.CheckLatestAsync();
-        _checkButton.IsEnabled = true;
-
         if (info is null)
         {
             if (!auto)
             {
-                SetStatus($"Update check failed: {Updater.LastError}", Warn);
+                SetStatus($"Update check failed: {Updater.LastError}", Theme.Warn);
             }
 
             return;
@@ -660,11 +622,11 @@ public sealed class MainWindow : Window
             _updateNoticeText.Text = $"Version {info.Tag.TrimStart('v', 'V')} is available";
             _checkButton.Visibility = Visibility.Collapsed;
             _updateNotice.Visibility = Visibility.Visible;
-            SetStatus($"Update available: {info.Tag} (you have v{AppVersion})", Good);
+            SetStatus($"Update available: {info.Tag} (you have v{AppVersion})", Theme.Good);
         }
         else
         {
-            SetStatus($"Up to date — v{AppVersion} is the latest version.", Dim);
+            SetStatus($"Up to date — v{AppVersion} is the latest version.", Theme.Faint);
         }
     }
 
@@ -675,16 +637,16 @@ public sealed class MainWindow : Window
             return;
         }
 
-        SetStatus("Downloading update…", Dim);
+        SetStatus("Downloading update…", Theme.Dim);
         var installerPath = await Updater.DownloadInstallerAsync(setupUrl);
         if (installerPath is null)
         {
-            SetStatus("Download failed — opening the releases page instead.", Warn);
+            SetStatus("Download failed — opening the releases page instead.", Theme.Warn);
             Process.Start(new ProcessStartInfo(_pendingUpdate.PageUrl) { UseShellExecute = true });
             return;
         }
 
-        SetStatus("Starting installer…", Dim);
+        SetStatus("Starting installer…", Theme.Dim);
         PrepareExit(); // release devices and the tray icon before the installer replaces us
         Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
         Application.Current.Shutdown();
@@ -694,7 +656,7 @@ public sealed class MainWindow : Window
     {
         _updateNotice.Visibility = Visibility.Collapsed;
         _checkButton.Visibility = Visibility.Visible;
-        SetStatus(_pendingUpdate is { } p ? $"Update {p.Tag} postponed — use Check for updates any time." : "", Dim);
+        SetStatus(_pendingUpdate is { } p ? $"Update {p.Tag} postponed — use Check for updates any time." : "", Theme.Dim);
     }
 
     private void SetStatus(string text, Brush brush)
