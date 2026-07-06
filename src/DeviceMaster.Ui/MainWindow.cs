@@ -12,6 +12,7 @@ using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
 using DeviceMaster.Core.Updating;
+using DeviceMaster.Devices.CorsairLink;
 using WinForms = System.Windows.Forms;
 
 namespace DeviceMaster.Ui;
@@ -69,6 +70,15 @@ public sealed class MainWindow : Window
         MinWidth = 940;
         MinHeight = 620;
         Background = Theme.Bg;
+        try
+        {
+            Resources.Add(typeof(System.Windows.Controls.Primitives.ScrollBar), Theme.DarkScrollBarStyle());
+        }
+        catch
+        {
+            // worst case: default scrollbars
+        }
+
         Content = BuildLayout();
         _uiReady = true;
 
@@ -385,8 +395,56 @@ public sealed class MainWindow : Window
         _rescanButton.Opacity = 0.5;
         try
         {
+            // Link-chain devices (fans/pump) aren't USB devices — take them from the running
+            // control loop, or do a one-shot chain scan while control is off.
+            var chainRows = new List<(string Name, string? Id, string Tag)>();
+            var chainPending = false;
+            var snapshot = _loop?.Status;
+            if (snapshot is { Running: true })
+            {
+                foreach (var device in snapshot.Devices)
+                {
+                    chainRows.Add(($"{device.Family} · {device.Name}", device.Id,
+                        device.IsPump ? "pump" : device.Family == "Corsair" ? "fan" : "wireless"));
+                }
+            }
+            else if (_controlSettings.Mode != ControlMode.Off)
+            {
+                chainPending = true; // the loop is still starting — rows appear automatically
+            }
+
             var (scan, conflicts) = await Task.Run(() =>
-                (DeviceScanner.ScanAll(), ConflictingSoftwareChecker.FindConflicts()));
+            {
+                var result = (Scan: DeviceScanner.ScanAll(), Conflicts: ConflictingSoftwareChecker.FindConflicts());
+                if (chainRows.Count == 0 && !chainPending)
+                {
+                    // control is off — safe to open the hubs briefly for a chain scan
+                    foreach (var hidDevice in LinkHub.FindHubDevices())
+                    {
+                        try
+                        {
+                            using var hub = LinkHub.Open(hidDevice);
+                            hub.EnumerateChannels(allowEnterSoftwareMode: true);
+                            foreach (var channel in hub.Channels)
+                            {
+                                chainRows.Add(($"Corsair · {channel.Name} (ch{channel.Channel})", channel.Id,
+                                    channel.IsPump ? "pump" : channel.IsKnown ? "fan" : "?"));
+                            }
+
+                            if (hub.InSoftwareMode)
+                            {
+                                hub.EnterHardwareMode();
+                            }
+                        }
+                        catch
+                        {
+                            // hub busy or unplugged — USB-level rows still show it
+                        }
+                    }
+                }
+
+                return result;
+            });
 
             _hardwareRows.Children.Clear();
 
@@ -400,6 +458,22 @@ public sealed class MainWindow : Window
             foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
             {
                 _hardwareRows.Children.Add(DeviceRow("Corsair pump/res LCD", lcd.SerialNumber, "HID", Theme.Dim));
+            }
+
+            foreach (var (name, id, tag) in chainRows)
+            {
+                _hardwareRows.Children.Add(DeviceRow(name, Shorten(id), tag, tag == "pump" ? Theme.Accent2 : Theme.Dim));
+            }
+
+            if (chainPending)
+            {
+                _hardwareRows.Children.Add(new TextBlock
+                {
+                    Text = "Link chain devices appear here once fan control has started…",
+                    Foreground = Theme.Faint,
+                    FontSize = 12,
+                    Margin = new Thickness(2, 0, 0, 7),
+                });
             }
 
             foreach (var dongle in scan.UsbTree
@@ -517,11 +591,21 @@ public sealed class MainWindow : Window
         }
     }
 
+    private bool _chainRowsLive;
+
     private void UpdateControlStatus()
     {
         var status = _loop?.Status;
+        if (status is { Running: true } && !_chainRowsLive)
+        {
+            // first tick after the loop came up — refresh the hardware list so chain devices appear
+            _chainRowsLive = true;
+            _ = RefreshDevicesAsync();
+        }
+
         if (status is null || !status.Running)
         {
+            _chainRowsLive = false;
             SetBadge("Off", Theme.Faint);
             _controlStatus.Text = "Control off — devices follow their own hardware/firmware curves.";
             _controlStatus.Foreground = Theme.Dim;

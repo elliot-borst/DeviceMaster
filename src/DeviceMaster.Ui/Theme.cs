@@ -155,6 +155,51 @@ public static class Theme
         VerticalAlignment = VerticalAlignment.Center,
         Margin = new Thickness(0, 0, 8, 0),
     };
+
+    /// <summary>Slim dark scrollbar (the WPF default is light and clashes with the theme).</summary>
+    public static Style DarkScrollBarStyle()
+    {
+        const string xaml = """
+            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   TargetType="ScrollBar">
+              <Setter Property="Background" Value="Transparent"/>
+              <Setter Property="Width" Value="9"/>
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="Transparent">
+                      <Track Name="PART_Track" IsDirectionReversed="True">
+                        <Track.DecreaseRepeatButton>
+                          <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                          <Thumb>
+                            <Thumb.Template>
+                              <ControlTemplate TargetType="Thumb">
+                                <Border Background="#323c5e" CornerRadius="4" Margin="2,1,1,1"/>
+                              </ControlTemplate>
+                            </Thumb.Template>
+                          </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                          <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                        </Track.IncreaseRepeatButton>
+                      </Track>
+                    </Grid>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+              <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                  <Setter Property="Height" Value="9"/>
+                  <Setter Property="Width" Value="Auto"/>
+                </Trigger>
+              </Style.Triggers>
+            </Style>
+            """;
+        return (Style)System.Windows.Markup.XamlReader.Parse(xaml);
+    }
 }
 
 /// <summary>Popup-based dropdown styled like StarMaster's (native ComboBox can't be themed from code).</summary>
