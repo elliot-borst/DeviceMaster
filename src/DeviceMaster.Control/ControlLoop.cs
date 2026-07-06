@@ -43,14 +43,20 @@ public sealed record ControlStatus
 public sealed class ControlLoop : IDisposable
 {
     private const int TickMs = 1000;
-    private const int CorsairRefreshTicks = 10; // rewrite unchanged duties every N ticks anyway
+    private const int CorsairRefreshTicks = 10;   // rewrite unchanged duties every N ticks anyway
+    private const int CorsairRescanTicks = 30;    // re-enumerate the Link chain every N ticks
 
     private readonly object _gate = new();
     private readonly Action<string>? _log;
     private Thread? _thread;
+    private Thread? _keepaliveThread;
     private CancellationTokenSource? _cts;
     private volatile ControlSettings _settings;
     private volatile ControlStatus _status = new();
+
+    // SL V3 access is shared between the tick thread and the keepalive thread
+    private readonly object _slv3Gate = new();
+    private volatile int _slv3KeepaliveDuty = SafetyLimits.FailsafeDutyPercent;
 
     private readonly List<LinkHub> _hubs = [];
     private Slv3Controller? _slv3;
@@ -70,6 +76,7 @@ public sealed class ControlLoop : IDisposable
     public IReadOnlyList<GpuRgb> GpuInventory => _gpuRgb;
     private int _lastWrittenCorsairDuty = -1;
     private int _ticksSinceCorsairWrite;
+    private int _ticksSinceCorsairRescan;
     private int _lastWrittenHeaderDuty = -1;
     private int _ticksSinceHeaderWrite;
 
@@ -137,12 +144,19 @@ public sealed class ControlLoop : IDisposable
             _cts = new CancellationTokenSource();
             _thread = new Thread(() => Run(_cts.Token)) { IsBackground = true, Name = "DeviceMaster control loop" };
             _thread.Start();
+
+            // SL V3 fans revert to firmware defaults (rainbow, own curve) when RF traffic
+            // pauses for ~1 s — the keepalive gets its own thread so a slow tick (SMBus
+            // scans, color floods) can never starve it.
+            _keepaliveThread = new Thread(() => RunKeepalive(_cts.Token)) { IsBackground = true, Name = "DeviceMaster SL V3 keepalive" };
+            _keepaliveThread.Start();
         }
     }
 
     public void Stop()
     {
         Thread? thread;
+        Thread? keepalive;
         lock (_gate)
         {
             if (_thread is null)
@@ -152,12 +166,43 @@ public sealed class ControlLoop : IDisposable
 
             _cts!.Cancel();
             thread = _thread;
+            keepalive = _keepaliveThread;
             _thread = null;
+            _keepaliveThread = null;
         }
 
         thread.Join(TimeSpan.FromSeconds(10));
+        keepalive?.Join(TimeSpan.FromSeconds(5));
         ReleaseHardware();
         _status = new ControlStatus();
+    }
+
+    private void RunKeepalive(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            lock (_slv3Gate)
+            {
+                if (_slv3 is not null)
+                {
+                    try
+                    {
+                        _slv3.SendKeepalive(_slv3KeepaliveDuty);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log?.Invoke($"SL V3 keepalive failed: {ex.Message} — reopening from the control loop");
+                        _slv3.Dispose();
+                        _slv3 = null; // fans fail safe on their own; the tick reopens
+                    }
+                }
+            }
+
+            if (token.WaitHandle.WaitOne(800))
+            {
+                break;
+            }
+        }
     }
 
     public void Dispose() => Stop();
@@ -275,18 +320,21 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_slv3 is null)
+        lock (_slv3Gate)
         {
-            try
+            if (_slv3 is null)
             {
-                _slv3 = Slv3Controller.Open();
-                _slv3.PollDevices();
-                _appliedSlv3Rgb.Clear(); // reapply color after a reconnect
-                _log?.Invoke($"control: opened SL V3 dongles (master {_slv3.MasterMacText})");
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"SL V3 open failed: {ex.Message}");
+                try
+                {
+                    _slv3 = Slv3Controller.Open();
+                    _slv3.PollDevices();
+                    _appliedSlv3Rgb.Clear(); // reapply color after a reconnect
+                    _log?.Invoke($"control: opened SL V3 dongles (master {_slv3.MasterMacText})");
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"SL V3 open failed: {ex.Message}");
+                }
             }
         }
 
@@ -382,8 +430,11 @@ public sealed class ControlLoop : IDisposable
 
         _hubs.Clear();
 
-        _slv3?.Dispose(); // fans revert to firmware defaults once keepalive stops
-        _slv3 = null;
+        lock (_slv3Gate)
+        {
+            _slv3?.Dispose(); // fans revert to firmware defaults once keepalive stops
+            _slv3 = null;
+        }
 
         _aura?.Dispose(); // committed colors persist in the controller on their own
         _aura = null;
@@ -412,6 +463,13 @@ public sealed class ControlLoop : IDisposable
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
     private long _slv3RgbRefreshDue;
+
+    // flash persistence is slow and endurance-limited: colors apply instantly (volatile),
+    // and only a color that has stayed put this long gets written to controller flash
+    private const int RgbPersistSettleMs = 10_000;
+    private long _rgbPersistDue;
+    private string? _rgbPersistArmedFor;
+    private string? _persistedRgb;
 
     // effect-index watchdog: what we last uploaded per group, and how long telemetry has
     // disagreed with it (a group that reboots/loses RF falls back to its built-in rainbow).
@@ -482,12 +540,12 @@ public sealed class ControlLoop : IDisposable
             {
                 foreach (var ram in _ramRgb)
                 {
-                    ram.ApplyStaticColor(r, g, b, persist: true);
+                    ram.ApplyStaticColor(r, g, b, persist: false);
                 }
 
                 foreach (var gpu in _gpuRgb)
                 {
-                    gpu.Ene?.ApplyStaticColor(r, g, b, persist: true);
+                    gpu.Ene?.ApplyStaticColor(r, g, b, persist: false);
                 }
 
                 _appliedChipRgb = key;
@@ -495,55 +553,90 @@ public sealed class ControlLoop : IDisposable
             }
             catch (Exception ex)
             {
-                // cool down before retrying — every apply persists to controller flash,
-                // which has limited write endurance
                 _chipRgbRetryAt = Environment.TickCount64 + 30_000;
                 warnings.Add($"RAM/GPU RGB failed: {ex.Message} (will retry)");
             }
         }
 
-        if (_slv3 is null)
+        // once every surface carries the current color and it has settled, persist it so it
+        // survives power cycles (Aura commit + ENE flash saves — one write per color, total)
+        if (_persistedRgb != key && _appliedChipRgb == key && (_aura is null || _appliedAuraRgb == key))
         {
-            return;
-        }
-
-        // wireless effects live in fan firmware; refresh periodically in case a group resets
-        var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
-        foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
-        {
-            var reverted = false;
-            if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
+            if (_rgbPersistArmedFor != key)
             {
-                reverted = EffectRevertDetected(device);
-                if (!reverted)
-                {
-                    continue;
-                }
+                _rgbPersistArmedFor = key; // a color change restarts the settle window
+                _rgbPersistDue = Environment.TickCount64 + RgbPersistSettleMs;
             }
-
-            try
+            else if (Environment.TickCount64 >= _rgbPersistDue)
             {
-                var ticks = Environment.TickCount64;
-                var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
-                _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
-                _appliedSlv3Rgb[device.MacText] = key;
-                _slv3SentEffect[device.MacText] = (effectIndex, ticks);
-                _slv3EffectMismatches.Remove(device.MacText);
-                if (reverted)
+                try
                 {
-                    _log?.Invoke($"SL V3 group {device.MacText[..4]} reverted to its built-in effect "
-                        + $"(reports {Convert.ToHexString(device.EffectIndex)}) — color re-sent");
+                    _aura?.Commit();
+                    foreach (var ram in _ramRgb)
+                    {
+                        ram.Persist();
+                    }
+
+                    foreach (var gpu in _gpuRgb)
+                    {
+                        gpu.Ene?.Persist();
+                    }
+
+                    _persistedRgb = key;
+                    _log?.Invoke("RGB persisted to controller flash (survives power cycles)");
                 }
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"RGB write to SL V3 {device.MacText[..4]} failed: {ex.Message}");
+                catch (Exception ex)
+                {
+                    warnings.Add($"RGB persist failed: {ex.Message}");
+                }
             }
         }
 
-        if (refreshDue)
+        lock (_slv3Gate)
         {
-            _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+            if (_slv3 is null)
+            {
+                return;
+            }
+
+            // wireless effects live in fan firmware; refresh periodically in case a group resets
+            var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
+            foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+            {
+                var reverted = false;
+                if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
+                {
+                    reverted = EffectRevertDetected(device);
+                    if (!reverted)
+                    {
+                        continue;
+                    }
+                }
+
+                try
+                {
+                    var ticks = Environment.TickCount64;
+                    var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
+                    _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
+                    _appliedSlv3Rgb[device.MacText] = key;
+                    _slv3SentEffect[device.MacText] = (effectIndex, ticks);
+                    _slv3EffectMismatches.Remove(device.MacText);
+                    if (reverted)
+                    {
+                        _log?.Invoke($"SL V3 group {device.MacText[..4]} reverted to its built-in effect "
+                            + $"(reports {Convert.ToHexString(device.EffectIndex)}) — color re-sent");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"RGB write to SL V3 {device.MacText[..4]} failed: {ex.Message}");
+                }
+            }
+
+            if (refreshDue)
+            {
+                _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
+            }
         }
     }
 
@@ -655,6 +748,12 @@ public sealed class ControlLoop : IDisposable
             || _pulseWasActive; // one extra write to restore duties after a pulse ends
         _pulseWasActive = pulseActive;
 
+        var rescanDue = ++_ticksSinceCorsairRescan >= CorsairRescanTicks;
+        if (rescanDue)
+        {
+            _ticksSinceCorsairRescan = 0;
+        }
+
         foreach (var hub in _hubs.ToList())
         {
             try
@@ -662,6 +761,20 @@ public sealed class ControlLoop : IDisposable
                 if (!hub.InSoftwareMode)
                 {
                     hub.EnterSoftwareMode();
+                }
+
+                if (rescanDue)
+                {
+                    // fans renegotiate the chain when stacks are reseated or power-blip —
+                    // a stale map sends colors and reads RPMs on the wrong channels
+                    var before = hub.ChannelSignature();
+                    hub.EnumerateChannels(allowEnterSoftwareMode: false);
+                    if (before != hub.ChannelSignature())
+                    {
+                        _appliedHubRgb.Remove(hub.SerialNumber);
+                        _lastWrittenCorsairDuty = -1;
+                        _log?.Invoke($"Link chain changed on hub {hub.SerialNumber[..8]}… — re-applying duties and colors");
+                    }
                 }
 
                 if (mustWrite)
@@ -708,33 +821,37 @@ public sealed class ControlLoop : IDisposable
 
     private void ApplySlv3(int duty, List<DeviceReading> readings, List<string> warnings)
     {
-        if (_slv3 is null)
-        {
-            return;
-        }
+        _slv3KeepaliveDuty = duty; // the keepalive thread sends the PWM at its own 1 Hz cadence
 
-        try
+        lock (_slv3Gate)
         {
-            _slv3.SendKeepalive(duty);
-            var devices = _slv3.PollDevices();
-            foreach (var device in devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+            if (_slv3 is null)
             {
-                var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
-                    .Where(r => r > 0).Select(r => (int)r).ToList();
-                readings.Add(new DeviceReading(
-                    "Lian Li",
-                    $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
-                    rpms.Count > 0 ? (int)rpms.Average() : null,
-                    duty,
-                    IsPump: false,
-                    device.MacText));
+                return;
             }
-        }
-        catch (Exception ex)
-        {
-            warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
-            _slv3.Dispose();
-            _slv3 = null;
+
+            try
+            {
+                var devices = _slv3.PollDevices();
+                foreach (var device in devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
+                {
+                    var rpms = device.FanRpms.Take(Math.Max((int)device.FanCount, 1))
+                        .Where(r => r > 0).Select(r => (int)r).ToList();
+                    readings.Add(new DeviceReading(
+                        "Lian Li",
+                        $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
+                        rpms.Count > 0 ? (int)rpms.Average() : null,
+                        duty,
+                        IsPump: false,
+                        device.MacText));
+                }
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"SL V3 failed: {ex.Message} — reopening next tick");
+                _slv3.Dispose();
+                _slv3 = null;
+            }
         }
     }
 
@@ -793,7 +910,7 @@ public sealed class ControlLoop : IDisposable
                 hub.WriteFixedDuties(requests);
             }
 
-            _slv3?.SendKeepalive(SafetyLimits.FailsafeDutyPercent);
+            _slv3KeepaliveDuty = SafetyLimits.FailsafeDutyPercent; // keepalive thread carries it
             _headers?.SetAllDuties(SafetyLimits.FailsafeDutyPercent);
         }
         catch

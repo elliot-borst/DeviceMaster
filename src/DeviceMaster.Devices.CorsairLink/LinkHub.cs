@@ -366,9 +366,60 @@ public sealed class LinkHub : IDisposable
             }
         }
 
+        var previous = ChannelSignature();
         _channels = LinkHubParser.ParseSubDevices(first, continuation ?? default)
             .Select(d => new LinkChannel(d.Channel, d.Id, d.Model, d.Variant, LinkDeviceCatalog.Find(d.Model, d.Variant)))
             .ToList();
+
+        if (previous.Length > 0 && previous != ChannelSignature())
+        {
+            _colorReady = false; // chain changed — LED map and color endpoint must be rebuilt
+        }
+    }
+
+    /// <summary>Stable fingerprint of the enumerated chain, for change detection across re-enumerations.</summary>
+    public string ChannelSignature() =>
+        string.Join("|", _channels.Select(c => $"{c.Channel}:{c.Id}:{c.Model:X2}"));
+
+    /// <summary>
+    /// Diagnostic: the hub's own per-channel LED data, read through the color handle the way
+    /// OpenLinkHub's getLedDeviceTypes does — command codes from endpoint 0x1E, LED counts
+    /// from endpoint 0x1D. Returns the raw payloads (offsets are firmware-defined).
+    /// </summary>
+    public (byte[] CommandCodes, byte[] LedCounts) ReadLedDeviceInfo()
+    {
+        lock (_ioLock)
+        {
+            return (ReadViaColorHandle(0x1E), ReadViaColorHandle(0x1D));
+        }
+    }
+
+    private byte[] ReadViaColorHandle(byte endpoint)
+    {
+        // open (0x0d 0x00 + endpoint) → read (0x08 0x00) → close (0x05 0x01); responses to
+        // open/close are best-effort on fw 3.10, like the color endpoint itself
+        try
+        {
+            SendCommand(LinkHubProtocol.Commands.OpenColorEndpoint, [endpoint]);
+        }
+        catch (LinkHubException)
+        {
+        }
+
+        try
+        {
+            return SendCommand([0x08, 0x00]);
+        }
+        finally
+        {
+            try
+            {
+                SendCommand([0x05, 0x01]);
+            }
+            catch (LinkHubException)
+            {
+            }
+        }
     }
 
     private byte[] ReadEndpoint(ReadOnlySpan<byte> endpoint, ReadOnlySpan<byte> dataType)

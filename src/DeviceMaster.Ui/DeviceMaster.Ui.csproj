@@ -10,9 +10,9 @@
     <AssemblyName>DeviceMaster</AssemblyName>
     <!-- Whole-number release versioning: bump the major only (1, 2, 3, ...). The UI, the
          update check, and build-installer.ps1 all derive the display version from this. -->
-    <Version>16.0.0</Version>
-    <FileVersion>16.0.0.0</FileVersion>
-    <AssemblyVersion>16.0.0.0</AssemblyVersion>
+    <Version>17.0.0</Version>
+    <FileVersion>17.0.0.0</FileVersion>
+    <AssemblyVersion>17.0.0.0</AssemblyVersion>
     <!-- Embedded version info -> Task Manager shows the name (FileDescription/Product)
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>

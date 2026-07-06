@@ -100,6 +100,12 @@ public sealed class EneRgbDevice
     private ushort _effectBase = 0x8010;
 
     /// <summary>
+    /// Saves the currently applied configuration to the controller's flash so it survives a
+    /// power cycle. Slow and endurance-limited — call once a color has settled, not per change.
+    /// </summary>
+    public void Persist() => WriteRegister(RegApply, SaveValue);
+
+    /// <summary>
     /// Static color on every LED through the effect engine, then apply — and optionally save
     /// to the controller's flash so it survives a power cycle (once per color change only;
     /// flash has limited write endurance).

@@ -87,8 +87,9 @@ public sealed class AuraController : IDisposable
     }
 
     /// <summary>
-    /// Sets every zone to one static color via the effect engine (mode 0x01) and commits so
-    /// the color persists. ARGB header strips are driven whole by the controller.
+    /// Sets every zone to one static color via the effect engine (mode 0x01). ARGB header
+    /// strips are driven whole by the controller. Call <see cref="Commit"/> once the color
+    /// has settled to persist it (the commit writes controller flash — don't spam it).
     /// </summary>
     public void ApplyStaticColor(byte r, byte g, byte b)
     {
@@ -101,7 +102,14 @@ public sealed class AuraController : IDisposable
                 Write(AuraUsbProtocol.BuildEffectColor(startLed, zone.LedCount, r, g, b));
                 startLed += zone.LedCount;
             }
+        }
+    }
 
+    /// <summary>Persists the currently applied configuration across reboots (0x3F 0x55).</summary>
+    public void Commit()
+    {
+        lock (_ioLock)
+        {
             Write(AuraUsbProtocol.BuildCommit());
         }
     }

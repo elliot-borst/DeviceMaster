@@ -7,6 +7,19 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // Silent elevation: unelevated launches hand off to the highest-run-level scheduled
+        // task (or one UAC self-elevation on first run) BEFORE the single-instance check, so
+        // the stub never blocks the real instance. Declined UAC ⇒ run with reduced features.
+        if (!ElevationBroker.IsElevated && ElevationBroker.TryRelaunchElevated(args))
+        {
+            return;
+        }
+
+        if (ElevationBroker.IsElevated)
+        {
+            ElevationBroker.EnsureTasks();
+        }
+
         // Single instance — two control loops would fight over the same devices.
         // (--multi is a development escape hatch used with DEVICEMASTER_CONFIG.)
         var allowMulti = args.Any(a => a.Equals("--multi", StringComparison.OrdinalIgnoreCase));
@@ -17,8 +30,6 @@ public static class Program
                 "DeviceMaster", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-
-        StartupTask.EnsureElevatedAutostart();
 
         // Closing the window hides to the system tray, so app lifetime is explicit
         // (tray menu Exit or the updater hand-off end it).
