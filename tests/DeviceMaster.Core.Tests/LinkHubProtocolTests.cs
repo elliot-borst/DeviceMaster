@@ -182,6 +182,20 @@ public class LinkDutyPlannerTests
         Assert.Equal(80, duties[2]);
     }
 
+    [Theory]
+    [InlineData(70, 70)]
+    [InlineData(100, 100)]
+    [InlineData(30, 50)]   // below the safety floor -> floored, never lower
+    [InlineData(150, 100)]
+    public void PumpDuty_IsControlledSeparately_AndFloored(int requestedPump, int expected)
+    {
+        var duties = LinkDutyPlanner.BuildDutyMap([Fan(1), Pump(2)],
+            new Dictionary<int, int> { [1] = 40, [2] = 10 }, requestedPump);
+
+        Assert.Equal(40, duties[1]);
+        Assert.Equal(expected, duties[2]); // the fan-style request for ch2 is ignored
+    }
+
     [Fact]
     public void UnknownDeviceOnChain_AbortsAllWrites() =>
         Assert.Throws<InvalidOperationException>(() => LinkDutyPlanner.BuildDutyMap([Fan(1), Unknown(2)]));

@@ -25,6 +25,10 @@ public sealed class ControlSettings
 {
     public ControlMode Mode { get; set; } = ControlMode.Off;
     public int ManualDutyPercent { get; set; } = 50;
+
+    /// <summary>Pump duty, controlled separately from fans; hard-floored at 50% by the write layer.</summary>
+    public int PumpDutyPercent { get; set; } = 100;
+
     public CurveSource Source { get; set; } = CurveSource.Coolant;
     public List<CurvePoint> CurvePoints { get; set; } = FanCurve.DefaultCoolant.Points.ToList();
 

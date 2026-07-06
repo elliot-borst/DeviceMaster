@@ -151,16 +151,19 @@ public sealed class LinkHub : IDisposable
 
     /// <summary>
     /// Writes fixed duties for every populated channel (the hub expects the full map each time).
-    /// Pump channels are forced to 100% and unknown devices abort — see <see cref="LinkDutyPlanner"/>.
+    /// Pump channels get <paramref name="pumpDutyPercent"/> floored at 50%, and unknown devices
+    /// abort — see <see cref="LinkDutyPlanner"/>.
     /// </summary>
-    public IReadOnlyDictionary<int, byte> WriteFixedDuties(IReadOnlyDictionary<int, int>? requestedDuties = null)
+    public IReadOnlyDictionary<int, byte> WriteFixedDuties(
+        IReadOnlyDictionary<int, int>? requestedDuties = null,
+        int pumpDutyPercent = Core.Safety.SafetyLimits.FailsafeDutyPercent)
     {
         if (_channels.Count == 0)
         {
             throw new InvalidOperationException("Channels not enumerated — call EnumerateChannels first.");
         }
 
-        var duties = LinkDutyPlanner.BuildDutyMap(_channels, requestedDuties);
+        var duties = LinkDutyPlanner.BuildDutyMap(_channels, requestedDuties, pumpDutyPercent);
         var data = LinkHubPackets.CreateSoftwareSpeedFixedPercentData(duties);
         WriteEndpoint(LinkHubProtocol.Endpoints.SoftwareSpeedFixedPercent, LinkHubProtocol.DataTypes.SoftwareSpeedFixedPercent, data);
         return duties;

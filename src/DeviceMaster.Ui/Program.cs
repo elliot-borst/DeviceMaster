@@ -7,6 +7,15 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // Single instance — two control loops would fight over the same devices.
+        using var instanceLock = new Mutex(initiallyOwned: true, "DeviceMaster-SingleInstance", out var isFirst);
+        if (!isFirst)
+        {
+            MessageBox.Show("DeviceMaster is already running — look for the fan icon in the system tray.",
+                "DeviceMaster", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         // Closing the window hides to the system tray, so app lifetime is explicit
         // (tray menu Exit or the updater hand-off end it).
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };

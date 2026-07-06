@@ -46,6 +46,8 @@ public sealed class MainWindow : Window
     private ComboBox _sourceBox = null!;
     private Slider _dutySlider = null!;
     private TextBlock _dutyLabel = null!;
+    private Slider _pumpSlider = null!;
+    private TextBlock _pumpLabel = null!;
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Solid(0xE6, 0xE9, 0xEE), Margin = new Thickness(0, 12, 0, 4) };
     private readonly TextBlock _controlDevices = new() { FontSize = 12, Foreground = Solid(0x96, 0x9C, 0xA5), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
     private bool _uiReady;
@@ -288,6 +290,31 @@ public sealed class MainWindow : Window
         sliderRow.Children.Add(_dutyLabel);
         controlRow.Children.Add(Labelled("Manual duty", sliderRow));
 
+        _pumpSlider = new Slider
+        {
+            Minimum = 50, // hard safety floor — the write layer clamps to this too
+            Maximum = 100,
+            Value = Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100),
+            Width = 140,
+            IsSnapToTickEnabled = true,
+            TickFrequency = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _pumpSlider.ValueChanged += (_, _) => OnControlSettingChanged();
+        _pumpLabel = new TextBlock
+        {
+            Text = $"{Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100)}%",
+            FontSize = 13,
+            Foreground = Fg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            MinWidth = 38,
+        };
+        var pumpRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        pumpRow.Children.Add(_pumpSlider);
+        pumpRow.Children.Add(_pumpLabel);
+        controlRow.Children.Add(Labelled("Pump duty", pumpRow));
+
         controlPanel.Children.Add(controlRow);
         controlPanel.Children.Add(_controlStatus);
         controlPanel.Children.Add(_controlDevices);
@@ -390,7 +417,9 @@ public sealed class MainWindow : Window
         _controlSettings.Mode = (ControlMode)Math.Max(_modeBox.SelectedIndex, 0);
         _controlSettings.Source = (CurveSource)Math.Max(_sourceBox.SelectedIndex, 0);
         _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
+        _controlSettings.PumpDutyPercent = (int)Math.Round(_pumpSlider.Value);
         _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
+        _pumpLabel.Text = $"{_controlSettings.PumpDutyPercent}%";
 
         try
         {
@@ -408,6 +437,7 @@ public sealed class MainWindow : Window
     {
         _dutySlider.IsEnabled = _controlSettings.Mode == ControlMode.Manual;
         _sourceBox.IsEnabled = _controlSettings.Mode == ControlMode.Curve;
+        _pumpSlider.IsEnabled = _controlSettings.Mode != ControlMode.Off;
 
         if (_controlSettings.Mode == ControlMode.Off)
         {
@@ -452,18 +482,28 @@ public sealed class MainWindow : Window
                 : $"{status.SourceName} {temp}  →  fans {status.TargetDutyPercent}%";
         _controlStatus.Foreground = status.FailsafeActive ? Warn : Fg;
 
-        var lines = status.Devices
-            .GroupBy(d => d.Family)
-            .Select(g =>
+        var lines = new List<string>();
+        foreach (var family in status.Devices.GroupBy(d => d.Family))
+        {
+            if (family.Key == "Corsair")
             {
-                var fans = g.Where(d => !d.IsPump).ToList();
+                // few channels — show each so unresponsive fans are visible
+                foreach (var device in family)
+                {
+                    var rpm = device.Rpm is { } r ? $"{r} rpm" : "no rpm reported";
+                    var tag = device.IsPump ? "  [PUMP]" : "";
+                    lines.Add($"Corsair · {device.Name}: {rpm} @ {device.AppliedDutyPercent}%{tag}");
+                }
+            }
+            else
+            {
+                var fans = family.Where(d => !d.IsPump).ToList();
                 var rpms = fans.Where(d => d.Rpm is not null).Select(d => d.Rpm!.Value).ToList();
-                var pumps = g.Where(d => d.IsPump && d.Rpm is not null).Select(d => $"{d.Rpm} rpm").ToList();
-                return $"{g.Key}: {fans.Count} fan target(s)"
-                    + (rpms.Count > 0 ? $", ~{rpms.Average():F0} rpm" : "")
-                    + (pumps.Count > 0 ? $"  ·  pump {string.Join(", ", pumps)} @100%" : "");
-            })
-            .ToList();
+                lines.Add($"{family.Key}: {fans.Count} fan group(s)"
+                    + (rpms.Count > 0 ? $", ~{rpms.Average():F0} rpm" : ""));
+            }
+        }
+
         lines.AddRange(status.Warnings.Select(w => "⚠ " + w));
         _controlDevices.Text = string.Join(Environment.NewLine, lines);
 

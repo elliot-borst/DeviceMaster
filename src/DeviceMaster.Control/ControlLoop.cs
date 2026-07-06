@@ -154,8 +154,9 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        var pumpDuty = SafetyGuard.ClampPumpDuty(settings.PumpDutyPercent);
         var readings = new List<DeviceReading>();
-        ApplyCorsair(duty, readings, warnings);
+        ApplyCorsair(duty, pumpDuty, readings, warnings);
         ApplySlv3(duty, readings, warnings);
 
         _status = new ControlStatus
@@ -285,9 +286,10 @@ public sealed class ControlLoop : IDisposable
 
     // ---- appliers ----
 
-    private void ApplyCorsair(int duty, List<DeviceReading> readings, List<string> warnings)
+    private void ApplyCorsair(int duty, int pumpDuty, List<DeviceReading> readings, List<string> warnings)
     {
-        var mustWrite = duty != _lastWrittenCorsairDuty || ++_ticksSinceCorsairWrite >= CorsairRefreshTicks;
+        var writeKey = duty * 1000 + pumpDuty;
+        var mustWrite = writeKey != _lastWrittenCorsairDuty || ++_ticksSinceCorsairWrite >= CorsairRefreshTicks;
 
         foreach (var hub in _hubs.ToList())
         {
@@ -301,7 +303,7 @@ public sealed class ControlLoop : IDisposable
                 if (mustWrite)
                 {
                     var requests = hub.Channels.Where(c => !c.IsPump).ToDictionary(c => c.Channel, _ => duty);
-                    hub.WriteFixedDuties(requests);
+                    hub.WriteFixedDuties(requests, pumpDuty);
                 }
 
                 var speeds = hub.ReadSpeeds().Where(s => s.Rpm is not null).ToDictionary(s => s.Channel);
@@ -316,7 +318,7 @@ public sealed class ControlLoop : IDisposable
                         "Corsair",
                         $"{channel.Name} (ch{channel.Channel})",
                         speeds.TryGetValue(channel.Channel, out var s) ? s.Rpm : null,
-                        channel.IsPump ? SafetyLimits.FailsafeDutyPercent : duty,
+                        channel.IsPump ? pumpDuty : duty,
                         channel.IsPump));
                 }
             }
@@ -330,7 +332,7 @@ public sealed class ControlLoop : IDisposable
 
         if (mustWrite)
         {
-            _lastWrittenCorsairDuty = duty;
+            _lastWrittenCorsairDuty = writeKey;
             _ticksSinceCorsairWrite = 0;
         }
     }

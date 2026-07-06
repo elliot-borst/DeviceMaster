@@ -16,9 +16,9 @@ public sealed record LinkChannel(int Channel, string Id, byte Model, byte Varian
 
 /// <summary>
 /// Pure duty-map computation for a speed write. Every write to the hub covers all
-/// speed-controllable channels, so this is where the Stage 1 safety policy lives:
-/// - Pump channels are ALWAYS written at failsafe duty (100%) — pump control is Stage 3,
-///   and requests targeting a pump channel are ignored.
+/// speed-controllable channels, so this is where the safety policy lives:
+/// - Pump channels get <paramref name="pumpDutyPercent"/> hard-floored at
+///   SafetyLimits.PumpMinimumDutyPercent — fan-duty requests never reach a pump.
 /// - Channels without a controllable speed (LCD modules, XC7 water blocks) are excluded.
 /// - Fan duties are clamped to [0, 100]; fans without an explicit request get the
 ///   reference default of 50%.
@@ -30,7 +30,8 @@ public static class LinkDutyPlanner
 
     public static IReadOnlyDictionary<int, byte> BuildDutyMap(
         IReadOnlyList<LinkChannel> channels,
-        IReadOnlyDictionary<int, int>? requestedDuties = null)
+        IReadOnlyDictionary<int, int>? requestedDuties = null,
+        int pumpDutyPercent = SafetyLimits.FailsafeDutyPercent)
     {
         var unknown = channels.Where(c => !c.IsKnown).ToList();
         if (unknown.Count > 0)
@@ -46,7 +47,7 @@ public static class LinkDutyPlanner
         {
             if (channel.IsPump)
             {
-                duties[channel.Channel] = SafetyLimits.FailsafeDutyPercent;
+                duties[channel.Channel] = (byte)SafetyGuard.ClampPumpDuty(pumpDutyPercent);
                 continue;
             }
 
