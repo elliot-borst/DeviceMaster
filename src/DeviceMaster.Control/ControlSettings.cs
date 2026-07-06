@@ -20,6 +20,15 @@ public enum CurveSource
     Gpu,
 }
 
+public enum LcdMode
+{
+    /// <summary>DeviceMaster never touches the screens — they show whatever they show.</summary>
+    Unmanaged = 0,
+    Off,
+    Black,
+    White,
+}
+
 /// <summary>User-facing control configuration, persisted as JSON under %LOCALAPPDATA%\DeviceMaster.</summary>
 public sealed class ControlSettings
 {
@@ -48,6 +57,9 @@ public sealed class ControlSettings
     public int RgbR { get; set; } = 86;
     public int RgbG { get; set; } = 130;
     public int RgbB { get; set; } = 255;
+
+    /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, or a solid background.</summary>
+    public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
 
     [JsonIgnore]
     public FanCurve Curve => new(CurvePoints.Count > 0 ? CurvePoints : FanCurve.DefaultCoolant.Points);

@@ -310,6 +310,8 @@ public sealed class ControlLoop : IDisposable
             ApplyRgb(settings, warnings);
         }
 
+        ApplyLcd(settings, warnings);
+
         var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
             ? sourceTemp
             : TryReadCoolant();
@@ -542,6 +544,16 @@ public sealed class ControlLoop : IDisposable
         _gpuRgb = [];
         _chipRgbScanned = false;
 
+        _corsairLcd?.Dispose(); // panels keep showing their last frame on their own
+        _corsairLcd = null;
+        foreach (var node in _lcdNodes)
+        {
+            node.Dispose();
+        }
+
+        _lcdNodes.Clear();
+        _appliedLcd.Clear();
+
         _headers?.Dispose(); // restores BIOS/driver-automatic control on every touched header
         _headers = null;
 
@@ -746,6 +758,136 @@ public sealed class ControlLoop : IDisposable
                     _slv3RgbRefreshDue = Environment.TickCount64 + 60_000;
                 }
             }
+        }
+    }
+
+    // ---- LCD screens (pump LCD + SL V3 per-fan LCDs) ----
+
+    private CorsairLcdDevice? _corsairLcd;
+    private readonly List<Slv3LcdNode> _lcdNodes = [];
+    private readonly Dictionary<string, LcdMode> _appliedLcd = [];
+    private long _lcdRetryAt;
+    private bool _lcdOpenFailedWarned;
+
+    private void ApplyLcd(ControlSettings settings, List<string> warnings)
+    {
+        var mode = settings.LcdScreens;
+        if (mode == LcdMode.Unmanaged || Environment.TickCount64 < _lcdRetryAt)
+        {
+            return;
+        }
+
+        // open screens lazily, only once the user actually manages them
+        if (_corsairLcd is null && CorsairLcdDevice.FindDevices().FirstOrDefault() is { } lcdHid)
+        {
+            try
+            {
+                _corsairLcd = CorsairLcdDevice.Open(lcdHid);
+                _appliedLcd.Remove("pump-lcd");
+                _log?.Invoke($"control: opened the pump LCD (serial {_corsairLcd.SerialNumber})");
+            }
+            catch (Exception ex)
+            {
+                if (!_lcdOpenFailedWarned)
+                {
+                    _lcdOpenFailedWarned = true;
+                    _log?.Invoke($"pump LCD open failed: {ex.Message}");
+                }
+
+                warnings.Add($"pump LCD open failed: {ex.Message}");
+            }
+        }
+
+        if (_lcdNodes.Count == 0)
+        {
+            foreach (var (path, serial) in Slv3LcdNode.FindNodes())
+            {
+                try
+                {
+                    _lcdNodes.Add(Slv3LcdNode.Open(path, serial));
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"fan LCD {serial[..Math.Min(6, serial.Length)]} open failed: {ex.Message}");
+                }
+            }
+
+            if (_lcdNodes.Count > 0)
+            {
+                _log?.Invoke($"control: opened {_lcdNodes.Count} fan LCD node(s)");
+            }
+        }
+
+        if (_corsairLcd is { } pumpLcd && _appliedLcd.GetValueOrDefault("pump-lcd") != mode)
+        {
+            try
+            {
+                ApplyLcdMode(mode,
+                    jpeg => pumpLcd.SendJpegFrame(jpeg),
+                    percent => pumpLcd.SetBrightness(percent),
+                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
+                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight);
+                _appliedLcd["pump-lcd"] = mode;
+                _log?.Invoke($"pump LCD set to {mode}");
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"pump LCD write failed: {ex.Message} — reopening");
+                _log?.Invoke($"pump LCD write failed: {ex.Message} — reopening");
+                _corsairLcd.Dispose();
+                _corsairLcd = null;
+                _lcdRetryAt = Environment.TickCount64 + 10_000;
+            }
+        }
+
+        var applied = 0;
+        foreach (var node in _lcdNodes.ToList())
+        {
+            if (_appliedLcd.GetValueOrDefault(node.Serial) == mode)
+            {
+                continue;
+            }
+
+            try
+            {
+                ApplyLcdMode(mode,
+                    node.SendJpegFrame,
+                    node.SetBrightness,
+                    Slv3LcdProtocol.ScreenWidth,
+                    Slv3LcdProtocol.ScreenHeight);
+                _appliedLcd[node.Serial] = mode;
+                applied++;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
+                node.Dispose();
+                _lcdNodes.Remove(node);
+                _lcdRetryAt = Environment.TickCount64 + 10_000;
+            }
+        }
+
+        if (applied > 0)
+        {
+            _log?.Invoke($"{applied} fan LCD(s) set to {mode}");
+        }
+    }
+
+    private static void ApplyLcdMode(LcdMode mode, Action<byte[]> sendFrame, Action<int> setBrightness, int width, int height)
+    {
+        switch (mode)
+        {
+            case LcdMode.Off:
+                setBrightness(0);
+                break;
+            case LcdMode.Black:
+                sendFrame(LcdFrames.Solid(width, height, 0, 0, 0));
+                setBrightness(100);
+                break;
+            case LcdMode.White:
+                sendFrame(LcdFrames.Solid(width, height, 255, 255, 255));
+                setBrightness(100);
+                break;
         }
     }
 

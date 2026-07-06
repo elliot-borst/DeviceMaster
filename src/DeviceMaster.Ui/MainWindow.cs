@@ -252,6 +252,9 @@ public sealed class MainWindow : Window
         var rgbCard = BuildRgbCard();
         rgbCard.Margin = new Thickness(0, 14, 0, 0);
         middleColumn.Children.Add(rgbCard);
+        var lcdCard = BuildLcdCard();
+        lcdCard.Margin = new Thickness(0, 14, 0, 0);
+        middleColumn.Children.Add(lcdCard);
         Grid.SetColumn(middleColumn, 1);
         grid.Children.Add(middleColumn);
 
@@ -448,6 +451,72 @@ public sealed class MainWindow : Window
             _rgbStatus.Text = $"Static color #{_controlSettings.RgbR:X2}{_controlSettings.RgbG:X2}{_controlSettings.RgbB:X2} "
                 + "on Corsair, Lian Li, motherboard ARGB, RAM and GPU LEDs.";
         }
+    }
+
+    // screens card
+    private readonly WrapPanel _lcdButtons = new() { Orientation = Orientation.Horizontal };
+    private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
+
+    private Border BuildLcdCard()
+    {
+        var card = Theme.CardShell("▣", "Screen Control", "pump LCD + fan LCDs · off or a plain background", out var body, out _);
+        RebuildLcdButtons();
+        body.Children.Add(_lcdButtons);
+        body.Children.Add(_lcdStatus);
+        UpdateLcdStatusText();
+        return card;
+    }
+
+    private void RebuildLcdButtons()
+    {
+        _lcdButtons.Children.Clear();
+        foreach (var (mode, label) in new[]
+        {
+            (LcdMode.Unmanaged, "Leave alone"),
+            (LcdMode.Off, "Off"),
+            (LcdMode.Black, "Black"),
+            (LcdMode.White, "White"),
+        })
+        {
+            var selected = _controlSettings.LcdScreens == mode;
+            var button = new Border
+            {
+                Padding = new Thickness(14, 7, 14, 7),
+                Margin = new Thickness(0, 0, 8, 0),
+                CornerRadius = new CornerRadius(9),
+                Background = selected ? Theme.Card2 : Theme.Inset,
+                BorderBrush = selected ? Theme.Accent : Theme.Line2,
+                BorderThickness = new Thickness(selected ? 2 : 1),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Child = new TextBlock
+                {
+                    Text = label,
+                    FontSize = 12.5,
+                    FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
+                    Foreground = selected ? Theme.Text : Theme.Dim,
+                },
+            };
+            var chosen = mode;
+            button.MouseLeftButtonUp += (_, _) =>
+            {
+                _controlSettings.LcdScreens = chosen;
+                RebuildLcdButtons();
+                UpdateLcdStatusText();
+                OnControlSettingChanged();
+            };
+            _lcdButtons.Children.Add(button);
+        }
+    }
+
+    private void UpdateLcdStatusText()
+    {
+        _lcdStatus.Text = _controlSettings.LcdScreens switch
+        {
+            LcdMode.Off => "All screens off (backlight dark). Applies while fan control is running.",
+            LcdMode.Black => "All screens on with a plain black background.",
+            LcdMode.White => "All screens on with a plain white background.",
+            _ => "Screens untouched — they keep showing whatever they show.",
+        };
     }
 
     private Border BuildHardwareCard()

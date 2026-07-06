@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- solid-frame JPEG generation for the LCD screens (Windows-only app) -->
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
     <ProjectReference Include="..\DeviceMaster.Sensors\DeviceMaster.Sensors.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
