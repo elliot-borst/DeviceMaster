@@ -27,6 +27,17 @@ public enum LcdMode
     Off,
     Black,
     White,
+    Metrics,
+}
+
+public enum LcdMetric
+{
+    Coolant = 0,
+    CpuTemp,
+    GpuTemp,
+    CpuLoad,
+    GpuLoad,
+    Clock,
 }
 
 /// <summary>User-facing control configuration, persisted as JSON under %LOCALAPPDATA%\DeviceMaster.</summary>
@@ -58,8 +69,14 @@ public sealed class ControlSettings
     public int RgbG { get; set; } = 130;
     public int RgbB { get; set; } = 255;
 
-    /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, or a solid background.</summary>
+    /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, a solid background, or metrics.</summary>
     public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
+
+    /// <summary>Metric shown on the pump screen while <see cref="LcdScreens"/> is Metrics.</summary>
+    public LcdMetric PumpScreenMetric { get; set; } = LcdMetric.Coolant;
+
+    /// <summary>Metric shown on every fan screen while <see cref="LcdScreens"/> is Metrics.</summary>
+    public LcdMetric FanScreenMetric { get; set; } = LcdMetric.CpuTemp;
 
     /// <summary>Every fan device id ever seen — the expected set behind the "N/N fans" roll-up.</summary>
     public List<string> SeenFanIds { get; set; } = [];

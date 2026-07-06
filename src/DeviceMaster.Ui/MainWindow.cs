@@ -519,13 +519,34 @@ public sealed class MainWindow : Window
 
     // screens card
     private readonly WrapPanel _lcdButtons = new() { Orientation = Orientation.Horizontal };
+    private readonly WrapPanel _lcdMetricPanel = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
     private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
+
+    private static readonly string[] LcdMetricNames = ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock"];
 
     private Border BuildLcdCard()
     {
-        var card = Theme.CardShell("▣", "Screen Control", "pump LCD + fan LCDs · off or a plain background", out var body, out _);
+        var card = Theme.CardShell("▣", "Screen Control", "pump LCD + fan LCDs · off, a plain background, or live metrics", out var body, out _);
         RebuildLcdButtons();
         body.Children.Add(_lcdButtons);
+
+        var pumpDrop = new DmDropdown(LcdMetricNames, (int)_controlSettings.PumpScreenMetric, 110);
+        pumpDrop.SelectionChanged += index =>
+        {
+            _controlSettings.PumpScreenMetric = (LcdMetric)index;
+            OnControlSettingChanged();
+        };
+        _lcdMetricPanel.Children.Add(LabelledInline("Pump screen", pumpDrop));
+
+        var fanDrop = new DmDropdown(LcdMetricNames, (int)_controlSettings.FanScreenMetric, 110);
+        fanDrop.SelectionChanged += index =>
+        {
+            _controlSettings.FanScreenMetric = (LcdMetric)index;
+            OnControlSettingChanged();
+        };
+        _lcdMetricPanel.Children.Add(LabelledInline("Fan screens", fanDrop));
+
+        body.Children.Add(_lcdMetricPanel);
         body.Children.Add(_lcdStatus);
         UpdateLcdStatusText();
         return card;
@@ -541,6 +562,7 @@ public sealed class MainWindow : Window
             (LcdMode.Off, "Off"),
             (LcdMode.Black, "Black"),
             (LcdMode.White, "White"),
+            (LcdMode.Metrics, "Metrics"),
         })
         {
             var selected = _controlSettings.LcdScreens == mode;
@@ -575,11 +597,15 @@ public sealed class MainWindow : Window
 
     private void UpdateLcdStatusText()
     {
+        _lcdMetricPanel.Visibility = _controlSettings.LcdScreens == LcdMode.Metrics
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         _lcdStatus.Text = _controlSettings.LcdScreens switch
         {
             LcdMode.Off => "All screens off (backlight dark). Applies while fan control is running.",
             LcdMode.Black => "All screens on with a plain black background.",
             LcdMode.White => "All screens on with a plain white background.",
+            LcdMode.Metrics => "Live readouts — the pump screen refreshes continuously; fan screens update as values change.",
             _ => "Screens untouched — they keep showing whatever they show.",
         };
     }

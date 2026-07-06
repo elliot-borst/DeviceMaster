@@ -881,6 +881,33 @@ public sealed class ControlLoop : IDisposable
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
             _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 3);
         }
+
+        // the pump panel reasserts its own liquid-temp screen ~30 s after frames stop —
+        // keep the solid background alive with a periodic re-send (HID only, no RF impact)
+        if (_corsairLcd is { } keepalivePump && mode is LcdMode.Black or LcdMode.White
+            && Environment.TickCount64 >= _pumpLcdKeepaliveDue)
+        {
+            _pumpLcdKeepaliveDue = Environment.TickCount64 + PumpLcdKeepaliveMs;
+            try
+            {
+                var (r, g, b) = mode == LcdMode.Black ? ((byte)0, (byte)0, (byte)0) : ((byte)255, (byte)255, (byte)255);
+                keepalivePump.SendJpegFrame(LcdFrames.Solid(
+                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
+                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight, r, g, b));
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"pump LCD keepalive failed: {ex.Message} — reopening");
+                _corsairLcd.Dispose();
+                _corsairLcd = null;
+                _lcdRetryAt = Environment.TickCount64 + 10_000;
+            }
+        }
+
+        if (mode == LcdMode.Metrics)
+        {
+            StreamLcdMetrics(settings, warnings);
+        }
     }
 
     private static void ApplyLcdMode(LcdMode mode, Action<byte[]> sendFrame, Action<int> setBrightness, int width, int height)
@@ -898,8 +925,157 @@ public sealed class ControlLoop : IDisposable
                 sendFrame(LcdFrames.Solid(width, height, 255, 255, 255));
                 setBrightness(100);
                 break;
+            case LcdMode.Metrics:
+                setBrightness(100); // frames come from the metric streamer
+                break;
         }
     }
+
+    // The pump panel's firmware reasserts its own liquid-temp screen ~30 s after frames stop
+    // (observed live), so it needs a periodic frame keepalive. The SL V3 fan panels hold
+    // their frame indefinitely — and their radios dislike LCD traffic — so they stay
+    // change-only.
+    private const int PumpLcdKeepaliveMs = 10_000;
+    private long _pumpLcdKeepaliveDue;
+    private long _lcdMetricsDue;
+    private readonly Dictionary<string, string> _lcdShownKey = [];
+    private readonly Dictionary<string, long> _lcdLastFanPush = [];
+
+    private void StreamLcdMetrics(ControlSettings settings, List<string> warnings)
+    {
+        if (Environment.TickCount64 < _lcdMetricsDue)
+        {
+            return;
+        }
+
+        _lcdMetricsDue = Environment.TickCount64 + 2_000;
+        IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings = null;
+
+        if (_corsairLcd is { } pump && ReadLcdMetric(settings.PumpScreenMetric, ref lhmReadings) is { } pm)
+        {
+            var key = $"{settings.PumpScreenMetric}|{pm.Value}|{pm.Unit}";
+            var keepaliveDue = Environment.TickCount64 >= _pumpLcdKeepaliveDue;
+            if (_lcdShownKey.GetValueOrDefault("pump-lcd") != key || keepaliveDue)
+            {
+                try
+                {
+                    pump.SendJpegFrame(LcdMetricRenderer.Render(
+                        Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
+                        Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight,
+                        pm.Label, pm.Value, pm.Unit, pm.Accent));
+                    _lcdShownKey["pump-lcd"] = key;
+                    _pumpLcdKeepaliveDue = Environment.TickCount64 + PumpLcdKeepaliveMs;
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"pump LCD write failed: {ex.Message} — reopening");
+                    _corsairLcd.Dispose();
+                    _corsairLcd = null;
+                    _lcdRetryAt = Environment.TickCount64 + 10_000;
+                }
+            }
+        }
+
+        if (ReadLcdMetric(settings.FanScreenMetric, ref lhmReadings) is { } fm)
+        {
+            var key = $"{settings.FanScreenMetric}|{fm.Value}|{fm.Unit}";
+            byte[]? frame = null;
+            var pushedAny = false;
+            foreach (var node in _lcdNodes.ToList())
+            {
+                if (_lcdShownKey.GetValueOrDefault(node.Serial) == key
+                    || Environment.TickCount64 - _lcdLastFanPush.GetValueOrDefault(node.Serial) < 10_000)
+                {
+                    continue;
+                }
+
+                frame ??= LcdMetricRenderer.Render(
+                    Slv3LcdProtocol.ScreenWidth, Slv3LcdProtocol.ScreenHeight,
+                    fm.Label, fm.Value, fm.Unit, fm.Accent);
+                try
+                {
+                    node.SendJpegFrame(frame);
+                    _lcdShownKey[node.Serial] = key;
+                    _lcdLastFanPush[node.Serial] = Environment.TickCount64;
+                    pushedAny = true;
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
+                    node.Dispose();
+                    _lcdNodes.Remove(node);
+                    _lcdRetryAt = Environment.TickCount64 + 10_000;
+                }
+            }
+
+            if (pushedAny)
+            {
+                // fan radios go briefly deaf around LCD traffic — schedule a color confirm
+                _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+                _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
+            }
+        }
+    }
+
+    private (string Label, string Value, string Unit, (byte R, byte G, byte B) Accent)? ReadLcdMetric(
+        LcdMetric metric, ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings)
+    {
+        switch (metric)
+        {
+            case LcdMetric.Clock:
+                var now = DateTime.Now;
+                return ("TIME", now.ToString("HH:mm"), now.ToString("ddd d MMM"), (235, 235, 245));
+
+            case LcdMetric.Coolant:
+                return TryReadCoolant() is { } coolant
+                    ? ("COOLANT", $"{coolant:F0}", "°C", TemperatureAccent(coolant, warm: 33, hot: 37))
+                    : null;
+
+            case LcdMetric.CpuTemp:
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C");
+            case LcdMetric.GpuTemp:
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C");
+            case LcdMetric.CpuLoad:
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU LOAD", "%");
+            case LcdMetric.GpuLoad:
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU LOAD", "%");
+            default:
+                return null;
+        }
+    }
+
+    private (string, string, string, (byte, byte, byte))? LhmLcdMetric(
+        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings,
+        string hardware, SensorKind kind, string label, string unit)
+    {
+        try
+        {
+            _lhm ??= new LhmSensorSource();
+            lhmReadings ??= _lhm.Read();
+            var value = lhmReadings
+                .Where(r => r.Kind == kind && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
+                .Select(r => (double?)r.Value)
+                .Max();
+            if (value is not { } v)
+            {
+                return null;
+            }
+
+            var accent = kind == SensorKind.Temperature
+                ? TemperatureAccent(v, warm: 60, hot: 80)
+                : ((byte)122, (byte)167, (byte)255);
+            return (label, $"{v:F0}", unit, accent);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static (byte, byte, byte) TemperatureAccent(double value, double warm, double hot) =>
+        value >= hot ? ((byte)248, (byte)113, (byte)113)
+        : value >= warm ? ((byte)251, (byte)191, (byte)36)
+        : ((byte)74, (byte)222, (byte)128);
 
     private double? TryReadCoolant()
     {
