@@ -61,12 +61,17 @@ public sealed class TurzxScreen : IDisposable
             throw new InvalidOperationException("Turzx screen writes are not permitted by the device registry.");
         }
 
+        // No hardware flow control: this panel is a usbser CDC port that never asserts CTS, so
+        // RTS/CTS handshaking (the reference's rtscts=True) makes every write block until it
+        // fails with "the semaphore timeout period has expired". Assert DTR+RTS instead, the
+        // usual "terminal present" signalling for a CDC virtual COM port.
         var port = new SerialPort(comPort, BaudRate)
         {
-            Handshake = Handshake.RequestToSend, // pyserial rtscts=True
+            Handshake = Handshake.None,
             DtrEnable = true,
+            RtsEnable = true,
             ReadTimeout = 1000,
-            WriteTimeout = 20_000,
+            WriteTimeout = 15_000,
             ReadBufferSize = 1 << 16,
             WriteBufferSize = 1 << 20,
         };
