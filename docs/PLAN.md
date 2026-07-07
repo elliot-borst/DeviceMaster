@@ -122,7 +122,11 @@ vanished, colors stopped applying). The 60 s refresh is the healing mechanism.
 - **Stage 4 — Corsair LCD rendering** (`DeviceMaster.Rendering` is born): static image first,
   then live metrics at a modest FPS. OpenLinkHub LCD framing, 1024-byte HID chunks.
 - **Stage 5 — Turzx 8.8"** via the same rendering pipeline, serial protocol from
-  turing-smart-screen-python / Tedd.TuringScreen.
+  turing-smart-screen-python / Tedd.TuringScreen. Protocol + `TurzxScreen` serial wrapper
+  implemented (full-frame BGRA push over the `usbser` CDC port, REV_8INCH/CT88INCH), wired
+  into the control loop on a dedicated worker thread, with a **Turzx** side-menu page
+  (Off/On/Black/White, metric, brightness, orientation). Pending on-hardware verification:
+  serial handshake (rtscts/DTR), full-frame throughput, and image orientation/colour order.
 - **Stage 6 — UI polish**, effects, profiles, tray UX.
 
 A stage is done when it builds, its tests pass, and it has been exercised against the real

@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- USB-serial (usbser CDC) transport + BGRA frame conversion for the 8.8" panel -->
+    <PackageReference Include="System.IO.Ports" Version="9.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
   </ItemGroup>
+
 </Project>

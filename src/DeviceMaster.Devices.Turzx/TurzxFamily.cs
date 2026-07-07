@@ -4,9 +4,9 @@ using DeviceMaster.Core.Discovery;
 namespace DeviceMaster.Devices.Turzx;
 
 /// <summary>
-/// Stage 0 placeholder for the Turzx / Turing-family smart screen (USB serial).
-/// Stage 5 ports the protocol from mathoudebine/turing-smart-screen-python and
-/// tedd/Tedd.TuringScreen; the 8.8" panel's revision is confirmed there.
+/// Discovery helper for the Turzx / Turing-family smart screen (USB serial). The 8.8" panel's
+/// protocol lives in <see cref="TurzxProtocol"/> / <see cref="TurzxScreen"/>, ported from
+/// mathoudebine/turing-smart-screen-python (lcd_comm_rev_c, REV_8INCH / CT88INCH).
 /// </summary>
 public static class TurzxFamily
 {

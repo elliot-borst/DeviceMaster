@@ -104,8 +104,16 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 |---|---|---|
 | 8.8" smart screen | `1A86:CA88` | USB serial (`usbser`), device serial string `CT88INCH` |
 
-- Planned for Stage 5 via the shared rendering pipeline; protocol ported from
-  turing-smart-screen-python / Tedd.TuringScreen (revision selected by USB serial string).
+- Protocol ported from turing-smart-screen-python (`lcd_comm_rev_c.py`, the `REV_8INCH` /
+  `CT88INCH` sub-revision). Commands are byte sequences padded to a multiple of 250 bytes; a
+  full frame is BGRA pixel data with a `0x00` inserted after every 249 bytes. The panel is
+  480×1920 native (portrait); DeviceMaster renders landscape 1920×480 content and rotates it
+  onto the panel. Baud is nominal — the `usbser` CDC port transfers at USB speed.
+- Full-frame push only (change-driven). A full frame is ~3.7 MB, so it is driven from a
+  dedicated worker thread and never blocks the 1 Hz fan/pump loop. Partial-region updates
+  (`_generate_update_image`) remain a future optimisation if refresh latency matters.
+- Controlled from the **Turzx** side-menu page: Off / On (metrics) / Black / White, a metric
+  picker, a brightness slider, and a landscape orientation toggle.
 
 ## Sensors
 

@@ -114,11 +114,26 @@ public sealed class ControlSettings
     /// <summary>Per-screen overrides; screens without an entry fall back to the defaults above.</summary>
     public List<LcdScreenConfig> LcdScreenConfigs { get; set; } = [];
 
+    // ---- Turzx 8.8" serial screen (independent of the Corsair/Lian Li JPEG screens above) ----
+
+    /// <summary>Turzx 8.8" screen: leave alone, backlight off, a solid background, or live metrics.</summary>
+    public LcdMode TurzxScreen { get; set; } = LcdMode.Unmanaged;
+
+    /// <summary>Metric shown on the Turzx screen while <see cref="TurzxScreen"/> is Metrics.</summary>
+    public LcdMetric TurzxMetric { get; set; } = LcdMetric.CpuTemp;
+
+    /// <summary>Turzx backlight brightness 0–100.</summary>
+    public int TurzxBrightness { get; set; } = 100;
+
+    /// <summary>Mount orientation: 0 = landscape, 180 = landscape flipped the other way up.</summary>
+    public int TurzxRotation { get; set; }
+
     /// <summary>Movie mode: one switch that blacks out every LED and screen; restores on toggle-off.</summary>
     public bool BlackoutActive { get; set; }
     public bool BlackoutPrevRgbEnabled { get; set; } = true;
     public bool BlackoutPrevRgbOff { get; set; }
     public LcdMode BlackoutPrevLcd { get; set; } = LcdMode.Metrics;
+    public LcdMode BlackoutPrevTurzx { get; set; } = LcdMode.Unmanaged;
 
     /// <summary>Finds (or creates, unsaved) the config for a screen id.</summary>
     public LcdScreenConfig ScreenConfig(string id, bool isPump)

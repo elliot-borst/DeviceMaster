@@ -6,6 +6,7 @@ using DeviceMaster.Devices.CorsairLink;
 using DeviceMaster.Devices.EneRgb;
 using DeviceMaster.Devices.LianLi;
 using DeviceMaster.Devices.Nvidia;
+using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Sensors;
 
 namespace DeviceMaster.Control;
@@ -31,6 +32,10 @@ public sealed record ControlStatus
 
     public int TargetDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
+
+    /// <summary>Turzx 8.8" screen connection state for the UI ("Connected · COM3", "Not detected", …); null = not managed.</summary>
+    public string? TurzxInfo { get; init; }
+
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.Now;
@@ -182,6 +187,11 @@ public sealed class ControlLoop : IDisposable
             // scans, color floods) can never starve it.
             _keepaliveThread = new Thread(() => RunKeepalive(_cts.Token)) { IsBackground = true, Name = "DeviceMaster SL V3 keepalive" };
             _keepaliveThread.Start();
+
+            // the Turzx screen gets its own worker: a full 480×1920 serial frame takes seconds
+            // to push, which must never stall the 1 Hz fan/pump tick.
+            _turzxThread = new Thread(() => RunTurzx(_cts.Token)) { IsBackground = true, Name = "DeviceMaster Turzx screen" };
+            _turzxThread.Start();
         }
     }
 
@@ -189,6 +199,7 @@ public sealed class ControlLoop : IDisposable
     {
         Thread? thread;
         Thread? keepalive;
+        Thread? turzx;
         lock (_gate)
         {
             if (_thread is null)
@@ -199,12 +210,16 @@ public sealed class ControlLoop : IDisposable
             _cts!.Cancel();
             thread = _thread;
             keepalive = _keepaliveThread;
+            turzx = _turzxThread;
             _thread = null;
             _keepaliveThread = null;
+            _turzxThread = null;
         }
 
+        _turzxWake.Set(); // wake the Turzx worker so it sees the cancel promptly
         thread.Join(TimeSpan.FromSeconds(10));
         keepalive?.Join(TimeSpan.FromSeconds(5));
+        turzx?.Join(TimeSpan.FromSeconds(25)); // may be mid-frame (a full serial push is seconds)
         ReleaseHardware();
         _status = new ControlStatus();
     }
@@ -315,6 +330,7 @@ public sealed class ControlLoop : IDisposable
         }
 
         ApplyLcd(settings, readings, duty, warnings);
+        ApplyTurzx(settings, readings, duty);
         SampleDashboardTemps();
 
         var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
@@ -332,6 +348,7 @@ public sealed class ControlLoop : IDisposable
             GpuTemperatureC = _dashGpuTemp,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
+            TurzxInfo = _turzxStatusText,
             Devices = readings,
             Warnings = warnings,
         };
@@ -1028,6 +1045,181 @@ public sealed class ControlLoop : IDisposable
                 setBrightness(100); // frames come from the metric streamer
                 break;
         }
+    }
+
+    // ---- Turzx 8.8" serial screen ----
+    // The serial port is owned exclusively by the Turzx worker thread (RunTurzx). The tick
+    // thread only renders the desired frame and publishes desired state under _turzxGate; it
+    // never touches the port, so a multi-second full-frame push can't stall fan/pump control.
+    private const int TurzxLandscapeWidth = 1920;
+    private const int TurzxLandscapeHeight = 480;
+
+    private Thread? _turzxThread;
+    private readonly AutoResetEvent _turzxWake = new(false);
+    private readonly object _turzxGate = new();
+    private LcdMode _turzxMode = LcdMode.Unmanaged;
+    private int _turzxBrightness = 100;
+    private bool _turzxFlip;
+    private byte[]? _turzxFrame;
+    private string? _turzxFrameKey;
+    private long _turzxMetricsDue;
+    private volatile string? _turzxStatusText;
+
+    // worker-thread-only state
+    private TurzxScreen? _turzx;
+    private int _turzxAppliedBrightness = -1;
+    private string? _turzxShownKey;
+    private long _turzxRetryAt;
+
+    /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
+    private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
+    {
+        byte[]? frame = null;
+        string? key = null;
+        if (settings.TurzxScreen == LcdMode.Metrics && Environment.TickCount64 >= _turzxMetricsDue)
+        {
+            _turzxMetricsDue = Environment.TickCount64 + 2_000;
+            IReadOnlyList<Core.Sensors.SensorReading>? lhm = null;
+            if (ReadLcdMetric(settings.TurzxMetric, readings, duty, ref lhm) is { } m)
+            {
+                key = $"{settings.TurzxMetric}|{m.Value}|{m.Unit}|{m.Accent}";
+                frame = LcdMetricRenderer.Render(TurzxLandscapeWidth, TurzxLandscapeHeight, m.Label, m.Value, m.Unit, m.Accent);
+            }
+        }
+
+        lock (_turzxGate)
+        {
+            _turzxMode = settings.TurzxScreen;
+            _turzxBrightness = Math.Clamp(settings.TurzxBrightness, 0, 100);
+            _turzxFlip = settings.TurzxRotation == 180;
+            if (frame is not null)
+            {
+                _turzxFrame = frame;
+                _turzxFrameKey = key;
+            }
+        }
+
+        _turzxWake.Set();
+    }
+
+    /// <summary>Worker-thread half: owns the serial port, applies brightness/mode, pushes frames on change.</summary>
+    private void RunTurzx(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            _turzxWake.WaitOne(1000);
+            if (token.IsCancellationRequested)
+            {
+                break;
+            }
+
+            LcdMode mode;
+            int brightness;
+            bool flip;
+            byte[]? frame;
+            string? key;
+            lock (_turzxGate)
+            {
+                mode = _turzxMode;
+                brightness = _turzxBrightness;
+                flip = _turzxFlip;
+                frame = _turzxFrame;
+                key = _turzxFrameKey;
+            }
+
+            try
+            {
+                if (mode == LcdMode.Unmanaged)
+                {
+                    if (_turzx is not null)
+                    {
+                        _turzx.Dispose(); // panel keeps showing its last frame on its own
+                        _turzx = null;
+                        _turzxShownKey = null;
+                        _turzxAppliedBrightness = -1;
+                        _turzxStatusText = null;
+                    }
+
+                    continue;
+                }
+
+                if (Environment.TickCount64 < _turzxRetryAt)
+                {
+                    continue;
+                }
+
+                if (_turzx is null)
+                {
+                    var target = TurzxScreen.Find().FirstOrDefault();
+                    if (target.ComPort is null)
+                    {
+                        _turzxStatusText = "Not detected";
+                        _turzxRetryAt = Environment.TickCount64 + 5_000;
+                        continue;
+                    }
+
+                    _turzx = TurzxScreen.Open(target.ComPort, target.Serial);
+                    _turzxShownKey = null;
+                    _turzxAppliedBrightness = -1;
+                    _log?.Invoke($"control: opened the Turzx screen ({_turzx.ComPort})");
+                }
+
+                _turzx.FlipLandscape = flip;
+
+                var wantBrightness = mode == LcdMode.Off ? 0 : brightness;
+                if (_turzxAppliedBrightness != wantBrightness)
+                {
+                    _turzx.SetBrightness(wantBrightness);
+                    _turzxAppliedBrightness = wantBrightness;
+                }
+
+                switch (mode)
+                {
+                    case LcdMode.Off:
+                        break; // backlight already driven to 0 above
+                    case LcdMode.Black:
+                        if (_turzxShownKey != "black")
+                        {
+                            _turzx.SendJpegFrame(LcdFrames.Solid(TurzxLandscapeWidth, TurzxLandscapeHeight, 0, 0, 0));
+                            _turzxShownKey = "black";
+                        }
+
+                        break;
+                    case LcdMode.White:
+                        if (_turzxShownKey != "white")
+                        {
+                            _turzx.SendJpegFrame(LcdFrames.Solid(TurzxLandscapeWidth, TurzxLandscapeHeight, 255, 255, 255));
+                            _turzxShownKey = "white";
+                        }
+
+                        break;
+                    case LcdMode.Metrics:
+                        if (frame is not null && _turzxShownKey != key)
+                        {
+                            _turzx.SendJpegFrame(frame);
+                            _turzxShownKey = key;
+                        }
+
+                        break;
+                }
+
+                _turzxStatusText = $"Connected · {_turzx.ComPort}"
+                    + (_turzx.RomVersion is { } rom ? $" · ROM {rom}" : "");
+            }
+            catch (Exception ex)
+            {
+                _turzxStatusText = $"Error: {ex.Message}";
+                _log?.Invoke($"Turzx screen write failed: {ex.Message} — reopening");
+                _turzx?.Dispose();
+                _turzx = null;
+                _turzxShownKey = null;
+                _turzxAppliedBrightness = -1;
+                _turzxRetryAt = Environment.TickCount64 + 10_000;
+            }
+        }
+
+        try { _turzx?.Dispose(); } catch { /* shutting down */ }
+        _turzx = null;
     }
 
     // The pump panel's firmware reasserts its own liquid-temp screen ~30 s after frames stop

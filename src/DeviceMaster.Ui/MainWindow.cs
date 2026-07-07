@@ -23,7 +23,7 @@ public sealed class MainWindow : Window
     public static string AppVersion { get; } =
         (Assembly.GetExecutingAssembly().GetName().Version?.Major ?? 0).ToString();
 
-    public const string VersionDate = "2026-07-07";
+    public const string VersionDate = "2026-07-08";
 
     private readonly ControlSettings _controlSettings = ControlSettings.Load();
     private ControlLoop? _loop;
@@ -257,6 +257,7 @@ public sealed class MainWindow : Window
             ("cooling", "❄", "Cooling"),
             ("lighting", "◈", "Lighting"),
             ("screens", "▣", "Screens"),
+            ("turzx", "▤", "Turzx"),
             ("devices", "⚙", "Devices"),
         })
         {
@@ -276,6 +277,7 @@ public sealed class MainWindow : Window
         _pages["cooling"] = WrapPage(BuildCoolingPage());
         _pages["lighting"] = WrapPage(BuildLightingPage());
         _pages["screens"] = WrapPage(BuildScreensPage());
+        _pages["turzx"] = WrapPage(BuildTurzxPage());
         _pages["devices"] = WrapPage(BuildDevicesPage());
         foreach (var (key, page) in _pages)
         {
@@ -480,6 +482,153 @@ public sealed class MainWindow : Window
         page.Children.Add(_screenList);
         RebuildScreenList();
         return page;
+    }
+
+    // ---------- Turzx 8.8" screen page ----------
+
+    private readonly WrapPanel _turzxButtons = new() { Orientation = Orientation.Horizontal };
+    private readonly TextBlock _turzxStatus = new()
+    {
+        FontSize = 12,
+        Foreground = Theme.Dim,
+        Margin = new Thickness(0, 14, 0, 0),
+        TextWrapping = TextWrapping.Wrap,
+    };
+    private DmSlider _turzxBrightnessSlider = null!;
+    private TextBlock _turzxBrightnessLabel = null!;
+
+    private UIElement BuildTurzxPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(PageTitle("Turzx Screen", "the 8.8\" ultrawide serial display"));
+
+        var card = Theme.CardShell("▤", "Turzx 8.8\"", "backlight, brightness, and what the ultrawide bar shows", out var body, out _);
+        card.HorizontalAlignment = HorizontalAlignment.Left;
+        card.MaxWidth = 560;
+
+        RebuildTurzxButtons();
+        body.Children.Add(_turzxButtons);
+
+        var metricDrop = new DmDropdown(LcdMetricNames, LcdMetricChoiceIndex(_controlSettings.TurzxMetric), 150);
+        metricDrop.SelectionChanged += index =>
+        {
+            _controlSettings.TurzxMetric = LcdMetricChoices[index].Metric;
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
+        body.Children.Add(TurzxLabeledRow("Metric (when On)", metricDrop));
+
+        var brightPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        brightPanel.Children.Add(Theme.SmallLabel("Brightness"));
+        var initialBrightness = Math.Clamp(_controlSettings.TurzxBrightness, 0, 100);
+        _turzxBrightnessSlider = new DmSlider(0, 100, initialBrightness, 300);
+        _turzxBrightnessLabel = new TextBlock
+        {
+            Text = $"{initialBrightness}%",
+            FontSize = 13,
+            Foreground = Theme.Accent2,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            MinWidth = 40,
+        };
+        _turzxBrightnessSlider.ValueChanged += _ =>
+        {
+            _controlSettings.TurzxBrightness = (int)Math.Round(_turzxBrightnessSlider.Value);
+            _turzxBrightnessLabel.Text = $"{_controlSettings.TurzxBrightness}%";
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
+        brightPanel.Children.Add(_turzxBrightnessSlider);
+        brightPanel.Children.Add(_turzxBrightnessLabel);
+        body.Children.Add(Theme.InsetRow(brightPanel));
+
+        var orientDrop = new DmDropdown(new[] { "Landscape", "Landscape (flipped)" }, _controlSettings.TurzxRotation == 180 ? 1 : 0, 170);
+        orientDrop.SelectionChanged += index =>
+        {
+            _controlSettings.TurzxRotation = index == 1 ? 180 : 0;
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
+        body.Children.Add(TurzxLabeledRow("Orientation", orientDrop));
+
+        body.Children.Add(_turzxStatus);
+        UpdateTurzxStatus(_loop?.Status);
+
+        page.Children.Add(card);
+        return page;
+    }
+
+    private static Border TurzxLabeledRow(string label, UIElement control)
+    {
+        var panel = new DockPanel { LastChildFill = false };
+        var text = Theme.SmallLabel(label);
+        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(control, Dock.Right);
+        panel.Children.Add(text);
+        panel.Children.Add(control);
+        return Theme.InsetRow(panel);
+    }
+
+    private void RebuildTurzxButtons()
+    {
+        _turzxButtons.Children.Clear();
+        foreach (var (mode, label) in new[]
+        {
+            (LcdMode.Off, "Off"),
+            (LcdMode.Metrics, "On"),
+            (LcdMode.Black, "Black"),
+            (LcdMode.White, "White"),
+        })
+        {
+            var selected = _controlSettings.TurzxScreen == mode;
+            var button = new Border
+            {
+                Padding = new Thickness(14, 7, 14, 7),
+                Margin = new Thickness(0, 0, 8, 0),
+                CornerRadius = new CornerRadius(9),
+                Background = selected ? Theme.Card2 : Theme.Inset,
+                BorderBrush = selected ? Theme.Accent : Theme.Line2,
+                BorderThickness = new Thickness(selected ? 2 : 1),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Child = new TextBlock
+                {
+                    Text = label,
+                    FontSize = 12.5,
+                    FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
+                    Foreground = selected ? Theme.Text : Theme.Dim,
+                },
+            };
+            var chosen = mode;
+            button.MouseLeftButtonUp += (_, _) =>
+            {
+                _controlSettings.TurzxScreen = chosen;
+                RebuildTurzxButtons();
+                UpdateTurzxStatus(_loop?.Status);
+                TrySaveSettings();
+                _loop?.Apply(_controlSettings);
+            };
+            _turzxButtons.Children.Add(button);
+        }
+    }
+
+    private void UpdateTurzxStatus(ControlStatus? status)
+    {
+        if (status?.TurzxInfo is { } info)
+        {
+            _turzxStatus.Text = info;
+            _turzxStatus.Foreground = info.StartsWith("Connected", StringComparison.Ordinal) ? Theme.Good : Theme.Dim;
+        }
+        else if (_controlSettings.TurzxScreen == LcdMode.Unmanaged)
+        {
+            _turzxStatus.Text = "Not managed — choose Off, On, Black or White to take control of the screen.";
+            _turzxStatus.Foreground = Theme.Dim;
+        }
+        else
+        {
+            _turzxStatus.Text = "Searching for the Turzx screen…";
+            _turzxStatus.Foreground = Theme.Dim;
+        }
     }
 
     private UIElement BuildDevicesPage()
@@ -1726,21 +1875,25 @@ public sealed class MainWindow : Window
             _controlSettings.BlackoutPrevRgbEnabled = _controlSettings.RgbEnabled;
             _controlSettings.BlackoutPrevRgbOff = _controlSettings.RgbOff;
             _controlSettings.BlackoutPrevLcd = _controlSettings.LcdScreens;
+            _controlSettings.BlackoutPrevTurzx = _controlSettings.TurzxScreen;
             _controlSettings.RgbEnabled = true; // paint black, don't just stop controlling
             _controlSettings.RgbOff = true;
             _controlSettings.LcdScreens = LcdMode.Off;
+            _controlSettings.TurzxScreen = LcdMode.Off;
         }
         else
         {
             _controlSettings.RgbEnabled = _controlSettings.BlackoutPrevRgbEnabled;
             _controlSettings.RgbOff = _controlSettings.BlackoutPrevRgbOff;
             _controlSettings.LcdScreens = _controlSettings.BlackoutPrevLcd;
+            _controlSettings.TurzxScreen = _controlSettings.BlackoutPrevTurzx;
         }
 
         _controlSettings.BlackoutActive = on;
         TrySaveSettings();
         RebuildSwatches();
         RebuildLcdButtons();
+        RebuildTurzxButtons();
         UpdateRgbStatusText();
         UpdateLcdStatusText();
         _loop?.Apply(_controlSettings);
@@ -1801,6 +1954,7 @@ public sealed class MainWindow : Window
         }
 
         UpdateDashboard(status);
+        UpdateTurzxStatus(status);
 
         if (status is null || !status.Running)
         {

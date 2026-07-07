@@ -19,6 +19,7 @@
     <ProjectReference Include="..\..\src\DeviceMaster.Core\DeviceMaster.Core.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.LianLi\DeviceMaster.Devices.LianLi.csproj" />
+    <ProjectReference Include="..\..\src\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.AsusAura\DeviceMaster.Devices.AsusAura.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
   </ItemGroup>
