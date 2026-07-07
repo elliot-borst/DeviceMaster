@@ -60,7 +60,8 @@ public static class LcdMetricRenderer
                 using var valueBrush = new SolidBrush(accentColor);
                 g.DrawString(value, valueFont, valueBrush, new RectangleF(0, height * 0.28f, width, height * 0.44f), format);
 
-                using var unitFont = FitFont(g, unit, height * 0.115f, safeWidth, FontStyle.Regular);
+                // unit line matches the label line: same size, same bold weight
+                using var unitFont = FitFont(g, unit, height * 0.135f, safeWidth, FontStyle.Bold);
                 g.DrawString(unit, unitFont, dim, new RectangleF(0, height * 0.70f, width, height * 0.16f), format);
             }
 
