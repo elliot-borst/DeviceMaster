@@ -105,6 +105,12 @@ public sealed class ControlSettings
     /// <summary>Per-screen overrides; screens without an entry fall back to the defaults above.</summary>
     public List<LcdScreenConfig> LcdScreenConfigs { get; set; } = [];
 
+    /// <summary>Movie mode: one switch that blacks out every LED and screen; restores on toggle-off.</summary>
+    public bool BlackoutActive { get; set; }
+    public bool BlackoutPrevRgbEnabled { get; set; } = true;
+    public bool BlackoutPrevRgbOff { get; set; }
+    public LcdMode BlackoutPrevLcd { get; set; } = LcdMode.Metrics;
+
     /// <summary>Finds (or creates, unsaved) the config for a screen id.</summary>
     public LcdScreenConfig ScreenConfig(string id, bool isPump)
     {

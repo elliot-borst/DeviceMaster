@@ -201,8 +201,23 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(brand, Dock.Top);
         side.Children.Add(brand);
 
-        // ---- sidebar bottom: version, startup, updates ----
+        // ---- sidebar bottom: blackout, version, startup, updates ----
         var bottom = new StackPanel();
+
+        // movie mode: every LED and screen dark with one flick, restored on the way back
+        var blackoutRow = new DockPanel { Margin = new Thickness(4, 0, 0, 14), LastChildFill = false };
+        blackoutRow.Children.Add(new TextBlock
+        {
+            Text = "🌙  Blackout",
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Theme.Text,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var blackoutToggle = Theme.Toggle(_controlSettings.BlackoutActive, SetBlackout);
+        DockPanel.SetDock(blackoutToggle, Dock.Right);
+        blackoutRow.Children.Add(blackoutToggle);
+        bottom.Children.Add(blackoutRow);
         _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(4, 0, 0, 10) };
         _updateNotice.Children.Add(new Border { Width = 8, Height = 8, CornerRadius = new CornerRadius(4), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
         _updateNoticeText = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
@@ -1613,6 +1628,42 @@ public sealed class MainWindow : Window
 
         UpdateRgbStatusText();
         ApplyControlState();
+    }
+
+    /// <summary>
+    /// Movie mode: blacks out every LED (actively — Lian Li fans would rainbow if we merely
+    /// stopped) and turns every screen backlight off; toggling back restores what was set.
+    /// </summary>
+    private void SetBlackout(bool on)
+    {
+        if (on == _controlSettings.BlackoutActive)
+        {
+            return;
+        }
+
+        if (on)
+        {
+            _controlSettings.BlackoutPrevRgbEnabled = _controlSettings.RgbEnabled;
+            _controlSettings.BlackoutPrevRgbOff = _controlSettings.RgbOff;
+            _controlSettings.BlackoutPrevLcd = _controlSettings.LcdScreens;
+            _controlSettings.RgbEnabled = true; // paint black, don't just stop controlling
+            _controlSettings.RgbOff = true;
+            _controlSettings.LcdScreens = LcdMode.Off;
+        }
+        else
+        {
+            _controlSettings.RgbEnabled = _controlSettings.BlackoutPrevRgbEnabled;
+            _controlSettings.RgbOff = _controlSettings.BlackoutPrevRgbOff;
+            _controlSettings.LcdScreens = _controlSettings.BlackoutPrevLcd;
+        }
+
+        _controlSettings.BlackoutActive = on;
+        TrySaveSettings();
+        RebuildSwatches();
+        RebuildLcdButtons();
+        UpdateRgbStatusText();
+        UpdateLcdStatusText();
+        _loop?.Apply(_controlSettings);
     }
 
     /// <summary>Development sandbox: never start the control loop (screenshot iteration).</summary>
