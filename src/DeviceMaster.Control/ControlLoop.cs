@@ -733,6 +733,16 @@ public sealed class ControlLoop : IDisposable
                         gpu.Ene?.Persist();
                     }
 
+                    // SL V3 fans: persist the stored lighting effect too, so keepalive gaps
+                    // (app updates, reboots) fall back to this color instead of rainbow
+                    lock (_slv3Gate)
+                    {
+                        if (_slv3 is not null && !_slv3Dead)
+                        {
+                            _slv3.SaveConfig();
+                        }
+                    }
+
                     _persistedRgb = key;
                     _log?.Invoke("RGB persisted to controller flash (survives power cycles)");
                 }

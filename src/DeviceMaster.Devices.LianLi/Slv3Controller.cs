@@ -477,17 +477,28 @@ public sealed class Slv3Controller : IDisposable
         }
 
         // persist bindings to the fans' flash regardless — the reference does the same
+        SaveConfig();
+
+        log?.Invoke(converged
+            ? $"SL V3 group {device.MacText[..4]} re-paired and persisted"
+            : $"SL V3 group {device.MacText[..4]} did not confirm the pairing within 4 s (will retry later)");
+        return converged;
+    }
+
+    /// <summary>
+    /// Broadcast SaveConfig (0x12 0x15): persists the fans' current state — pairings and the
+    /// stored lighting effect — to flash, so a keepalive gap (app update, reboot) falls back
+    /// to the saved state instead of the factory rainbow. Flash writes are endurance-limited:
+    /// call this only when a state is settled, never per refresh.
+    /// </summary>
+    public void SaveConfig()
+    {
         var save = Slv3Protocol.BuildSaveConfigRfData(MasterMac);
         for (var round = 0; round < 3; round++)
         {
             SendRfChunks(save, MasterChannel, 0xFF);
             Thread.Sleep(200);
         }
-
-        log?.Invoke(converged
-            ? $"SL V3 group {device.MacText[..4]} re-paired and persisted"
-            : $"SL V3 group {device.MacText[..4]} did not confirm the pairing within 4 s (will retry later)");
-        return converged;
     }
 
     /// <summary>First rx endpoint (1-14) not used by a group bound to this dongle.</summary>
