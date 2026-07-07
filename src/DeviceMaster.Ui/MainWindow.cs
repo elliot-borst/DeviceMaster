@@ -466,16 +466,16 @@ public sealed class MainWindow : Window
         return page;
     }
 
+    private Border _lcdControlCard = null!;
+
     private UIElement BuildScreensPage()
     {
-        // full width — screen groups render as cards side by side
+        // one two-column grid: Screen Control occupies the first cell (same width and row
+        // height as the group beside it), the group cards fill the rest
         var page = new StackPanel();
         page.Children.Add(PageTitle("Screens", "the pump LCD and every fan LCD"));
-        var control = BuildLcdCard();
-        control.MaxWidth = 1000;
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        page.Children.Add(control);
-        _screenList.Margin = new Thickness(0, 14, 0, 0);
+        _lcdControlCard = BuildLcdCard();
+        _lcdControlCard.Margin = new Thickness(0, 0, 14, 14);
         page.Children.Add(_screenList);
         RebuildScreenList();
         return page;
@@ -763,12 +763,13 @@ public sealed class MainWindow : Window
         var ids = ScreenIds();
         _screenListSignature = string.Join("|", ids.Select(s => s.Id));
         _screenList.Children.Clear();
+        _screenList.Children.Add(_lcdControlCard); // first cell of the grid
 
         if (ids.Count == 0)
         {
             _screenList.Children.Add(new TextBlock
             {
-                Text = "Screens appear here once a screen mode is active (pick Off, Black, White or Metrics above).",
+                Text = "Screens appear here once a screen mode is active (pick On above).",
                 Foreground = Theme.Dim,
                 FontSize = 12.5,
             });
@@ -784,10 +785,14 @@ public sealed class MainWindow : Window
             members.Add((id, isPump ? "Pump screen" : $"Fan screen {++fanIndex}", config));
         }
 
+        // cluster related groups next to each other by sorting on the REVERSED words of the
+        // name — "bottom intake"/"side intake" pair up, "rear exhaust"/"top exhaust" pair up,
+        // and "pump" lands first (descending)
+        static string ClusterKey(string name) => string.Join(" ", name.Split(' ').Reverse());
         var groups = members
             .GroupBy(m => m.Config.Group.Trim(), StringComparer.OrdinalIgnoreCase) // "Front" == "front"
             .OrderBy(g => g.Key.Length == 0) // named groups first, "Ungrouped" last
-            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
+            .ThenByDescending(g => ClusterKey(g.Key), StringComparer.OrdinalIgnoreCase);
         foreach (var group in groups)
         {
             _screenList.Children.Add(ScreenGroupCard(group.Key, group.ToList()));
