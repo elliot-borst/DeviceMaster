@@ -778,7 +778,7 @@ public sealed class MainWindow : Window
         }
 
         var groups = members
-            .GroupBy(m => m.Config.Group.Trim())
+            .GroupBy(m => m.Config.Group.Trim(), StringComparer.OrdinalIgnoreCase) // "Front" == "front"
             .OrderBy(g => g.Key.Length == 0) // named groups first, "Ungrouped" last
             .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
         foreach (var group in groups)
