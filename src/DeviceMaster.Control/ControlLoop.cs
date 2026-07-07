@@ -1185,8 +1185,19 @@ public sealed class ControlLoop : IDisposable
                     ? ("PUMP", rpm.ToString(), "rpm", (122, 167, 255))
                     : null;
 
+            case LcdMetric.PumpDuty:
+                return readings.FirstOrDefault(r => r.IsPump) is { } pumpReading
+                    ? ("PUMP", pumpReading.AppliedDutyPercent.ToString(), "%", (122, 167, 255))
+                    : null;
+
             case LcdMetric.FanDuty:
                 return ("FANS", duty.ToString(), "%", (122, 167, 255));
+
+            case LcdMetric.FanRpm:
+                var rpms = readings.Where(r => !r.IsPump && r.Rpm is > 0).Select(r => r.Rpm!.Value).ToList();
+                return rpms.Count > 0
+                    ? ("FANS", ((int)rpms.Average()).ToString(), "rpm", (122, 167, 255))
+                    : null;
 
             case LcdMetric.CpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C");

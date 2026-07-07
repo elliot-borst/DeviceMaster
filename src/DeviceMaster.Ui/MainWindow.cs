@@ -730,8 +730,28 @@ public sealed class MainWindow : Window
     private readonly WrapPanel _lcdButtons = new() { Orientation = Orientation.Horizontal };
     private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
-    private static readonly string[] LcdMetricNames =
-        ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date", "VRAM %"];
+    // display order and names are independent of the enum (which persists by name)
+    private static readonly (LcdMetric Metric, string Name)[] LcdMetricChoices =
+    [
+        (LcdMetric.Coolant, "Coolant °C"),
+        (LcdMetric.CpuTemp, "CPU °C"),
+        (LcdMetric.GpuTemp, "GPU °C"),
+        (LcdMetric.CpuLoad, "CPU %"),
+        (LcdMetric.GpuLoad, "GPU %"),
+        (LcdMetric.RamLoad, "RAM %"),
+        (LcdMetric.VramLoad, "VRAM %"),
+        (LcdMetric.FanDuty, "Fan %"),
+        (LcdMetric.FanRpm, "Fan RPM"),
+        (LcdMetric.PumpDuty, "Pump %"),
+        (LcdMetric.PumpRpm, "Pump RPM"),
+        (LcdMetric.Clock, "Clock"),
+        (LcdMetric.Date, "Date"),
+    ];
+
+    private static readonly string[] LcdMetricNames = LcdMetricChoices.Select(c => c.Name).ToArray();
+
+    private static int LcdMetricChoiceIndex(LcdMetric metric) =>
+        Math.Max(0, Array.FindIndex(LcdMetricChoices, c => c.Metric == metric));
 
     // per-screen editor list (Screens page)
     // two equal columns of group cards; rows size to their own content (a UniformGrid would
@@ -1017,10 +1037,10 @@ public sealed class MainWindow : Window
         Grid.SetColumn(idBlock, 2);
         row.Children.Add(idBlock);
 
-        var metricDrop = new DmDropdown(LcdMetricNames, (int)config.Metric, 116);
+        var metricDrop = new DmDropdown(LcdMetricNames, LcdMetricChoiceIndex(config.Metric), 116);
         metricDrop.SelectionChanged += index =>
         {
-            config.Metric = (LcdMetric)index;
+            config.Metric = LcdMetricChoices[index].Metric;
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
         };
