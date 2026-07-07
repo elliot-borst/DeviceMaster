@@ -841,14 +841,6 @@ public sealed class MainWindow : Window
         });
         DockPanel.SetDock(nameBox, Dock.Left);
         header.Children.Add(nameBox);
-        header.Children.Add(new TextBlock
-        {
-            Text = $"{members.Count} screen{(members.Count == 1 ? "" : "s")}",
-            FontSize = 11.5,
-            Foreground = Theme.Faint,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 0, 0),
-        });
 
         var findAll = Theme.Btn("◎ Find all", primary: false, () =>
         {
@@ -861,7 +853,8 @@ public sealed class MainWindow : Window
         header.Children.Add(findAll);
         body.Children.Add(header);
 
-        // ---- member rows ----
+        // ---- table: column headers once, then the member rows ----
+        body.Children.Add(ScreenTableHeader());
         foreach (var (id, title, config) in members)
         {
             body.Children.Add(ScreenRow(id, title, config));
@@ -954,54 +947,101 @@ public sealed class MainWindow : Window
         return box;
     }
 
+    // table columns shared by the header row and every screen row: Find, Name, ID, Metric,
+    // Rotate, Color, Group (star — fills the rest, so the group box is never clipped)
+    private static Grid ScreenTableGrid()
+    {
+        var grid = new Grid();
+        foreach (var width in new[] { 88.0, 110.0, 108.0, 128.0, 90.0, 112.0 })
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
+        }
+
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        return grid;
+    }
+
+    private static Grid ScreenTableHeader()
+    {
+        var grid = ScreenTableGrid();
+        grid.Margin = new Thickness(14, 0, 14, 4);
+        var column = 0;
+        foreach (var text in new[] { "", "NAME", "ID", "METRIC", "ROTATE", "COLOR", "GROUP" })
+        {
+            var block = new TextBlock
+            {
+                Text = text,
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Theme.Faint,
+                Margin = new Thickness(column >= 3 ? 10 : 2, 0, 0, 0),
+            };
+            Grid.SetColumn(block, column++);
+            grid.Children.Add(block);
+        }
+
+        return grid;
+    }
+
     private Border ScreenRow(string id, string title, LcdScreenConfig config)
     {
-        var row = new DockPanel { LastChildFill = false };
+        var row = ScreenTableGrid();
 
         var find = Theme.Btn("◎ Find", primary: false, () => _loop?.IdentifyScreen(id));
-        find.Margin = new Thickness(0, 0, 12, 0);
-        DockPanel.SetDock(find, Dock.Left);
+        find.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetColumn(find, 0);
         row.Children.Add(find);
 
-        var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Width = 112 };
-        names.Children.Add(new TextBlock { Text = title, FontSize = 12.5, Foreground = Theme.Text, FontWeight = FontWeights.SemiBold });
-        names.Children.Add(new TextBlock
+        var name = new TextBlock
+        {
+            Text = title,
+            FontSize = 12.5,
+            Foreground = Theme.Text,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 0, 0),
+        };
+        Grid.SetColumn(name, 1);
+        row.Children.Add(name);
+
+        var idBlock = new TextBlock
         {
             Text = id.Length > 10 ? id[..10] + "…" : id,
-            FontSize = 10,
+            FontSize = 10.5,
             Foreground = Theme.Faint,
             FontFamily = Theme.Mono,
-        });
-        DockPanel.SetDock(names, Dock.Left);
-        row.Children.Add(names);
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 0, 0),
+            ToolTip = id,
+        };
+        Grid.SetColumn(idBlock, 2);
+        row.Children.Add(idBlock);
 
-        var metricDrop = new DmDropdown(LcdMetricNames, (int)config.Metric, 108);
+        var metricDrop = new DmDropdown(LcdMetricNames, (int)config.Metric, 116);
         metricDrop.SelectionChanged += index =>
         {
             config.Metric = (LcdMetric)index;
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
         };
-        var metricPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-        metricPanel.Children.Add(Theme.SmallLabel("Metric"));
-        metricPanel.Children.Add(metricDrop);
-        DockPanel.SetDock(metricPanel, Dock.Left);
-        row.Children.Add(metricPanel);
+        metricDrop.Margin = new Thickness(10, 0, 0, 0);
+        metricDrop.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetColumn(metricDrop, 3);
+        row.Children.Add(metricDrop);
 
-        var rotationDrop = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(config.RotationDegrees / 90, 0, 3), 70);
+        var rotationDrop = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(config.RotationDegrees / 90, 0, 3), 76);
         rotationDrop.SelectionChanged += index =>
         {
             config.RotationDegrees = index * 90;
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
         };
-        var rotationPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-        rotationPanel.Children.Add(Theme.SmallLabel("Rotate"));
-        rotationPanel.Children.Add(rotationDrop);
-        DockPanel.SetDock(rotationPanel, Dock.Left);
-        row.Children.Add(rotationPanel);
+        rotationDrop.Margin = new Thickness(10, 0, 0, 0);
+        rotationDrop.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetColumn(rotationDrop, 4);
+        row.Children.Add(rotationDrop);
 
-        var colorDrop = new DmDropdown(LcdColorNames, LcdColorIndex(config), 92);
+        var colorDrop = new DmDropdown(LcdColorNames, LcdColorIndex(config), 98);
         colorDrop.SelectionChanged += index =>
         {
             config.ColorByValue = index == 8;
@@ -1011,23 +1051,22 @@ public sealed class MainWindow : Window
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
         };
-        var colors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-        colors.Children.Add(Theme.SmallLabel("Color"));
-        colors.Children.Add(colorDrop);
-        DockPanel.SetDock(colors, Dock.Left);
-        row.Children.Add(colors);
+        colorDrop.Margin = new Thickness(10, 0, 0, 0);
+        colorDrop.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetColumn(colorDrop, 5);
+        row.Children.Add(colorDrop);
 
-        // move the screen to another group by typing its name
+        // move the screen to another group by typing its name; stretches to the row edge
         var groupBox = new TextBox
         {
             Text = config.Group,
-            Width = 96,
             FontSize = 11.5,
             Background = Theme.Inset,
             Foreground = Theme.Text,
             CaretBrush = Theme.Text,
             BorderBrush = Theme.Line2,
             Padding = new Thickness(6, 3, 6, 3),
+            Margin = new Thickness(10, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = "Group name — screens with the same name cluster together",
         };
@@ -1050,11 +1089,8 @@ public sealed class MainWindow : Window
                 CommitGroup();
             }
         };
-        var groupPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        groupPanel.Children.Add(Theme.SmallLabel("Group"));
-        groupPanel.Children.Add(groupBox);
-        DockPanel.SetDock(groupPanel, Dock.Right);
-        row.Children.Add(groupPanel);
+        Grid.SetColumn(groupBox, 6);
+        row.Children.Add(groupBox);
 
         return Theme.InsetRow(row);
     }
