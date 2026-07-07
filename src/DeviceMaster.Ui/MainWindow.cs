@@ -23,7 +23,7 @@ public sealed class MainWindow : Window
     public static string AppVersion { get; } =
         (Assembly.GetExecutingAssembly().GetName().Version?.Major ?? 0).ToString();
 
-    public const string VersionDate = "2026-07-06";
+    public const string VersionDate = "2026-07-07";
 
     private readonly ControlSettings _controlSettings = ControlSettings.Load();
     private ControlLoop? _loop;
@@ -87,12 +87,10 @@ public sealed class MainWindow : Window
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
-    // hardware card — compact pills, two per row; collapsed behind the summary by default
-    private readonly System.Windows.Controls.Primitives.UniformGrid _hardwareRows = new() { Columns = 2, Visibility = Visibility.Collapsed };
+    // hardware page — summary count up top, then pills auto-grouped by family, three per row
+    private readonly StackPanel _hardwareRows = new();
     private readonly TextBlock _hwSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
-    private TextBlock _hwExpandLink = null!;
     private TextBlock _hwForgetLink = null!;
-    private bool _hwExpanded;
     private List<string> _lastHardwareKeys = [];
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
@@ -989,14 +987,6 @@ public sealed class MainWindow : Window
         head.Children.Add(_rescanButton);
 
         var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        _hwExpandLink = LinkText("▸  details", () =>
-        {
-            _hwExpanded = !_hwExpanded;
-            _hardwareRows.Visibility = _hwExpanded ? Visibility.Visible : Visibility.Collapsed;
-            _hwExpandLink.Text = _hwExpanded ? "▾  hide" : "▸  details";
-        });
-        DockPanel.SetDock(_hwExpandLink, Dock.Right);
-        summaryRow.Children.Add(_hwExpandLink);
         _hwForgetLink = LinkText("forget missing", () =>
         {
             _controlSettings.SeenDeviceIds.RemoveAll(id => !_lastHardwareKeys.Contains(id));
@@ -1221,12 +1211,20 @@ public sealed class MainWindow : Window
         }
 
         var hardwareKeys = new List<string>();
+        var pills = new List<(string Group, Border Pill)>();
 
-        void AddPill(string name, string? displayId, string tag, string? key = null)
+        void AddPill(string group, string name, string? displayId, string tag, string? key = null)
         {
             hardwareKeys.Add(key ?? displayId ?? name);
-            _hardwareRows.Children.Add(HardwarePill(name, displayId, tag));
+            pills.Add((group, HardwarePill(name, displayId, tag)));
         }
+
+        static string ChainGroup(string name) =>
+            name.StartsWith("Corsair", StringComparison.OrdinalIgnoreCase) ? "Corsair"
+            : name.StartsWith("Lian Li", StringComparison.OrdinalIgnoreCase) ? "Lian Li"
+            : name.StartsWith("Motherboard", StringComparison.OrdinalIgnoreCase) ? "Motherboard"
+            : name.StartsWith("GPU", StringComparison.OrdinalIgnoreCase) ? "GPU"
+            : "Other";
 
         try
         {
@@ -1298,17 +1296,17 @@ public sealed class MainWindow : Window
                 .Where(d => d.Kind == DeviceKind.CorsairLinkHub && d.MaxOutputReportLength > 0)
                 .OrderBy(d => d.SerialNumber, StringComparer.Ordinal))
             {
-                AddPill("Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", hub.SerialNumber);
+                AddPill("Corsair", "Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", hub.SerialNumber);
             }
 
             foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
             {
-                AddPill("Corsair pump/res LCD", lcd.SerialNumber, "HID");
+                AddPill("Corsair", "Corsair pump/res LCD", lcd.SerialNumber, "HID");
             }
 
             foreach (var (name, id, tag) in chainRows)
             {
-                AddPill(name, Shorten(id), tag, id ?? name);
+                AddPill(ChainGroup(name), name, Shorten(id), tag, id ?? name);
             }
 
             if (chainPending)
@@ -1329,7 +1327,7 @@ public sealed class MainWindow : Window
                 .OrderBy(n => n.UsbId!.Value.Pid))
             {
                 var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX · control" : "RX · telemetry";
-                AddPill($"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB");
+                AddPill("Lian Li", $"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB");
             }
 
             var fanNodes = scan.UsbTree
@@ -1340,23 +1338,23 @@ public sealed class MainWindow : Window
                 .ToList();
             for (var i = 0; i < fanNodes.Count; i++)
             {
-                AddPill($"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", fanNodes[i]);
+                AddPill("Lian Li", $"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", fanNodes[i]);
             }
 
             foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
             {
-                AddPill("Turzx/Turing screen", screen.SerialHint, screen.ComPort);
+                AddPill("Other", "Turzx/Turing screen", screen.SerialHint, screen.ComPort);
             }
 
             foreach (var aura in scan.HidDevices.Where(d => d.Kind == DeviceKind.MotherboardRgbController)
                 .DistinctBy(d => d.UsbId))
             {
-                AddPill("ASUS Aura LED controller", aura.UsbId.ToString(), "HID");
+                AddPill("Motherboard", "ASUS Aura LED controller", aura.UsbId.ToString(), "HID");
             }
 
             foreach (var gpu in _loop?.GpuInventory ?? [])
             {
-                AddPill(
+                AddPill("GPU",
                     gpu.Gpu.Name,
                     $"{gpu.Gpu.SubVendor:X4}:{gpu.Gpu.SubDevice:X4} · {gpu.Partner}",
                     gpu.Ene is not null ? "RGB" : "GPU",
@@ -1365,15 +1363,10 @@ public sealed class MainWindow : Window
 
             foreach (var stick in _loop?.RamInventory ?? [])
             {
-                AddPill(
+                AddPill("RAM",
                     $"RAM · {stick.Manufacturer} {stick.PartNumber}",
                     $"SPD 0x{stick.SpdAddress:X2} · {stick.BusName}",
                     "SMBus");
-            }
-
-            if (_hardwareRows.Children.Count == 0)
-            {
-                _hardwareRows.Children.Add(new TextBlock { Text = "No supported devices found.", Foreground = Theme.Dim, FontSize = 12.5 });
             }
 
             // roll-up: learn new identities, flag remembered ones that vanished
@@ -1400,7 +1393,38 @@ public sealed class MainWindow : Window
             _hwForgetLink.Visibility = missingDevices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var key in missingDevices)
             {
-                _hardwareRows.Children.Add(HardwarePill("Remembered device — not detected", Shorten(key), "missing"));
+                pills.Add(("Missing", HardwarePill("Remembered device — not detected", Shorten(key), "missing")));
+            }
+
+            // auto-grouped rendering: family headers with counts, three pills per row
+            foreach (var group in new[] { "Missing", "Corsair", "Lian Li", "Motherboard", "RAM", "GPU", "Other" })
+            {
+                var members = pills.Where(p => p.Group == group).Select(p => p.Pill).ToList();
+                if (members.Count == 0)
+                {
+                    continue;
+                }
+
+                _hardwareRows.Children.Add(new TextBlock
+                {
+                    Text = $"{group}  ·  {members.Count}",
+                    FontSize = 11.5,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = group == "Missing" ? Theme.Warn : Theme.Dim,
+                    Margin = new Thickness(2, 10, 0, 6),
+                });
+                var grid = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
+                foreach (var pill in members)
+                {
+                    grid.Children.Add(pill);
+                }
+
+                _hardwareRows.Children.Add(grid);
+            }
+
+            if (pills.Count == 0)
+            {
+                _hardwareRows.Children.Add(new TextBlock { Text = "No supported devices found.", Foreground = Theme.Dim, FontSize = 12.5 });
             }
 
             if (conflicts.Count > 0)
