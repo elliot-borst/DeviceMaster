@@ -741,7 +741,8 @@ public sealed class MainWindow : Window
         ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date"];
 
     // per-screen editor list (Screens page)
-    private readonly WrapPanel _screenList = new();
+    // two equal columns of group cards — no fixed widths, so it fits any monitor without scrolling
+    private readonly System.Windows.Controls.Primitives.UniformGrid _screenList = new() { Columns = 2 };
     private string _screenListSignature = "?";
 
     private static IReadOnlyList<(string Id, bool IsPump)> FakeScreens =>
@@ -848,9 +849,8 @@ public sealed class MainWindow : Window
 
         return new Border
         {
-            Width = 850, // two group cards fit side by side
             Margin = new Thickness(0, 0, 14, 14),
-            Padding = new Thickness(18, 14, 18, 12),
+            Padding = new Thickness(16, 12, 16, 10),
             CornerRadius = new CornerRadius(14),
             Background = Theme.Card,
             BorderBrush = Theme.Line,
@@ -944,7 +944,7 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(find, Dock.Left);
         row.Children.Add(find);
 
-        var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Width = 130 };
+        var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Width = 112 };
         names.Children.Add(new TextBlock { Text = title, FontSize = 12.5, Foreground = Theme.Text, FontWeight = FontWeights.SemiBold });
         names.Children.Add(new TextBlock
         {
