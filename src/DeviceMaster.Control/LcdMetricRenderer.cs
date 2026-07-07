@@ -18,9 +18,11 @@ public static class LcdMetricRenderer
 
     public static byte[] Render(
         int width, int height, string label, string value, string unit,
-        (byte R, byte G, byte B) accent, int rotationDegrees = 0)
+        (byte R, byte G, byte B) accent, int rotationDegrees = 0,
+        (byte R, byte G, byte B)? background = null)
     {
-        var key = $"{width}x{height}|{label}|{value}|{unit}|{accent.R},{accent.G},{accent.B}|{rotationDegrees}";
+        var bg = background ?? ((byte)0, (byte)0, (byte)0);
+        var key = $"{width}x{height}|{label}|{value}|{unit}|{accent.R},{accent.G},{accent.B}|{rotationDegrees}|{bg}";
         lock (Gate)
         {
             if (Cache.TryGetValue(key, out var cached))
@@ -38,11 +40,15 @@ public static class LcdMetricRenderer
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                g.Clear(Color.Black);
+                g.Clear(Color.FromArgb(bg.Item1, bg.Item2, bg.Item3));
 
                 var accentColor = Color.FromArgb(accent.R, accent.G, accent.B);
                 using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                using var dim = new SolidBrush(Color.FromArgb(176, 186, 205));
+
+                // label/unit: light gray on dark backgrounds, same as the value color otherwise
+                using var dim = new SolidBrush(bg.Item1 + bg.Item2 + bg.Item3 < 120
+                    ? Color.FromArgb(176, 186, 205)
+                    : accentColor);
 
                 // round panels lose the corners — keep text inside ~78% of the width
                 var safeWidth = width * 0.78f;

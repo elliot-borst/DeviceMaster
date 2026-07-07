@@ -836,7 +836,7 @@ public sealed class ControlLoop : IDisposable
         }
 
         _lcdShownKey.Remove(id); // force an immediate re-push on the next metric round
-        _lcdLastFanPush.Remove(id);
+
         _lcdMetricsDue = 0;
         _wake.Set();
     }
@@ -854,7 +854,7 @@ public sealed class ControlLoop : IDisposable
 
                 _lcdIdentifyUntil.Remove(id);
                 _lcdShownKey.Remove(id); // restore the metric right away
-                _lcdLastFanPush.Remove(id);
+        
             }
 
             return false;
@@ -1028,7 +1028,7 @@ public sealed class ControlLoop : IDisposable
     private long _pumpLcdKeepaliveDue;
     private long _lcdMetricsDue;
     private readonly Dictionary<string, string> _lcdShownKey = [];
-    private readonly Dictionary<string, long> _lcdLastFanPush = [];
+    private long _fanLcdBatchDue;
 
     private void StreamLcdMetrics(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
     {
@@ -1066,11 +1066,22 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        // Fan screens update as ONE batch on a 15 s cadence, not staggered per fan: staggered
+        // pushes kept some fan radio deaf at any given moment, so colors dropped to rainbow
+        // "randomly". A batch leaves quiet air between bursts, and every burst is followed by
+        // color confirms. Identify pushes (and screens with no frame yet) skip the wait.
+        var batchDue = Environment.TickCount64 >= _fanLcdBatchDue;
         var pushedAny = false;
         var ordinal = 0;
         foreach (var node in _lcdNodes.ToList())
         {
             ordinal++;
+            var urgent = IsIdentifying(node.Serial) || !_lcdShownKey.ContainsKey(node.Serial);
+            if (!batchDue && !urgent)
+            {
+                continue;
+            }
+
             var config = settings.ScreenConfig(node.Serial, isPump: false);
             var frame = ComposeScreenFrame(node.Serial, ordinal, config,
                 Slv3LcdProtocol.ScreenWidth, Slv3LcdProtocol.ScreenHeight,
@@ -1080,18 +1091,10 @@ public sealed class ControlLoop : IDisposable
                 continue;
             }
 
-            // identify pushes jump the queue; normal metric updates stay ≥10 s apart per fan
-            if (!IsIdentifying(node.Serial)
-                && Environment.TickCount64 - _lcdLastFanPush.GetValueOrDefault(node.Serial) < 10_000)
-            {
-                continue;
-            }
-
             try
             {
                 node.SendJpegFrame(frame);
                 _lcdShownKey[node.Serial] = key!;
-                _lcdLastFanPush[node.Serial] = Environment.TickCount64;
                 pushedAny = true;
             }
             catch (Exception ex)
@@ -1103,11 +1106,16 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        if (batchDue)
+        {
+            _fanLcdBatchDue = Environment.TickCount64 + 15_000;
+        }
+
         if (pushedAny)
         {
-            // fan radios go briefly deaf around LCD traffic — schedule a color confirm
+            // fan radios go briefly deaf around LCD traffic — follow every burst with confirms
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 1);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 2);
         }
     }
 
@@ -1119,10 +1127,13 @@ public sealed class ControlLoop : IDisposable
     {
         if (IsIdentifying(id))
         {
+            // unmissable: black number on a solid orange screen
             var name = ordinal == 0 ? "P" : ordinal.ToString();
             key = $"identify|{id}";
-            return LcdMetricRenderer.Render(width, height, "SCREEN",
-                name, id.Length > 6 ? id[..6] : id, (255, 255, 255), config.RotationDegrees);
+            return LcdMetricRenderer.Render(width, height,
+                ordinal == 0 ? "PUMP SCREEN" : "FAN SCREEN",
+                name, id.Length > 6 ? id[..6] : id,
+                accent: (0, 0, 0), config.RotationDegrees, background: (255, 150, 0));
         }
 
         if (ReadLcdMetric(config.Metric, readings, duty, ref lhmReadings) is not { } m)
