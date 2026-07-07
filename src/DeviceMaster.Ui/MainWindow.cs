@@ -476,6 +476,7 @@ public sealed class MainWindow : Window
         page.Children.Add(PageTitle("Screens", "the pump LCD and every fan LCD"));
         _lcdControlCard = BuildLcdCard();
         _lcdControlCard.Margin = new Thickness(0, 0, 14, 14);
+        _lcdControlCard.VerticalAlignment = VerticalAlignment.Stretch; // match the pump card's row height
         page.Children.Add(_screenList);
         RebuildScreenList();
         return page;
@@ -730,7 +731,7 @@ public sealed class MainWindow : Window
     private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
     private static readonly string[] LcdMetricNames =
-        ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date"];
+        ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date", "VRAM %"];
 
     // per-screen editor list (Screens page)
     // two equal columns of group cards; rows size to their own content (a UniformGrid would
@@ -952,7 +953,7 @@ public sealed class MainWindow : Window
     private static Grid ScreenTableGrid()
     {
         var grid = new Grid();
-        foreach (var width in new[] { 88.0, 110.0, 108.0, 128.0, 90.0, 112.0 })
+        foreach (var width in new[] { 88.0, 110.0, 140.0, 128.0, 90.0, 112.0 })
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
         }
@@ -1006,13 +1007,12 @@ public sealed class MainWindow : Window
 
         var idBlock = new TextBlock
         {
-            Text = id.Length > 10 ? id[..10] + "…" : id,
-            FontSize = 10.5,
+            Text = id, // full serial, no truncation
+            FontSize = 10,
             Foreground = Theme.Faint,
             FontFamily = Theme.Mono,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0),
-            ToolTip = id,
         };
         Grid.SetColumn(idBlock, 2);
         row.Children.Add(idBlock);

@@ -1193,11 +1193,14 @@ public sealed class ControlLoop : IDisposable
             case LcdMetric.GpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C");
             case LcdMetric.CpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%");
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%", preferName: "total");
             case LcdMetric.GpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%");
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%", preferName: "core");
             case LcdMetric.RamLoad:
                 return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%");
+            case LcdMetric.VramLoad:
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "VRAM", "%",
+                    preferName: "memory", excludeName: "controller");
             default:
                 return null;
         }
@@ -1205,14 +1208,24 @@ public sealed class ControlLoop : IDisposable
 
     private (string, string, string, (byte, byte, byte))? LhmLcdMetric(
         ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings,
-        string hardware, SensorKind kind, string label, string unit)
+        string hardware, SensorKind kind, string label, string unit,
+        string? preferName = null, string? excludeName = null)
     {
         try
         {
             _lhm ??= new LhmSensorSource();
             lhmReadings ??= _lhm.Read();
-            var value = lhmReadings
+            var candidates = lhmReadings
                 .Where(r => r.Kind == kind && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
+                .Where(r => excludeName is null || !r.Name.Contains(excludeName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // prefer the canonical sensor ("CPU Total", "GPU Core", "GPU Memory") over the
+            // max of every load sensor the hardware happens to expose
+            var preferred = preferName is null
+                ? []
+                : candidates.Where(r => r.Name.Contains(preferName, StringComparison.OrdinalIgnoreCase)).ToList();
+            var value = (preferred.Count > 0 ? preferred : candidates)
                 .Select(r => (double?)r.Value)
                 .Max();
             if (value is not { } v)
