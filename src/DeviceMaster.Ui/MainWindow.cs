@@ -867,20 +867,25 @@ public sealed class MainWindow : Window
     ];
 
     private static readonly string[] LcdColorNames =
-        ["Auto", "White", "Red", "Orange", "Green", "Cyan", "Blue", "Purple", "Pink"];
+        ["White", "Red", "Orange", "Green", "Cyan", "Blue", "Purple", "Pink", "By temp"];
 
     private static int LcdColorIndex(LcdScreenConfig config)
     {
+        if (config.ColorByValue)
+        {
+            return 8; // By temp — green/amber/red as the value climbs
+        }
+
         if (config.FontR is not { } r || config.FontG is not { } g || config.FontB is not { } b)
         {
-            return 0; // Auto
+            return 0; // unset = White
         }
 
         for (var i = 0; i < FontSwatchColors.Length; i++)
         {
             if (FontSwatchColors[i] == ((byte)r, (byte)g, (byte)b))
             {
-                return i + 1;
+                return i;
             }
         }
 
@@ -980,9 +985,10 @@ public sealed class MainWindow : Window
         var colorDrop = new DmDropdown(LcdColorNames, LcdColorIndex(config), 92);
         colorDrop.SelectionChanged += index =>
         {
-            (config.FontR, config.FontG, config.FontB) = index == 0
-                ? (null, null, null) // Auto — green/amber/red by value
-                : ((int?)FontSwatchColors[index - 1].R, (int?)FontSwatchColors[index - 1].G, (int?)FontSwatchColors[index - 1].B);
+            config.ColorByValue = index == 8;
+            (config.FontR, config.FontG, config.FontB) = index == 8
+                ? (null, null, null)
+                : ((int?)FontSwatchColors[index].R, (int?)FontSwatchColors[index].G, (int?)FontSwatchColors[index].B);
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
         };

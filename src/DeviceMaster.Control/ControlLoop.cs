@@ -1152,9 +1152,11 @@ public sealed class ControlLoop : IDisposable
             return null;
         }
 
-        var accent = config is { FontR: { } fr, FontG: { } fg, FontB: { } fb }
-            ? ((byte)Math.Clamp(fr, 0, 255), (byte)Math.Clamp(fg, 0, 255), (byte)Math.Clamp(fb, 0, 255))
-            : m.Accent;
+        var accent = config.ColorByValue
+            ? m.Accent // green/amber/red by thresholds
+            : config is { FontR: { } fr, FontG: { } fg, FontB: { } fb }
+                ? ((byte)Math.Clamp(fr, 0, 255), (byte)Math.Clamp(fg, 0, 255), (byte)Math.Clamp(fb, 0, 255))
+                : ((byte)235, (byte)235, (byte)245); // default: plain white
         key = $"{config.Metric}|{m.Value}|{m.Unit}|{accent}|{config.RotationDegrees}";
         return LcdMetricRenderer.Render(width, height, m.Label, m.Value, m.Unit, accent, config.RotationDegrees);
     }

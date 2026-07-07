@@ -58,10 +58,13 @@ public sealed class LcdScreenConfig
     /// <summary>0, 90, 180 or 270 — applied when rendering the frame.</summary>
     public int RotationDegrees { get; set; }
 
-    /// <summary>Fixed font color; all three null = automatic (green/amber/red by thresholds).</summary>
+    /// <summary>Fixed font color; all three null = plain white.</summary>
     public int? FontR { get; set; }
     public int? FontG { get; set; }
     public int? FontB { get; set; }
+
+    /// <summary>Color the value by temperature/load thresholds (green/amber/red) instead.</summary>
+    public bool ColorByValue { get; set; }
 }
 
 /// <summary>User-facing control configuration, persisted as JSON under %LOCALAPPDATA%\DeviceMaster.</summary>
