@@ -136,8 +136,7 @@ public sealed class MainWindow : Window
             MaybeRebuildScreenList();
             if (_downloading)
             {
-                _updateNoticeText.Text = $"Updating to {_pendingUpdate?.Tag} — downloading"
-                    + new string('.', 1 + _downloadDots++ % 3);
+                _updateNoticeText.Text = $"Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
             }
         };
         timer.Start();
