@@ -61,19 +61,18 @@ public sealed class TurzxScreen : IDisposable
             throw new InvalidOperationException("Turzx screen writes are not permitted by the device registry.");
         }
 
-        // No hardware flow control: this panel is a usbser CDC port that never asserts CTS, so
-        // RTS/CTS handshaking (the reference's rtscts=True) makes every write block until it
-        // fails with "the semaphore timeout period has expired". Assert DTR+RTS instead, the
-        // usual "terminal present" signalling for a CDC virtual COM port.
+        // No hardware flow control, and DO NOT enlarge the driver buffers: this panel is a
+        // usbser CDC port, and calling SetupComm with a big WriteBufferSize makes every write
+        // fail with "the semaphore timeout period has expired" (proven with `turzx probe` —
+        // writes complete in <1 ms with the default buffers). Assert DTR+RTS, the usual
+        // "terminal present" signalling for a CDC virtual COM port.
         var port = new SerialPort(comPort, BaudRate)
         {
             Handshake = Handshake.None,
             DtrEnable = true,
             RtsEnable = true,
             ReadTimeout = 1000,
-            WriteTimeout = 15_000,
-            ReadBufferSize = 1 << 16,
-            WriteBufferSize = 1 << 20,
+            WriteTimeout = 30_000, // a full 480×1920 frame is ~3.7 MB; give it room
         };
         port.Open();
         return new TurzxScreen(port, comPort, serial);
@@ -117,12 +116,18 @@ public sealed class TurzxScreen : IDisposable
         _initialized = true;
     }
 
-    /// <summary>Handshake: read the panel's ID ("chs_88inch.dev1_rom1.90") and its ROM version.</summary>
+    /// <summary>
+    /// Handshake: read the panel's ID ("chs_88inch.dev1_rom1.90") and its ROM version. Throws
+    /// <see cref="TurzxUnsupportedException"/> if the panel never answers — this Turing protocol
+    /// is NOT what it speaks (e.g. a newer 8.8" revision). Gating on this reply is what stops us
+    /// blasting a ~3.7 MB frame at a panel that won't drain it (which stalls the port for 30 s
+    /// and can knock it off the USB bus).
+    /// </summary>
     private void Hello()
     {
         try { _port.DiscardInBuffer(); } catch { /* best effort */ }
 
-        for (var attempt = 0; attempt < 3; attempt++)
+        for (var attempt = 0; attempt < 4; attempt++)
         {
             Write(TurzxProtocol.BuildCommand(TurzxProtocol.Hello));
             var response = ReadPrintable(23);
@@ -138,7 +143,9 @@ public sealed class TurzxScreen : IDisposable
             }
         }
 
-        // best effort: the full-frame path works without a valid ID; proceed regardless
+        throw new TurzxUnsupportedException(
+            "The panel did not answer the Turing HELLO handshake — it is likely a newer 8.8\" revision "
+            + "that uses a different serial protocol than the one implemented here.");
     }
 
     private string ReadPrintable(int count)
@@ -234,3 +241,10 @@ public sealed class TurzxScreen : IDisposable
 
     public void Dispose() => _port.Dispose();
 }
+
+/// <summary>
+/// Thrown when a panel opens on the serial port but does not speak the implemented Turing
+/// protocol (no HELLO reply). Signals the control loop to stop trying rather than repeatedly
+/// stalling the port with frame writes it will never accept.
+/// </summary>
+public sealed class TurzxUnsupportedException(string message) : Exception(message);

@@ -1206,6 +1206,18 @@ public sealed class ControlLoop : IDisposable
                 _turzxStatusText = $"Connected · {_turzx.ComPort}"
                     + (_turzx.RomVersion is { } rom ? $" · ROM {rom}" : "");
             }
+            catch (TurzxUnsupportedException ex)
+            {
+                // the panel is present but not a Turing-protocol device — stop hammering it
+                _turzxStatusText = $"Found on {_turzx?.ComPort ?? "the port"} but not responding to the Turing protocol "
+                    + "— likely a newer 8.8\" revision. Screen control is unavailable on this panel.";
+                _log?.Invoke($"Turzx: {ex.Message}");
+                _turzx?.Dispose();
+                _turzx = null;
+                _turzxShownKey = null;
+                _turzxAppliedBrightness = -1;
+                _turzxRetryAt = Environment.TickCount64 + 300_000; // 5 min: no protocol yet, don't re-stall the port
+            }
             catch (Exception ex)
             {
                 _turzxStatusText = $"Error: {ex.Message}";

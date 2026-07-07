@@ -38,6 +38,7 @@ try
         "slv3" => Slv3Commands.Run(args),
         "control" => ControlCommands.Run(args),
         "headers" => HeaderCommands.Run(args),
+        "turzx" => TurzxCommands.Run(args),
         "aura" => AuraCommands.Run(args),
         "ramrgb" => RgbChipCommands.RunRam(args),
         "gpurgb" => RgbChipCommands.RunGpu(args),
