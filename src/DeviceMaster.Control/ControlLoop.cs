@@ -1186,18 +1186,18 @@ public sealed class ControlLoop : IDisposable
                     : null;
 
             case LcdMetric.FanDuty:
-                return ("FANS", duty.ToString(), "% duty", (122, 167, 255));
+                return ("FANS", duty.ToString(), "%", (122, 167, 255));
 
             case LcdMetric.CpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C");
             case LcdMetric.GpuTemp:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C");
             case LcdMetric.CpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "% load");
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%");
             case LcdMetric.GpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "% load");
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%");
             case LcdMetric.RamLoad:
-                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "% used");
+                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%");
             default:
                 return null;
         }
