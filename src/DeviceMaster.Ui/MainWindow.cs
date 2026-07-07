@@ -733,8 +733,9 @@ public sealed class MainWindow : Window
         ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date"];
 
     // per-screen editor list (Screens page)
-    // two equal columns of group cards — no fixed widths, so it fits any monitor without scrolling
-    private readonly System.Windows.Controls.Primitives.UniformGrid _screenList = new() { Columns = 2 };
+    // two equal columns of group cards; rows size to their own content (a UniformGrid would
+    // stretch every row to the tallest group, leaving giant gaps under short rows)
+    private readonly Grid _screenList = new();
     private string _screenListSignature = "?";
 
     private static IReadOnlyList<(string Id, bool IsPump)> FakeScreens =>
@@ -763,11 +764,33 @@ public sealed class MainWindow : Window
         var ids = ScreenIds();
         _screenListSignature = string.Join("|", ids.Select(s => s.Id));
         _screenList.Children.Clear();
-        _screenList.Children.Add(_lcdControlCard); // first cell of the grid
+        _screenList.RowDefinitions.Clear();
+        if (_screenList.ColumnDefinitions.Count == 0)
+        {
+            _screenList.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            _screenList.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        }
+
+        var cell = 0;
+        void Place(UIElement element)
+        {
+            var row = cell / 2;
+            while (_screenList.RowDefinitions.Count <= row)
+            {
+                _screenList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
+
+            Grid.SetRow(element, row);
+            Grid.SetColumn(element, cell % 2);
+            _screenList.Children.Add(element);
+            cell++;
+        }
+
+        Place(_lcdControlCard); // first cell of the grid
 
         if (ids.Count == 0)
         {
-            _screenList.Children.Add(new TextBlock
+            Place(new TextBlock
             {
                 Text = "Screens appear here once a screen mode is active (pick On above).",
                 Foreground = Theme.Dim,
@@ -795,7 +818,7 @@ public sealed class MainWindow : Window
             .ThenByDescending(g => ClusterKey(g.Key), StringComparer.OrdinalIgnoreCase);
         foreach (var group in groups)
         {
-            _screenList.Children.Add(ScreenGroupCard(group.Key, group.ToList()));
+            Place(ScreenGroupCard(group.Key, group.ToList()));
         }
     }
 
@@ -852,7 +875,6 @@ public sealed class MainWindow : Window
             Background = Theme.Card,
             BorderBrush = Theme.Line,
             BorderThickness = new Thickness(1),
-            VerticalAlignment = VerticalAlignment.Top,
             Child = body,
         };
     }
@@ -1042,7 +1064,6 @@ public sealed class MainWindow : Window
         var card = Theme.CardShell("▣", "Screen Control", "every screen on or off · what each shows is set per group below", out var body, out _);
         RebuildLcdButtons();
         body.Children.Add(_lcdButtons);
-        body.Children.Add(_lcdStatus);
         UpdateLcdStatusText();
         return card;
     }
