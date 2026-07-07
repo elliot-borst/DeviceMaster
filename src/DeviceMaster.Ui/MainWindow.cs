@@ -82,6 +82,8 @@ public sealed class MainWindow : Window
     // pump card
     private DmSlider _pumpSlider = null!;
     private TextBlock _pumpLabel = null!;
+    private Border _pumpDot = null!;
+    private TextBlock _pumpBadge = null!;
     private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _pumpRows = new();
 
@@ -431,18 +433,18 @@ public sealed class MainWindow : Window
 
     private UIElement BuildCoolingPage()
     {
-        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
-        page.Children.Add(PageTitle("Cooling", "fan curves, manual duty and the pump"));
+        // two equal halves, equal heights (both cards stretch to the taller one)
+        var page = new StackPanel();
+        page.Children.Add(PageTitle("Cooling", "fixed fan duty and the pump"));
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var fan = BuildFanCard();
         fan.Margin = new Thickness(0, 0, 8, 0);
         Grid.SetColumn(fan, 0);
         grid.Children.Add(fan);
         var pump = BuildPumpCard();
         pump.Margin = new Thickness(8, 0, 0, 0);
-        pump.VerticalAlignment = VerticalAlignment.Top;
         Grid.SetColumn(pump, 1);
         grid.Children.Add(pump);
         page.Children.Add(grid);
@@ -507,7 +509,7 @@ public sealed class MainWindow : Window
 
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
 
-        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 260);
+        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 460);
         _dutySlider.ValueChanged += _ => OnControlSettingChanged();
         _dutyLabel = new TextBlock { Text = $"{_controlSettings.ManualDutyPercent}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
         var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -576,10 +578,14 @@ public sealed class MainWindow : Window
 
     private Border BuildPumpCard()
     {
-        var card = Theme.CardShell("≋", "Pump Control", "independent duty · never below 50%", out var body, out _);
+        var card = Theme.CardShell("≋", "Pump Control", "independent duty · never below 50%", out var body, out var head);
+        var badge = Theme.StatusBadge("Off", Theme.Faint, out _pumpDot, out _pumpBadge);
+        badge.VerticalAlignment = VerticalAlignment.Top;
+        DockPanel.SetDock(badge, Dock.Right);
+        head.Children.Add(badge);
 
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
-        _pumpSlider = new DmSlider(50, 100, Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100), 200);
+        _pumpSlider = new DmSlider(50, 100, Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100), 460);
         _pumpSlider.ValueChanged += _ => OnControlSettingChanged();
         _pumpLabel = new TextBlock { Text = $"{Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100)}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
         var pumpRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -1606,9 +1612,9 @@ public sealed class MainWindow : Window
         else
         {
             SetBadge("Running", Theme.Good);
-            _controlStatus.Text = status.Mode == ControlMode.Manual
-                ? $"Manual — all fans at {status.TargetDutyPercent}%"
-                : $"{status.SourceName} {temp}  →  fans {status.TargetDutyPercent}%";
+            _controlStatus.Text =
+                $"CPU {(status.CpuTemperatureC is { } ct ? $"{ct:F0} °C" : "—")}"
+                + $"   ·   GPU {(status.GpuTemperatureC is { } gt ? $"{gt:F0} °C" : "—")}";
             _controlStatus.Foreground = Theme.Text;
         }
 
@@ -1686,6 +1692,11 @@ public sealed class MainWindow : Window
         _fanBadge.Text = text;
         _fanBadge.Foreground = color;
         _fanDot.Background = color;
+
+        // the pump runs under the same loop — its badge mirrors the fan card's
+        _pumpBadge.Text = text;
+        _pumpBadge.Foreground = color;
+        _pumpDot.Background = color;
     }
 
     private void UpdateDashboard(ControlStatus? status)

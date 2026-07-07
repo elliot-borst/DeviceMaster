@@ -350,14 +350,14 @@ public sealed class DmSlider : Grid
         Maximum = maximum;
         Step = step;
         Width = width;
-        Height = 24;
+        Height = 34;
         Background = Brushes.Transparent; // hit-test the whole strip
         VerticalAlignment = VerticalAlignment.Center;
 
         _track = new Border
         {
-            Height = 6,
-            CornerRadius = new CornerRadius(3),
+            Height = 10,
+            CornerRadius = new CornerRadius(5),
             Background = Theme.Inset,
             BorderBrush = Theme.Line,
             BorderThickness = new Thickness(1),
@@ -365,17 +365,17 @@ public sealed class DmSlider : Grid
         };
         _fill = new Border
         {
-            Height = 6,
-            CornerRadius = new CornerRadius(3),
+            Height = 10,
+            CornerRadius = new CornerRadius(5),
             Background = Theme.AccentGrad(),
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
         _thumb = new Border
         {
-            Width = 14,
-            Height = 14,
-            CornerRadius = new CornerRadius(7),
+            Width = 24,
+            Height = 24,
+            CornerRadius = new CornerRadius(12),
             Background = Theme.Text,
             BorderBrush = Theme.Line2,
             BorderThickness = new Thickness(1),
@@ -439,7 +439,9 @@ public sealed class DmSlider : Grid
         }
 
         var fraction = (Maximum - Minimum) <= 0 ? 0 : (_value - Minimum) / (Maximum - Minimum);
+        var thumbSize = _thumb.Width;
         _fill.Width = Math.Max(fraction * ActualWidth, 0);
-        _thumb.Margin = new Thickness(Math.Clamp(fraction * ActualWidth - 7, 0, Math.Max(ActualWidth - 14, 0)), 0, 0, 0);
+        _thumb.Margin = new Thickness(
+            Math.Clamp(fraction * ActualWidth - thumbSize / 2, 0, Math.Max(ActualWidth - thumbSize, 0)), 0, 0, 0);
     }
 }
