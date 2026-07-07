@@ -50,6 +50,9 @@ public sealed class LcdScreenConfig
     /// <summary>"pump-lcd" or the fan LCD node's serial.</summary>
     public string Id { get; set; } = "";
 
+    /// <summary>User-chosen group name ("Front", "Side floor", …); empty = ungrouped.</summary>
+    public string Group { get; set; } = "";
+
     public LcdMetric Metric { get; set; } = LcdMetric.CpuTemp;
 
     /// <summary>0, 90, 180 or 270 — applied when rendering the frame.</summary>

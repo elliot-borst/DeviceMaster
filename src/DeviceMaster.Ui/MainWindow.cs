@@ -461,12 +461,16 @@ public sealed class MainWindow : Window
 
     private UIElement BuildScreensPage()
     {
-        var page = new StackPanel { MaxWidth = 1000, HorizontalAlignment = HorizontalAlignment.Left };
+        // full width — screen groups render as cards side by side
+        var page = new StackPanel();
         page.Children.Add(PageTitle("Screens", "the pump LCD and every fan LCD"));
-        page.Children.Add(BuildLcdCard());
-        var list = BuildScreenListCard();
-        list.Margin = new Thickness(0, 14, 0, 0);
-        page.Children.Add(list);
+        var control = BuildLcdCard();
+        control.MaxWidth = 1000;
+        control.HorizontalAlignment = HorizontalAlignment.Left;
+        page.Children.Add(control);
+        _screenList.Margin = new Thickness(0, 14, 0, 0);
+        page.Children.Add(_screenList);
+        RebuildScreenList();
         return page;
     }
 
@@ -723,16 +727,8 @@ public sealed class MainWindow : Window
         ["Coolant", "CPU temp", "GPU temp", "CPU load", "GPU load", "Clock", "RAM load", "Pump RPM", "Fan duty", "Date"];
 
     // per-screen editor list (Screens page)
-    private readonly StackPanel _screenList = new();
+    private readonly WrapPanel _screenList = new();
     private string _screenListSignature = "?";
-
-    private Border BuildScreenListCard()
-    {
-        var card = Theme.CardShell("◎", "Individual screens", "metric, rotation and color per screen · Find flashes the screen", out var body, out _);
-        body.Children.Add(_screenList);
-        RebuildScreenList();
-        return card;
-    }
 
     private static IReadOnlyList<(string Id, bool IsPump)> FakeScreens =>
         Environment.GetEnvironmentVariable("DEVICEMASTER_FAKE_SCREENS") is { Length: > 0 }
@@ -772,13 +768,229 @@ public sealed class MainWindow : Window
             return;
         }
 
+        // gather members with stable titles, then cluster by group name
+        var members = new List<(string Id, string Title, LcdScreenConfig Config)>();
         var fanIndex = 0;
         foreach (var (id, isPump) in ids)
         {
             var config = _controlSettings.ScreenConfig(id, isPump);
-            var title = isPump ? "Pump screen" : $"Fan screen {++fanIndex}";
-            _screenList.Children.Add(ScreenRow(id, title, config));
+            members.Add((id, isPump ? "Pump screen" : $"Fan screen {++fanIndex}", config));
         }
+
+        var groups = members
+            .GroupBy(m => m.Config.Group.Trim())
+            .OrderBy(g => g.Key.Length == 0) // named groups first, "Ungrouped" last
+            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
+        foreach (var group in groups)
+        {
+            _screenList.Children.Add(ScreenGroupCard(group.Key, group.ToList()));
+        }
+    }
+
+    /// <summary>One group of screens: editable name, set-all controls, then the member rows.</summary>
+    private Border ScreenGroupCard(string groupName, List<(string Id, string Title, LcdScreenConfig Config)> members)
+    {
+        var body = new StackPanel();
+
+        // ---- header: name (editable), count, find-all ----
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10), LastChildFill = false };
+        var nameBox = GroupNameBox(groupName.Length == 0 ? "" : groupName, newName =>
+        {
+            foreach (var member in members)
+            {
+                member.Config.Group = newName;
+            }
+
+            TrySaveSettings();
+            RebuildScreenList();
+        });
+        DockPanel.SetDock(nameBox, Dock.Left);
+        header.Children.Add(nameBox);
+        header.Children.Add(new TextBlock
+        {
+            Text = $"{members.Count} screen{(members.Count == 1 ? "" : "s")}",
+            FontSize = 11.5,
+            Foreground = Theme.Faint,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+        });
+
+        var findAll = Theme.Btn("◎ Find all", primary: false, () =>
+        {
+            foreach (var member in members)
+            {
+                _loop?.IdentifyScreen(member.Id);
+            }
+        });
+        DockPanel.SetDock(findAll, Dock.Right);
+        header.Children.Add(findAll);
+        body.Children.Add(header);
+
+        // ---- set-all row ----
+        var setAll = new DockPanel { Margin = new Thickness(0, 0, 0, 6), LastChildFill = false };
+        var setLabel = new TextBlock { Text = "Set all", FontSize = 11.5, Foreground = Theme.Dim, Width = 130, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(86, 0, 0, 0) };
+        DockPanel.SetDock(setLabel, Dock.Left);
+        setAll.Children.Add(setLabel);
+
+        var allMetric = new DmDropdown(LcdMetricNames, (int)members[0].Config.Metric, 108);
+        allMetric.SelectionChanged += index =>
+        {
+            foreach (var member in members)
+            {
+                member.Config.Metric = (LcdMetric)index;
+            }
+
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+            RebuildScreenList();
+        };
+        var metricPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+        metricPanel.Children.Add(Theme.SmallLabel("Metric"));
+        metricPanel.Children.Add(allMetric);
+        DockPanel.SetDock(metricPanel, Dock.Left);
+        setAll.Children.Add(metricPanel);
+
+        var allRotate = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(members[0].Config.RotationDegrees / 90, 0, 3), 70);
+        allRotate.SelectionChanged += index =>
+        {
+            foreach (var member in members)
+            {
+                member.Config.RotationDegrees = index * 90;
+            }
+
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+            RebuildScreenList();
+        };
+        var rotatePanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+        rotatePanel.Children.Add(Theme.SmallLabel("Rotate"));
+        rotatePanel.Children.Add(allRotate);
+        DockPanel.SetDock(rotatePanel, Dock.Left);
+        setAll.Children.Add(rotatePanel);
+
+        var allColors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        allColors.Children.Add(Theme.SmallLabel("Color"));
+        allColors.Children.Add(GroupSwatch(members, null, "Auto — green/amber/red by value"));
+        foreach (var (r, g, b) in FontSwatchColors)
+        {
+            allColors.Children.Add(GroupSwatch(members, (r, g, b), null));
+        }
+
+        DockPanel.SetDock(allColors, Dock.Left);
+        setAll.Children.Add(allColors);
+        body.Children.Add(setAll);
+
+        // ---- member rows ----
+        foreach (var (id, title, config) in members)
+        {
+            body.Children.Add(ScreenRow(id, title, config));
+        }
+
+        return new Border
+        {
+            Width = 980,
+            Margin = new Thickness(0, 0, 14, 14),
+            Padding = new Thickness(18, 14, 18, 12),
+            CornerRadius = new CornerRadius(14),
+            Background = Theme.Card,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = body,
+        };
+    }
+
+    private static readonly (byte R, byte G, byte B)[] FontSwatchColors =
+    [
+        (235, 235, 245), (255, 60, 60), (255, 170, 0), (80, 230, 120),
+        (80, 200, 255), (90, 120, 255), (200, 90, 255), (255, 80, 170),
+    ];
+
+    /// <summary>Editable group name; commits on Enter or focus loss.</summary>
+    private static TextBox GroupNameBox(string text, Action<string> commit)
+    {
+        var box = new TextBox
+        {
+            Text = text,
+            Width = 190,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Background = Theme.Inset,
+            Foreground = Theme.Text,
+            CaretBrush = Theme.Text,
+            BorderBrush = Theme.Line2,
+            Padding = new Thickness(8, 5, 8, 5),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var original = text;
+        void Commit()
+        {
+            var value = box.Text.Trim();
+            if (value != original)
+            {
+                commit(value);
+            }
+        }
+
+        box.LostFocus += (_, _) => Commit();
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                Commit();
+            }
+        };
+        if (text.Length == 0)
+        {
+            box.Text = "";
+            box.ToolTip = "Type a group name (e.g. Front, Side, Top)";
+        }
+
+        return box;
+    }
+
+    private Border GroupSwatch(List<(string Id, string Title, LcdScreenConfig Config)> members, (byte R, byte G, byte B)? color, string? tooltip)
+    {
+        var swatch = new Border
+        {
+            Width = 20,
+            Height = 20,
+            CornerRadius = new CornerRadius(6),
+            Margin = new Thickness(0, 0, 5, 0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Background = color is { } c
+                ? new SolidColorBrush(Color.FromRgb(c.R, c.G, c.B))
+                : new SolidColorBrush(Color.FromRgb(24, 26, 38)),
+            BorderBrush = Theme.Line2,
+            BorderThickness = new Thickness(1),
+            ToolTip = tooltip,
+        };
+        if (color is null)
+        {
+            swatch.Child = new TextBlock
+            {
+                Text = "A",
+                FontSize = 10,
+                Foreground = Theme.Dim,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        swatch.MouseLeftButtonUp += (_, _) =>
+        {
+            foreach (var member in members)
+            {
+                (member.Config.FontR, member.Config.FontG, member.Config.FontB) = color is { } chosen
+                    ? ((int?)chosen.R, (int?)chosen.G, (int?)chosen.B)
+                    : (null, null, null);
+            }
+
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+            RebuildScreenList();
+        };
+        return swatch;
     }
 
     private Border ScreenRow(string id, string title, LcdScreenConfig config)
@@ -828,20 +1040,55 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(rotationPanel, Dock.Left);
         row.Children.Add(rotationPanel);
 
-        var colors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var colors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
         colors.Children.Add(Theme.SmallLabel("Color"));
         colors.Children.Add(FontSwatch(config, null, "Auto — green/amber/red by value"));
-        foreach (var (r, g, b) in new (byte, byte, byte)[]
-        {
-            (235, 235, 245), (255, 60, 60), (255, 170, 0), (80, 230, 120),
-            (80, 200, 255), (90, 120, 255), (200, 90, 255), (255, 80, 170),
-        })
+        foreach (var (r, g, b) in FontSwatchColors)
         {
             colors.Children.Add(FontSwatch(config, (r, g, b), null));
         }
 
         DockPanel.SetDock(colors, Dock.Left);
         row.Children.Add(colors);
+
+        // move the screen to another group by typing its name
+        var groupBox = new TextBox
+        {
+            Text = config.Group,
+            Width = 96,
+            FontSize = 11.5,
+            Background = Theme.Inset,
+            Foreground = Theme.Text,
+            CaretBrush = Theme.Text,
+            BorderBrush = Theme.Line2,
+            Padding = new Thickness(6, 3, 6, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "Group name — screens with the same name cluster together",
+        };
+        void CommitGroup()
+        {
+            var value = groupBox.Text.Trim();
+            if (value != config.Group)
+            {
+                config.Group = value;
+                TrySaveSettings();
+                RebuildScreenList();
+            }
+        }
+
+        groupBox.LostFocus += (_, _) => CommitGroup();
+        groupBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                CommitGroup();
+            }
+        };
+        var groupPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        groupPanel.Children.Add(Theme.SmallLabel("Group"));
+        groupPanel.Children.Add(groupBox);
+        DockPanel.SetDock(groupPanel, Dock.Right);
+        row.Children.Add(groupPanel);
 
         return Theme.InsetRow(row);
     }
