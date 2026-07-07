@@ -67,8 +67,6 @@ public sealed class MainWindow : Window
     private int _downloadDots;
 
     // fan control card
-    private DmDropdown _modeDrop = null!;
-    private DmDropdown _sourceDrop = null!;
     private DmSlider _dutySlider = null!;
     private TextBlock _dutyLabel = null!;
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
@@ -473,7 +471,8 @@ public sealed class MainWindow : Window
 
     private UIElement BuildDevicesPage()
     {
-        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
+        // full width: the inventory wraps into as many columns as the monitor fits
+        var page = new StackPanel();
         page.Children.Add(PageTitle("Devices", "everything detected, with its unique id"));
         page.Children.Add(BuildHardwareCard());
         return page;
@@ -501,7 +500,7 @@ public sealed class MainWindow : Window
 
     private Border BuildFanCard()
     {
-        var card = Theme.CardShell("✻", "Fan Control", "curves & manual duty · every fan in the system", out var body, out var head);
+        var card = Theme.CardShell("✻", "Fan Control", "one fixed duty · every fan in the system", out var body, out var head);
         var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
         badge.VerticalAlignment = VerticalAlignment.Top;
         DockPanel.SetDock(badge, Dock.Right);
@@ -509,21 +508,13 @@ public sealed class MainWindow : Window
 
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
 
-        _modeDrop = new DmDropdown(Enum.GetNames<ControlMode>(), (int)_controlSettings.Mode, 104);
-        _modeDrop.SelectionChanged += _ => OnControlSettingChanged();
-        controls.Children.Add(LabelledInline("Mode", _modeDrop));
-
-        _sourceDrop = new DmDropdown(Enum.GetNames<CurveSource>(), (int)_controlSettings.Source, 104);
-        _sourceDrop.SelectionChanged += _ => OnControlSettingChanged();
-        controls.Children.Add(LabelledInline("Curve source", _sourceDrop));
-
-        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 170);
+        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 260);
         _dutySlider.ValueChanged += _ => OnControlSettingChanged();
         _dutyLabel = new TextBlock { Text = $"{_controlSettings.ManualDutyPercent}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
         var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         dutyRow.Children.Add(_dutySlider);
         dutyRow.Children.Add(_dutyLabel);
-        controls.Children.Add(LabelledInline("Manual duty", dutyRow));
+        controls.Children.Add(LabelledInline("Fan duty", dutyRow));
 
         body.Children.Add(controls);
         body.Children.Add(_controlStatus);
@@ -1413,13 +1404,14 @@ public sealed class MainWindow : Window
                     Foreground = group == "Missing" ? Theme.Warn : Theme.Dim,
                     Margin = new Thickness(2, 10, 0, 6),
                 });
-                var grid = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
+                var wrap = new WrapPanel();
                 foreach (var pill in members)
                 {
-                    grid.Children.Add(pill);
+                    pill.Width = 306; // fixed pill width — the panel wraps to fill the window
+                    wrap.Children.Add(pill);
                 }
 
-                _hardwareRows.Children.Add(grid);
+                _hardwareRows.Children.Add(wrap);
             }
 
             if (pills.Count == 0)
@@ -1495,8 +1487,6 @@ public sealed class MainWindow : Window
             return;
         }
 
-        _controlSettings.Mode = (ControlMode)_modeDrop.SelectedIndex;
-        _controlSettings.Source = (CurveSource)_sourceDrop.SelectedIndex;
         _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
         _controlSettings.PumpDutyPercent = (int)Math.Round(_pumpSlider.Value);
         _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
@@ -1515,22 +1505,25 @@ public sealed class MainWindow : Window
         ApplyControlState();
     }
 
+    /// <summary>Development sandbox: never start the control loop (screenshot iteration).</summary>
+    private static readonly bool NoControl =
+        Environment.GetEnvironmentVariable("DEVICEMASTER_NO_CONTROL") is { Length: > 0 };
+
     private void ApplyControlState()
     {
-        _dutySlider.Enabled = _controlSettings.Mode == ControlMode.Manual;
-        _sourceDrop.IsHitTestVisible = _controlSettings.Mode == ControlMode.Curve;
-        _sourceDrop.Opacity = _controlSettings.Mode == ControlMode.Curve ? 1.0 : 0.45;
-        _pumpSlider.Enabled = _controlSettings.Mode != ControlMode.Off;
-
-        if (_controlSettings.Mode == ControlMode.Off)
+        // fan control is always on at a fixed duty — curve/off modes were removed from the
+        // UI (the enum survives in settings for config compatibility)
+        if (_controlSettings.Mode != ControlMode.Manual)
         {
-            if (_loop is not null)
-            {
-                var loop = _loop;
-                _loop = null;
-                Task.Run(loop.Stop); // hardware release can take a moment — keep the UI responsive
-            }
+            _controlSettings.Mode = ControlMode.Manual;
+            TrySaveSettings();
+        }
 
+        _dutySlider.Enabled = true;
+        _pumpSlider.Enabled = true;
+
+        if (NoControl)
+        {
             UpdateControlStatus();
             return;
         }
