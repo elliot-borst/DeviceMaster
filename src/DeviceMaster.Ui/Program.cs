@@ -27,10 +27,10 @@ public static class Program
         // (--multi is a development escape hatch used with DEVICEMASTER_CONFIG.)
         var allowMulti = args.Any(a => a.Equals("--multi", StringComparison.OrdinalIgnoreCase));
         using var instanceLock = new Mutex(initiallyOwned: true, "DeviceMaster-SingleInstance", out var isFirst);
+        using var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "DeviceMaster-ShowWindow");
         if (!isFirst && !allowMulti)
         {
-            MessageBox.Show("DeviceMaster is already running — look for the fan icon in the system tray.",
-                "DeviceMaster", MessageBoxButton.OK, MessageBoxImage.Information);
+            showSignal.Set(); // bring the running instance's window up instead of nagging
             return;
         }
 
@@ -39,6 +39,17 @@ public static class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var window = new MainWindow();
         app.MainWindow = window;
+
+        // a second launch signals this event instead of starting — show the existing window
+        var showListener = new Thread(() =>
+        {
+            while (showSignal.WaitOne())
+            {
+                window.Dispatcher.BeginInvoke(new Action(window.ShowFromTray));
+            }
+        })
+        { IsBackground = true, Name = "DeviceMaster show-signal" };
+        showListener.Start();
 
         // --minimized (startup task / post-update relaunch) stays in the tray — unless the
         // user turned Start Hidden off, or on a true first run (no config yet), where an

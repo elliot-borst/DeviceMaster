@@ -1288,7 +1288,7 @@ public sealed class MainWindow : Window
         _trayIcon.ContextMenuStrip = menu;
     }
 
-    private void ShowFromTray()
+    internal void ShowFromTray()
     {
         Show();
         WindowState = WindowState.Maximized;
