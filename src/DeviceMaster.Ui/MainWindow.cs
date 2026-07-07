@@ -59,8 +59,6 @@ public sealed class MainWindow : Window
     // header / updater
     private Border _checkButton = null!;
     private TextBlock _checkLabel = null!;
-    private StackPanel _updateNotice = null!;
-    private TextBlock _updateNoticeText = null!;
     private UpdateInfo? _pendingUpdate;
     private bool _checkBusy;
     private bool _downloading;
@@ -138,7 +136,7 @@ public sealed class MainWindow : Window
             MaybeRebuildScreenList();
             if (_downloading)
             {
-                _updateNoticeText.Text = $"Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
+                _checkLabel.Text = $"↻  Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
             }
         };
         timer.Start();
@@ -201,58 +199,52 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(brand, Dock.Top);
         side.Children.Add(brand);
 
-        // ---- sidebar bottom: blackout, version, startup, updates ----
+        // ---- sidebar bottom: toggles (uniform styling), then updates at the very bottom ----
         var bottom = new StackPanel();
 
-        // movie mode: every LED and screen dark with one flick, restored on the way back
-        var blackoutRow = new DockPanel { Margin = new Thickness(4, 0, 0, 14), LastChildFill = false };
-        blackoutRow.Children.Add(new TextBlock
+        static DockPanel ToggleRow(string text, UIElement toggle)
         {
-            Text = "🌙  Blackout",
-            FontSize = 12.5,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Theme.Text,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        var blackoutToggle = Theme.Toggle(_controlSettings.BlackoutActive, SetBlackout);
-        DockPanel.SetDock(blackoutToggle, Dock.Right);
-        blackoutRow.Children.Add(blackoutToggle);
-        bottom.Children.Add(blackoutRow);
-        _updateNotice = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(4, 0, 0, 10) };
-        _updateNotice.Children.Add(new Border { Width = 8, Height = 8, CornerRadius = new CornerRadius(4), Background = Theme.Good, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-        _updateNoticeText = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
-        _updateNotice.Children.Add(_updateNoticeText);
-        bottom.Children.Add(_updateNotice);
+            var row = new DockPanel { Margin = new Thickness(4, 0, 0, 14), LastChildFill = false };
+            row.Children.Add(new TextBlock
+            {
+                Text = text,
+                FontSize = 12.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Theme.Text,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            DockPanel.SetDock(toggle, Dock.Right);
+            row.Children.Add(toggle);
+            return row;
+        }
+
+        // movie mode: every LED and screen dark with one flick, restored on the way back
+        bottom.Children.Add(ToggleRow("🌙  Blackout Mode", Theme.Toggle(_controlSettings.BlackoutActive, SetBlackout)));
+
+        bottom.Children.Add(ToggleRow("Auto Start", Theme.Toggle(_controlSettings.StartWithWindows, on =>
+        {
+            _controlSettings.StartWithWindows = on;
+            TrySaveSettings();
+            ElevationBroker.SetStartWithWindows(on);
+        })));
+
+        bottom.Children.Add(ToggleRow("Start Hidden", Theme.Toggle(_controlSettings.StartHidden, on =>
+        {
+            _controlSettings.StartHidden = on;
+            TrySaveSettings();
+        })));
 
         _checkButton = Theme.Btn("↻  Check for Updates", primary: false, () => _ = CheckForUpdatesAsync(auto: false));
         _checkLabel = (TextBlock)_checkButton.Child;
         _checkButton.HorizontalAlignment = HorizontalAlignment.Stretch;
         bottom.Children.Add(_checkButton);
 
-        var startupToggle = new DockPanel { Margin = new Thickness(4, 12, 0, 10), LastChildFill = false };
-        startupToggle.Children.Add(new TextBlock
-        {
-            Text = "Start with Windows",
-            FontSize = 11.5,
-            Foreground = Theme.Dim,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        var toggle = Theme.Toggle(_controlSettings.StartWithWindows, on =>
-        {
-            _controlSettings.StartWithWindows = on;
-            TrySaveSettings();
-            ElevationBroker.SetStartWithWindows(on);
-        });
-        DockPanel.SetDock(toggle, Dock.Right);
-        startupToggle.Children.Add(toggle);
-        bottom.Children.Add(startupToggle);
-
         bottom.Children.Add(new TextBlock
         {
             Text = $"Version {AppVersion} · {VersionDate}",
             FontSize = 10.5,
             Foreground = Theme.Faint,
-            Margin = new Thickness(4, 0, 0, 0),
+            Margin = new Thickness(4, 10, 0, 0),
         });
         DockPanel.SetDock(bottom, Dock.Bottom);
         side.Children.Add(bottom);
@@ -1956,12 +1948,12 @@ public sealed class MainWindow : Window
         var current = WholeVersion.Parse(AppVersion);
         if (info is not null && WholeVersion.Compare(info.Version, current) > 0 && info.SetupUrl is not null)
         {
-            // updates are hands-off: download and install silently, then relaunch in the tray
+            // updates are hands-off: download and install silently, then relaunch in the
+            // tray. Status shows INSIDE the pill — it keeps its place and look throughout.
             _pendingUpdate = info;
-            _checkButton.Visibility = Visibility.Collapsed;
-            _updateNotice.Visibility = Visibility.Visible;
-            _updateNoticeText.Text = $"Updating to {info.Tag}…";
-            RestoreCheckButton();
+            _checkBusy = true;
+            _checkButton.IsHitTestVisible = false;
+            _checkLabel.Text = $"↻  Updating to {info.Tag}…";
             await StartUpdateAsync();
             return;
         }
@@ -1995,13 +1987,15 @@ public sealed class MainWindow : Window
         if (installerPath is null)
         {
             _downloading = false;
-            _updateNoticeText.Text = "Update download failed — opening the releases page";
+            _checkLabel.Text = "⚠  Download failed — opening releases page";
             Process.Start(new ProcessStartInfo(_pendingUpdate.PageUrl) { UseShellExecute = true });
+            await Task.Delay(3000);
+            RestoreCheckButton();
             return;
         }
 
         _downloading = false;
-        _updateNoticeText.Text = "Installing…";
+        _checkLabel.Text = $"↻  Installing {_pendingUpdate.Tag}…";
         LogLine($"auto-update: installing {_pendingUpdate.Tag}");
         PrepareExit(); // release devices and the tray icon before the installer replaces us
         Process.Start(new ProcessStartInfo(installerPath, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /FORCECLOSEAPPLICATIONS")

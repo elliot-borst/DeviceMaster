@@ -92,6 +92,9 @@ public sealed class ControlSettings
     /// <summary>Registers the logon scheduled task ("start with Windows"). On by default; the app manages it.</summary>
     public bool StartWithWindows { get; set; } = true;
 
+    /// <summary>Auto-started launches stay in the tray; off = show the window on every launch.</summary>
+    public bool StartHidden { get; set; } = true;
+
     public int RgbR { get; set; } = 86;
     public int RgbG { get; set; } = 130;
     public int RgbB { get; set; } = 255;

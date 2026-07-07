@@ -40,10 +40,11 @@ public static class Program
         var window = new MainWindow();
         app.MainWindow = window;
 
-        // --minimized (startup task / post-update relaunch) stays in the tray — except on a
-        // true first run (no config yet), where an invisible app would look like a failed install.
+        // --minimized (startup task / post-update relaunch) stays in the tray — unless the
+        // user turned Start Hidden off, or on a true first run (no config yet), where an
+        // invisible app would look like a failed install.
         var minimized = args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
-        if (!minimized || !System.IO.File.Exists(ControlSettings.ConfigPath))
+        if (!minimized || !ControlSettings.Load().StartHidden || !System.IO.File.Exists(ControlSettings.ConfigPath))
         {
             window.Show();
         }
