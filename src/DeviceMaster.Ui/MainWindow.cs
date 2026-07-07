@@ -720,7 +720,6 @@ public sealed class MainWindow : Window
 
     // screens card
     private readonly WrapPanel _lcdButtons = new() { Orientation = Orientation.Horizontal };
-    private readonly WrapPanel _lcdMetricPanel = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
     private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
     private static readonly string[] LcdMetricNames =
@@ -826,60 +825,6 @@ public sealed class MainWindow : Window
         header.Children.Add(findAll);
         body.Children.Add(header);
 
-        // ---- set-all row ----
-        var setAll = new DockPanel { Margin = new Thickness(0, 0, 0, 6), LastChildFill = false };
-        var setLabel = new TextBlock { Text = "Set all", FontSize = 11.5, Foreground = Theme.Dim, Width = 130, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(86, 0, 0, 0) };
-        DockPanel.SetDock(setLabel, Dock.Left);
-        setAll.Children.Add(setLabel);
-
-        var allMetric = new DmDropdown(LcdMetricNames, (int)members[0].Config.Metric, 108);
-        allMetric.SelectionChanged += index =>
-        {
-            foreach (var member in members)
-            {
-                member.Config.Metric = (LcdMetric)index;
-            }
-
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-            RebuildScreenList();
-        };
-        var metricPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-        metricPanel.Children.Add(Theme.SmallLabel("Metric"));
-        metricPanel.Children.Add(allMetric);
-        DockPanel.SetDock(metricPanel, Dock.Left);
-        setAll.Children.Add(metricPanel);
-
-        var allRotate = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(members[0].Config.RotationDegrees / 90, 0, 3), 70);
-        allRotate.SelectionChanged += index =>
-        {
-            foreach (var member in members)
-            {
-                member.Config.RotationDegrees = index * 90;
-            }
-
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-            RebuildScreenList();
-        };
-        var rotatePanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-        rotatePanel.Children.Add(Theme.SmallLabel("Rotate"));
-        rotatePanel.Children.Add(allRotate);
-        DockPanel.SetDock(rotatePanel, Dock.Left);
-        setAll.Children.Add(rotatePanel);
-
-        var allColors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        allColors.Children.Add(Theme.SmallLabel("Color"));
-        allColors.Children.Add(GroupSwatch(members, null, "Auto — green/amber/red by value"));
-        foreach (var (r, g, b) in FontSwatchColors)
-        {
-            allColors.Children.Add(GroupSwatch(members, (r, g, b), null));
-        }
-
-        DockPanel.SetDock(allColors, Dock.Left);
-        setAll.Children.Add(allColors);
-        body.Children.Add(setAll);
-
         // ---- member rows ----
         foreach (var (id, title, config) in members)
         {
@@ -888,7 +833,7 @@ public sealed class MainWindow : Window
 
         return new Border
         {
-            Width = 980,
+            Width = 850, // two group cards fit side by side
             Margin = new Thickness(0, 0, 14, 14),
             Padding = new Thickness(18, 14, 18, 12),
             CornerRadius = new CornerRadius(14),
@@ -905,6 +850,27 @@ public sealed class MainWindow : Window
         (235, 235, 245), (255, 60, 60), (255, 170, 0), (80, 230, 120),
         (80, 200, 255), (90, 120, 255), (200, 90, 255), (255, 80, 170),
     ];
+
+    private static readonly string[] LcdColorNames =
+        ["Auto", "White", "Red", "Orange", "Green", "Cyan", "Blue", "Purple", "Pink"];
+
+    private static int LcdColorIndex(LcdScreenConfig config)
+    {
+        if (config.FontR is not { } r || config.FontG is not { } g || config.FontB is not { } b)
+        {
+            return 0; // Auto
+        }
+
+        for (var i = 0; i < FontSwatchColors.Length; i++)
+        {
+            if (FontSwatchColors[i] == ((byte)r, (byte)g, (byte)b))
+            {
+                return i + 1;
+            }
+        }
+
+        return 0;
+    }
 
     /// <summary>Editable group name; commits on Enter or focus loss.</summary>
     private static TextBox GroupNameBox(string text, Action<string> commit)
@@ -947,50 +913,6 @@ public sealed class MainWindow : Window
         }
 
         return box;
-    }
-
-    private Border GroupSwatch(List<(string Id, string Title, LcdScreenConfig Config)> members, (byte R, byte G, byte B)? color, string? tooltip)
-    {
-        var swatch = new Border
-        {
-            Width = 20,
-            Height = 20,
-            CornerRadius = new CornerRadius(6),
-            Margin = new Thickness(0, 0, 5, 0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            Background = color is { } c
-                ? new SolidColorBrush(Color.FromRgb(c.R, c.G, c.B))
-                : new SolidColorBrush(Color.FromRgb(24, 26, 38)),
-            BorderBrush = Theme.Line2,
-            BorderThickness = new Thickness(1),
-            ToolTip = tooltip,
-        };
-        if (color is null)
-        {
-            swatch.Child = new TextBlock
-            {
-                Text = "A",
-                FontSize = 10,
-                Foreground = Theme.Dim,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-        }
-
-        swatch.MouseLeftButtonUp += (_, _) =>
-        {
-            foreach (var member in members)
-            {
-                (member.Config.FontR, member.Config.FontG, member.Config.FontB) = color is { } chosen
-                    ? ((int?)chosen.R, (int?)chosen.G, (int?)chosen.B)
-                    : (null, null, null);
-            }
-
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-            RebuildScreenList();
-        };
-        return swatch;
     }
 
     private Border ScreenRow(string id, string title, LcdScreenConfig config)
@@ -1040,14 +962,18 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(rotationPanel, Dock.Left);
         row.Children.Add(rotationPanel);
 
+        var colorDrop = new DmDropdown(LcdColorNames, LcdColorIndex(config), 92);
+        colorDrop.SelectionChanged += index =>
+        {
+            (config.FontR, config.FontG, config.FontB) = index == 0
+                ? (null, null, null) // Auto — green/amber/red by value
+                : ((int?)FontSwatchColors[index - 1].R, (int?)FontSwatchColors[index - 1].G, (int?)FontSwatchColors[index - 1].B);
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        };
         var colors = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
         colors.Children.Add(Theme.SmallLabel("Color"));
-        colors.Children.Add(FontSwatch(config, null, "Auto — green/amber/red by value"));
-        foreach (var (r, g, b) in FontSwatchColors)
-        {
-            colors.Children.Add(FontSwatch(config, (r, g, b), null));
-        }
-
+        colors.Children.Add(colorDrop);
         DockPanel.SetDock(colors, Dock.Left);
         row.Children.Add(colors);
 
@@ -1093,72 +1019,11 @@ public sealed class MainWindow : Window
         return Theme.InsetRow(row);
     }
 
-    private Border FontSwatch(LcdScreenConfig config, (byte R, byte G, byte B)? color, string? tooltip)
-    {
-        var selected = color is null
-            ? config.FontR is null
-            : config is { FontR: { } r, FontG: { } g, FontB: { } b } && (r, g, b) == (color.Value.R, color.Value.G, color.Value.B);
-        var swatch = new Border
-        {
-            Width = 20,
-            Height = 20,
-            CornerRadius = new CornerRadius(6),
-            Margin = new Thickness(0, 0, 5, 0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            Background = color is { } c
-                ? new SolidColorBrush(Color.FromRgb(c.R, c.G, c.B))
-                : new SolidColorBrush(Color.FromRgb(24, 26, 38)),
-            BorderBrush = selected ? Theme.Accent : Theme.Line2,
-            BorderThickness = new Thickness(selected ? 2 : 1),
-            ToolTip = tooltip,
-        };
-        if (color is null)
-        {
-            swatch.Child = new TextBlock
-            {
-                Text = "A",
-                FontSize = 10,
-                Foreground = Theme.Dim,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-        }
-
-        swatch.MouseLeftButtonUp += (_, _) =>
-        {
-            (config.FontR, config.FontG, config.FontB) = color is { } chosen
-                ? ((int?)chosen.R, (int?)chosen.G, (int?)chosen.B)
-                : (null, null, null);
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-            RebuildScreenList(); // refresh selection rings
-        };
-        return swatch;
-    }
-
     private Border BuildLcdCard()
     {
-        var card = Theme.CardShell("▣", "Screen Control", "pump LCD + fan LCDs · off, a plain background, or live metrics", out var body, out _);
+        var card = Theme.CardShell("▣", "Screen Control", "every screen on or off · what each shows is set per group below", out var body, out _);
         RebuildLcdButtons();
         body.Children.Add(_lcdButtons);
-
-        var pumpDrop = new DmDropdown(LcdMetricNames, (int)_controlSettings.PumpScreenMetric, 110);
-        pumpDrop.SelectionChanged += index =>
-        {
-            _controlSettings.PumpScreenMetric = (LcdMetric)index;
-            OnControlSettingChanged();
-        };
-        _lcdMetricPanel.Children.Add(LabelledInline("Pump screen", pumpDrop));
-
-        var fanDrop = new DmDropdown(LcdMetricNames, (int)_controlSettings.FanScreenMetric, 110);
-        fanDrop.SelectionChanged += index =>
-        {
-            _controlSettings.FanScreenMetric = (LcdMetric)index;
-            OnControlSettingChanged();
-        };
-        _lcdMetricPanel.Children.Add(LabelledInline("Fan screens", fanDrop));
-
-        body.Children.Add(_lcdMetricPanel);
         body.Children.Add(_lcdStatus);
         UpdateLcdStatusText();
         return card;
@@ -1169,12 +1034,10 @@ public sealed class MainWindow : Window
         _lcdButtons.Children.Clear();
         foreach (var (mode, label) in new[]
         {
-            // no "leave alone" button: Unmanaged is only the fresh-install default (screens
-            // untouched until the first choice); once managed there's no reason to go back
+            // just Off/On: On = live metrics; per-screen content is managed in the groups.
+            // (Black/White survive in the enum for config compatibility only.)
             (LcdMode.Off, "Off"),
-            (LcdMode.Black, "Black"),
-            (LcdMode.White, "White"),
-            (LcdMode.Metrics, "Metrics"),
+            (LcdMode.Metrics, "On"),
         })
         {
             var selected = _controlSettings.LcdScreens == mode;
@@ -1209,16 +1072,11 @@ public sealed class MainWindow : Window
 
     private void UpdateLcdStatusText()
     {
-        _lcdMetricPanel.Visibility = _controlSettings.LcdScreens == LcdMode.Metrics
-            ? Visibility.Visible
-            : Visibility.Collapsed;
         _lcdStatus.Text = _controlSettings.LcdScreens switch
         {
-            LcdMode.Off => "All screens off (backlight dark). Applies while fan control is running.",
-            LcdMode.Black => "All screens on with a plain black background.",
-            LcdMode.White => "All screens on with a plain white background.",
-            LcdMode.Metrics => "Live readouts — the pump screen refreshes continuously; fan screens update as values change.",
-            _ => "Screens untouched — they keep showing whatever they show.",
+            LcdMode.Off => "All screens off (backlight dark).",
+            LcdMode.Metrics => "Screens on — each shows the metric configured in its group below.",
+            _ => "Screens untouched — pick On or Off to take control.",
         };
     }
 
@@ -1768,6 +1626,13 @@ public sealed class MainWindow : Window
         if (_controlSettings.Mode != ControlMode.Manual)
         {
             _controlSettings.Mode = ControlMode.Manual;
+            TrySaveSettings();
+        }
+
+        // screens are Off or On (metrics) now — plain Black/White backgrounds retired
+        if (_controlSettings.LcdScreens is LcdMode.Black or LcdMode.White)
+        {
+            _controlSettings.LcdScreens = LcdMode.Metrics;
             TrySaveSettings();
         }
 
