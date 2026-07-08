@@ -91,4 +91,46 @@ public class TurzxProtocolTests
         Assert.Equal(0, message.Length % TurzxProtocol.Block);
         Assert.True(message.Length >= body.Length);
     }
+
+    [Fact]
+    public void BuildUpdateHeader_CarriesSizePlusTwoAndBigEndianCount()
+    {
+        var header = TurzxProtocol.BuildUpdateHeader(rawSpanLength: 100, count: 0x01020304);
+
+        Assert.Equal(14, header.Length);
+        Assert.Equal(TurzxProtocol.UpdateBitmap, header[..4]);
+        // size field = rawSpanLength + 2 (for the trailing ef 69), 3-byte big-endian
+        Assert.Equal(0, header[4]);
+        Assert.Equal(0, header[5]);
+        Assert.Equal(102, header[6]);
+        Assert.Equal(new byte[] { 0x00, 0x00, 0x00 }, header[7..10]);
+        Assert.Equal(new byte[] { 0x01, 0x02, 0x03, 0x04 }, header[10..14]); // count big-endian
+    }
+
+    [Fact]
+    public void BuildUpdatePixels_ShortSpansJustGetTheEf69Marker()
+    {
+        var raw = new byte[] { 1, 2, 3, 4, 5 };
+
+        var pixels = TurzxProtocol.BuildUpdatePixels(raw);
+
+        Assert.Equal(raw.Length + 2, pixels.Length);
+        Assert.Equal(raw, pixels[..raw.Length]);
+        Assert.Equal(0xef, pixels[^2]);
+        Assert.Equal(0x69, pixels[^1]);
+    }
+
+    [Fact]
+    public void BuildUpdatePixels_NullJoinsLongSpansThenEf69()
+    {
+        var raw = new byte[300]; // > 249 ⇒ one NULL separator
+        Array.Fill(raw, (byte)0x55);
+
+        var pixels = TurzxProtocol.BuildUpdatePixels(raw);
+
+        Assert.Equal(300 + 1 + 2, pixels.Length); // one separator + trailing ef 69
+        Assert.Equal(0x00, pixels[249]);
+        Assert.Equal(0xef, pixels[^2]);
+        Assert.Equal(0x69, pixels[^1]);
+    }
 }

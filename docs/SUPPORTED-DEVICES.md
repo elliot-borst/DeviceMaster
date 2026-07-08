@@ -124,9 +124,14 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   1920×480 content and rotates it on. Baud is nominal (CDC transfers at USB speed).
 - **The ~3.7 MB frame must be written in paced ~24,900-byte chunks (≈1 ms apart), never one
   blast** — a single large write stalls the CDC endpoint ("semaphore timeout"). Do not enlarge
-  the driver's `WriteBufferSize`. A full frame takes ~2.3 s; the push runs on a dedicated worker
-  thread and never blocks the 1 Hz fan/pump loop. Partial/differential updates (rev_c
-  `UPDATE_BITMAP`, or the vendor's command `0xCC`/204) remain a future optimisation.
+  the driver's `WriteBufferSize`. A full frame takes ~2.3 s over this Full-Speed link; the push
+  runs on a dedicated worker thread and never blocks the 1 Hz fan/pump loop.
+- **Partial updates** (rev_c `UPDATE_BITMAP`, `0xcc`) keep a live dashboard refreshing in ~1 s:
+  after the first full frame each frame is diffed against the last in native row-major space and
+  only the changed pixel spans are sent — each span is `[3-byte BE address = row*480 + col]
+  [2-byte BE width][BGRA run]`, NULL-joined every 249 bytes with an `ef 69` trailer, under the
+  header `cc ef 69 00 | (rawLen+2) BE3 | 00 00 00 | count BE4`. A full frame is re-sent every ~30
+  partials (and whenever >50 % of the frame changes) to heal any region the panel dropped.
 - Controlled from the **Turzx** side-menu page: Off / On, a brightness slider, and a landscape
   orientation toggle. **On** shows a fixed dashboard — a large FPS reading (measured in-app via
   an ETW DXGI present-monitor, PresentMon-style: no extra software, needs the app's admin rights;

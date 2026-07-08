@@ -46,33 +46,29 @@ public static class TurzxDashboardRenderer
             };
 
             // top: CPU row, bottom: GPU row (5 columns each, aligned vertically)
-            DrawRow(g, center, width, height * 0.05f, height * 0.22f,
+            DrawRow(g, center, width, height * 0.04f, height * 0.26f,
                 Shorten(stats.CpuName, dropLeadingNumbers: true), cpuColor,
                 stats.CpuLoadPercent, stats.CpuTempC, stats.RamUsedGb, stats.CpuPowerW, white);
 
-            DrawRow(g, center, width, height * 0.73f, height * 0.22f,
+            DrawRow(g, center, width, height * 0.70f, height * 0.26f,
                 Shorten(stats.GpuName, dropLeadingNumbers: false), gpuColor,
                 stats.GpuLoadPercent, stats.GpuTempC, stats.VramUsedGb, stats.GpuPowerW, white);
 
-            // middle: the FPS hero + a small caption. A real reading is big and white; when RTSS
-            // isn't running there is no framerate, so show a small dim dash rather than a huge bar.
-            var fpsRect = new RectangleF(0, height * 0.28f, width, height * 0.30f);
+            // middle: the FPS hero — a big number dead-centre of the panel, no label. Real reading
+            // is big and white; when nothing is rendering, a small dim dash instead of a huge bar.
+            var fpsRect = new RectangleF(0, height * 0.30f, width, height * 0.40f);
             if (fps is { } f)
             {
-                using var fpsFont = FitFont(g, f.ToString(), height * 0.32f, width * 0.6f, FontStyle.Bold);
+                using var fpsFont = FitFont(g, f.ToString(), height * 0.40f, width * 0.55f, FontStyle.Bold);
                 using var fpsBrush = new SolidBrush(white);
                 g.DrawString(f.ToString(), fpsFont, fpsBrush, fpsRect, center);
             }
             else
             {
-                using var idleFont = new Font("Segoe UI", height * 0.13f, FontStyle.Bold, GraphicsUnit.Pixel);
+                using var idleFont = new Font("Segoe UI", height * 0.14f, FontStyle.Bold, GraphicsUnit.Pixel);
                 using var idleBrush = new SolidBrush(Color.FromArgb(110, 120, 140));
                 g.DrawString("—", idleFont, idleBrush, fpsRect, center);
             }
-
-            using var capFont = new Font("Segoe UI", height * 0.075f, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var capBrush = new SolidBrush(Color.FromArgb(150, 160, 180));
-            g.DrawString("FPS", capFont, capBrush, new RectangleF(0, height * 0.58f, width, height * 0.12f), center);
         }
 
         using var stream = new MemoryStream();
@@ -97,7 +93,7 @@ public static class TurzxDashboardRenderer
         var colW = width / 5f;
         for (var i = 0; i < cells.Length; i++)
         {
-            using var font = FitFont(g, cells[i].Text, rowH * 0.62f, colW * 0.9f, FontStyle.Bold);
+            using var font = FitFont(g, cells[i].Text, rowH * 0.66f, colW * 0.94f, FontStyle.Bold);
             using var brush = new SolidBrush(cells[i].Color);
             g.DrawString(cells[i].Text, font, brush, new RectangleF(i * colW, yTop, colW, rowH), center);
         }

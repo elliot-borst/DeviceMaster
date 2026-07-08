@@ -48,8 +48,19 @@ public sealed class TurzxScreen : IDisposable
     /// </summary>
     private const int FramePayloadChunkBytes = 24_900;
 
+    /// <summary>
+    /// After the first full frame, only the pixels that changed are pushed (UPDATE_BITMAP), so a
+    /// live dashboard refreshes in well under a second instead of the ~2.3 s a full 3.7 MB frame
+    /// takes over this Full-Speed CDC link. A full frame is re-sent every <see cref="FullFrameEvery"/>
+    /// partials to heal any region the panel dropped.
+    /// </summary>
+    private const int FullFrameEvery = 30;
+
     private readonly SerialPort _port;
     private bool _initialized;
+    private byte[]? _prevNative;   // last native frame pushed, for partial-update diffing
+    private int _updateCount;      // UPDATE_BITMAP sequence counter (starts at 0, like the reference)
+    private int _framesSinceFull;
 
     private TurzxScreen(SerialPort port, string comPort, string? serial)
     {
@@ -178,15 +189,112 @@ public sealed class TurzxScreen : IDisposable
     public void SendJpegFrame(byte[] landscapeJpeg)
     {
         EnsureInitialized();
-        var bgra = LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape);
-        var body = TurzxProtocol.EncodeFullFrameBody(bgra);
+        var native = LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape);
 
+        // First frame after (re)connect must be a full DISPLAY_BITMAP to establish the framebuffer;
+        // then push only the changed pixels. A periodic full frame heals any dropped region.
+        var full = _prevNative is null || _framesSinceFull >= FullFrameEvery;
+        byte[]? spans = null;
+        if (!full)
+        {
+            spans = BuildPartialSpans(_prevNative!, native);
+            if (spans is null)
+            {
+                full = true; // more than half the frame changed — a full frame is cheaper
+            }
+            else if (spans.Length == 0)
+            {
+                _prevNative = native; // nothing visibly changed
+                return;
+            }
+        }
+
+        if (full)
+        {
+            SendFullNative(native);
+            _framesSinceFull = 0;
+        }
+        else
+        {
+            SendPartialNative(spans!);
+            _framesSinceFull++;
+        }
+
+        _prevNative = native;
+    }
+
+    /// <summary>Full-frame push: PRE_UPDATE → START → DISPLAY_BITMAP_8INCH → BGRA payload → QUERY_STATUS.</summary>
+    private void SendFullNative(byte[] native)
+    {
+        var body = TurzxProtocol.EncodeFullFrameBody(native);
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.PreUpdateBitmap));
         Write(TurzxProtocol.BuildStartDisplayBitmap());
         Write(TurzxProtocol.BuildDisplayBitmap8Inch());
         WriteFramePayload(TurzxProtocol.BuildSendPayload(body));
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
         DrainInput();
+    }
+
+    /// <summary>Partial push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(changed spans) → QUERY_STATUS.</summary>
+    private void SendPartialNative(byte[] rawSpans)
+    {
+        Write(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdateHeader(rawSpans.Length, _updateCount)));
+        WriteFramePayload(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdatePixels(rawSpans)));
+        Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
+        DrainInput();
+        _updateCount++;
+    }
+
+    /// <summary>
+    /// Row-major native-frame diff (480×1920 BGRA). Returns the changed pixel spans encoded as
+    /// [3-byte BE address][2-byte BE width][BGRA run] per changed native row, or null when more
+    /// than half the frame changed (caller should send a full frame instead). Empty means nothing
+    /// changed.
+    /// </summary>
+    private static byte[]? BuildPartialSpans(byte[] prev, byte[] cur)
+    {
+        const int w = TurzxProtocol.ScreenWidth;   // 480
+        const int h = TurzxProtocol.ScreenHeight;  // 1920
+        const int bpp = 4;
+        const int stride = w * bpp;                // 1920 bytes per native row
+        var maxChanged = cur.Length / 2;
+        var changed = 0;
+        var raw = new List<byte>(8192);
+
+        for (var row = 0; row < h; row++)
+        {
+            var ro = row * stride;
+            var curRow = cur.AsSpan(ro, stride);
+            var prevRow = prev.AsSpan(ro, stride);
+            if (curRow.SequenceEqual(prevRow))
+            {
+                continue;
+            }
+
+            var first = 0;
+            while (first < stride && curRow[first] == prevRow[first]) first++;
+            var last = stride - 1;
+            while (last > first && curRow[last] == prevRow[last]) last--;
+
+            var startPx = first / bpp;
+            var widthPx = (last / bpp) - startPx + 1;
+            var addr = (row * w) + startPx;
+
+            raw.Add((byte)(addr >> 16));
+            raw.Add((byte)(addr >> 8));
+            raw.Add((byte)addr);
+            raw.Add((byte)(widthPx >> 8));
+            raw.Add((byte)widthPx);
+            raw.AddRange(cur.AsSpan(ro + (startPx * bpp), widthPx * bpp));
+
+            changed += widthPx * bpp;
+            if (changed > maxChanged)
+            {
+                return null;
+            }
+        }
+
+        return raw.Count == 0 ? [] : raw.ToArray();
     }
 
     /// <summary>

@@ -1087,7 +1087,7 @@ public sealed class ControlLoop : IDisposable
         string? key = null;
         if (settings.TurzxScreen == LcdMode.Metrics && Environment.TickCount64 >= _turzxMetricsDue)
         {
-            _turzxMetricsDue = Environment.TickCount64 + 2_000;
+            _turzxMetricsDue = Environment.TickCount64 + 900; // ~1 s refresh (partial updates keep the push fast)
             try
             {
                 _lhm ??= new Sensors.LhmSensorSource();

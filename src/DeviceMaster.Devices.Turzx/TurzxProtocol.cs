@@ -73,6 +73,41 @@ public static class TurzxProtocol
     /// <summary>The SEND_PAYLOAD frame: raw body (no command prefix), padded to a multiple of 250.</summary>
     public static byte[] BuildSendPayload(ReadOnlySpan<byte> body) => BuildCommand(default, body);
 
+    /// <summary>UPDATE_BITMAP command prefix (partial-region refresh).</summary>
+    public static readonly byte[] UpdateBitmap = [0xcc, 0xef, 0x69, 0x00];
+
+    /// <summary>
+    /// UPDATE_BITMAP header payload: <c>cc ef 69 00</c> + (rawSpanLen+2) as 3-byte BE + <c>00 00 00</c>
+    /// + <paramref name="count"/> as 4-byte BE. The +2 accounts for the trailing <c>ef 69</c> that
+    /// <see cref="BuildUpdatePixels"/> appends. Send this as a SEND_PAYLOAD frame.
+    /// </summary>
+    public static byte[] BuildUpdateHeader(int rawSpanLength, int count)
+    {
+        var size = rawSpanLength + 2;
+        return
+        [
+            UpdateBitmap[0], UpdateBitmap[1], UpdateBitmap[2], UpdateBitmap[3],
+            (byte)(size >> 16), (byte)(size >> 8), (byte)size,
+            0x00, 0x00, 0x00,
+            (byte)(count >> 24), (byte)(count >> 16), (byte)(count >> 8), (byte)count,
+        ];
+    }
+
+    /// <summary>
+    /// Wraps the raw span bytes (each span = 3-byte BE native address + 2-byte BE pixel width +
+    /// that run's BGRA) into the UPDATE_BITMAP pixel payload: a single NULL byte after every 249
+    /// bytes, then a trailing <c>ef 69</c>. Send as a SEND_PAYLOAD frame.
+    /// </summary>
+    public static byte[] BuildUpdatePixels(ReadOnlySpan<byte> rawSpans)
+    {
+        var joined = EncodeFullFrameBody(rawSpans); // NULL-join every 249 bytes (no-op if ≤ 249)
+        var result = new byte[joined.Length + 2];
+        joined.CopyTo(result, 0);
+        result[^2] = 0xef;
+        result[^1] = 0x69;
+        return result;
+    }
+
     /// <summary>
     /// Interleaves a single NULL byte after every 249 bytes of BGRA data — the reference's
     /// <c>b'\x00'.join(chunked(bgra_data, 249))</c> framing for the full-frame payload.
