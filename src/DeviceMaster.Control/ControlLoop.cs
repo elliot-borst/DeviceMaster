@@ -613,6 +613,11 @@ public sealed class ControlLoop : IDisposable
 
         _lhm?.Dispose();
         _lhm = null;
+
+        _fps?.Dispose(); // stops the ETW present session
+        _fps = null;
+        _fpsStarted = false;
+
         _lastWrittenCorsairDuty = -1;
         _lastWrittenHeaderDuty = -1;
     }
@@ -1065,6 +1070,8 @@ public sealed class ControlLoop : IDisposable
     private long _turzxMetricsDue;
     private string? _turzxDashKey;       // last rendered dashboard content key (tick thread)
     private bool _turzxStatsLogged;      // log the gathered dashboard stats once, for verification
+    private Sensors.PresentMonFpsReader? _fps; // ETW present monitor for the dashboard's FPS
+    private bool _fpsStarted;
     private volatile string? _turzxStatusText;
 
     // worker-thread-only state
@@ -1085,7 +1092,13 @@ public sealed class ControlLoop : IDisposable
             {
                 _lhm ??= new Sensors.LhmSensorSource();
                 var stats = _lhm.ReadSystemStats();
-                var fps = Sensors.RtssFpsReader.ReadCurrentFps();
+                if (!_fpsStarted)
+                {
+                    _fpsStarted = true; // start the ETW present monitor once; null if it can't (e.g. not elevated)
+                    _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
+                }
+
+                var fps = _fps?.CurrentFps() ?? Sensors.RtssFpsReader.ReadCurrentFps();
                 var dashKey = TurzxDashboardKey(stats, fps);
                 if (dashKey != _turzxDashKey) // only re-render when a displayed value actually changed
                 {

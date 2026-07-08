@@ -128,9 +128,11 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   thread and never blocks the 1 Hz fan/pump loop. Partial/differential updates (rev_c
   `UPDATE_BITMAP`, or the vendor's command `0xCC`/204) remain a future optimisation.
 - Controlled from the **Turzx** side-menu page: Off / On, a brightness slider, and a landscape
-  orientation toggle. **On** shows a fixed dashboard — a large FPS reading (from RivaTuner
-  Statistics Server's shared memory, when running) with CPU and GPU telemetry rows (name, usage,
-  temperature, memory GB, power W); chip names are coloured, all other figures white.
+  orientation toggle. **On** shows a fixed dashboard — a large FPS reading (measured in-app via
+  an ETW DXGI present-monitor, PresentMon-style: no extra software, needs the app's admin rights;
+  falls back to RTSS shared memory if present; a dash when nothing is rendering) with CPU and GPU
+  telemetry rows (name, usage, temperature, memory GB, power W); chip names are coloured, all
+  other figures white.
 
 ## Sensors
 

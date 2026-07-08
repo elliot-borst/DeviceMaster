@@ -27,6 +27,7 @@ public static class TurzxCommands
             "frame" => Frame(GetCom(args), GetColor(args)),
             "metric" => MetricFrame(GetCom(args)),
             "dash" => Dash(args),
+            "fps" => FpsProbe(GetSeconds(args, 15)),
             "bench" => Bench(GetCom(args)),
             "baud" => BaudScan(GetCom(args)),
             "hello" => HelloLoop(GetCom(args)),
@@ -41,6 +42,7 @@ public static class TurzxCommands
         Log.Information("       turzx frame [--color white|black|red|green|blue] [--com COM3]  (drive a solid full frame)");
         Log.Information("       turzx metric [--com COM3]                        (render a sample metric frame through the real renderer)");
         Log.Information("       turzx dash [--live] [--out path.png]             (render the CPU/FPS/GPU dashboard to a PNG for inspection)");
+        Log.Information("       turzx fps [--seconds 15]                         (ELEVATED: ETW present monitor — prints live FPS; run a game)");
         Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
         return 1;
     }
@@ -177,9 +179,10 @@ public static class TurzxCommands
         {
             using var lhm = new LhmSensorSource();
             _ = lhm.ReadSystemStats(); // first read primes some LHM counters (e.g. loads)
-            Thread.Sleep(750);
+            using var fpsReader = PresentMonFpsReader.StartOrNull(m => Log.Information("  {Msg}", m));
+            Thread.Sleep(1300); // let LHM counters settle + the present monitor fill a 1 s window
             stats = lhm.ReadSystemStats();
-            fps = RtssFpsReader.ReadCurrentFps();
+            fps = fpsReader?.CurrentFps() ?? RtssFpsReader.ReadCurrentFps();
         }
         else
         {
@@ -195,7 +198,7 @@ public static class TurzxCommands
             stats.CpuName, F(stats.CpuLoadPercent, "%"), F(stats.CpuTempC, "°C"), F(stats.CpuPowerW, "W"), F(stats.RamUsedGb, ""));
         Log.Information("  GPU {Name}: load={Load} temp={Temp} pow={Pow} vram={Vram}GB",
             stats.GpuName, F(stats.GpuLoadPercent, "%"), F(stats.GpuTempC, "°C"), F(stats.GpuPowerW, "W"), F(stats.VramUsedGb, ""));
-        Log.Information("  FPS {Fps}", fps?.ToString() ?? "— (RTSS not running)");
+        Log.Information("  FPS {Fps}", fps?.ToString() ?? "— (no app presenting right now)");
         return 0;
 
         static string F(double? v, string u) => v is { } x ? $"{x:F0}{u}" : "—";
@@ -205,6 +208,28 @@ public static class TurzxCommands
     {
         var i = Array.FindIndex(args, a => a.Equals("--out", StringComparison.OrdinalIgnoreCase));
         return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    }
+
+    /// <summary>Runs the ETW present monitor and prints live FPS — needs an elevated terminal.</summary>
+    private static int FpsProbe(int seconds)
+    {
+        Log.Information("Starting the DXGI present ETW monitor for {Sec}s (needs admin). Run a game/3D app to see FPS...", seconds);
+        using var reader = PresentMonFpsReader.StartOrNull(msg => Log.Information("  {Msg}", msg), "DeviceMaster-FPS-Probe");
+        if (reader is null)
+        {
+            Log.Warning("Could not start the FPS monitor — run this from an ELEVATED terminal (ETW real-time sessions need admin).");
+            return 1;
+        }
+
+        var deadline = Environment.TickCount64 + seconds * 1000L;
+        while (Environment.TickCount64 < deadline)
+        {
+            Thread.Sleep(500);
+            var fps = reader.CurrentFps();
+            Log.Information("FPS = {Fps}", fps?.ToString() ?? "— (nothing presenting)");
+        }
+
+        return 0;
     }
 
     /// <summary>Writes increasing raw payloads and reports throughput — reveals if the device drains fast (USB) or slow (real UART).</summary>

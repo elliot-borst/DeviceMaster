@@ -5,5 +5,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <!-- ETW real-time session for FPS (DXGI present events). User-mode provider only, so this
+         stays on managed advapi32 P/Invoke — no native TraceEvent assets, single-file-publish safe. -->
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.16" />
   </ItemGroup>
 </Project>
