@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO.Ports;
 using System.Text;
+using DeviceMaster.Control;
 using DeviceMaster.Devices.Turzx;
 using Serilog;
 
@@ -22,9 +23,11 @@ public static class TurzxCommands
         {
             "probe" => Probe(GetCom(args)),
             "frame" => Frame(GetCom(args), GetColor(args)),
+            "metric" => MetricFrame(GetCom(args)),
             "bench" => Bench(GetCom(args)),
             "baud" => BaudScan(GetCom(args)),
             "hello" => HelloLoop(GetCom(args)),
+            "listen" => Listen(GetCom(args), GetSeconds(args, 8)),
             _ => Usage(),
         };
     }
@@ -32,8 +35,65 @@ public static class TurzxCommands
     private static int Usage()
     {
         Log.Information("usage: turzx probe [--com COM3]");
-        Log.Information("       turzx frame [--color white|black] [--com COM3]   (drive a solid full frame)");
+        Log.Information("       turzx frame [--color white|black|red|green|blue] [--com COM3]  (drive a solid full frame)");
+        Log.Information("       turzx metric [--com COM3]                        (render a sample metric frame through the real renderer)");
+        Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
         return 1;
+    }
+
+    /// <summary>Renders a sample metric (CPU 63 °C) via the control loop's exact renderer and pushes it — verifies text + orientation.</summary>
+    private static int MetricFrame(string? comOverride)
+    {
+        var com = comOverride ?? TurzxScreen.Find().FirstOrDefault().ComPort;
+        if (com is null)
+        {
+            Log.Error("No Turzx screen found in the serial scan (pass --com COMx to force).");
+            return 1;
+        }
+
+        var frame = LcdMetricRenderer.Render(1920, 480, "CPU", "63", "°C", (122, 167, 255));
+
+        TurzxScreen? screen = null;
+        var deadline = Environment.TickCount64 + 25_000;
+        while (Environment.TickCount64 < deadline)
+        {
+            try { screen = TurzxScreen.Open(com); break; }
+            catch (UnauthorizedAccessException) { Thread.Sleep(500); }
+            catch (Exception ex) { Log.Error("open {Com} failed: {Msg}", com, ex.Message); return 1; }
+        }
+
+        if (screen is null)
+        {
+            Log.Warning("could not acquire {Com} within 25 s (desktop app holding it?)", com);
+            return 1;
+        }
+
+        try
+        {
+            Log.Information("Rendering a sample metric (CPU 63 °C) and pushing to {Com}...", com);
+            var sw = Stopwatch.StartNew();
+            screen.SetBrightness(100);
+            screen.SendJpegFrame(frame);
+            sw.Stop();
+            Log.Information("Metric frame pushed in {Ms} ms (rom={Rom}). LOOK AT THE PANEL — is 'CPU 63 °C' shown upright?",
+                sw.ElapsedMilliseconds, screen.RomVersion?.ToString() ?? "?");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("push failed: {Type}: {Msg}", ex.GetType().Name, ex.Message);
+        }
+        finally
+        {
+            screen.Dispose();
+        }
+
+        return 0;
+    }
+
+    private static int GetSeconds(string[] args, int fallback)
+    {
+        var i = Array.FindIndex(args, a => a.Equals("--seconds", StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var s) ? Math.Clamp(s, 1, 120) : fallback;
     }
 
     private static string GetColor(string[] args)
@@ -41,6 +101,16 @@ public static class TurzxCommands
         var i = Array.FindIndex(args, a => a.Equals("--color", StringComparison.OrdinalIgnoreCase));
         return i >= 0 && i + 1 < args.Length ? args[i + 1].ToLowerInvariant() : "white";
     }
+
+    /// <summary>Named test colors — red/green/blue reveal the panel's channel order (BGRA vs RGBA).</summary>
+    private static Color NamedColor(string name) => name switch
+    {
+        "black" => Color.Black,
+        "red" => Color.Red,
+        "green" => Color.Lime,
+        "blue" => Color.Blue,
+        _ => Color.White,
+    };
 
     /// <summary>Drives a solid full frame through the real TurzxScreen path (brightness + BGRA push).</summary>
     private static int Frame(string? comOverride, string color)
@@ -52,7 +122,7 @@ public static class TurzxCommands
             return 1;
         }
 
-        var jpeg = SolidJpeg(1920, 480, color == "black" ? Color.Black : Color.White);
+        var jpeg = SolidJpeg(1920, 480, NamedColor(color));
 
         TurzxScreen? screen = null;
         var deadline = Environment.TickCount64 + 25_000;
@@ -193,6 +263,97 @@ public static class TurzxCommands
         finally { port.Dispose(); }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Passive listener. Opens the port and reads WITHOUT sending any protocol command, watching
+    /// for a boot banner / unsolicited device ID / heartbeat — the tell-tale of a "speak-first"
+    /// panel (our HELLO handshake always writes first, so it would miss one). Then two of the most
+    /// harmless possible nudges: a fresh DTR assertion (CDC "terminal present" edge, which makes
+    /// many WCH panels emit their ID) and a single CR/LF. No large writes — stays inside the
+    /// proven-safe envelope (big writes with no valid receive-mode command knock COM3 off the bus).
+    /// </summary>
+    private static int Listen(string? comOverride, int seconds)
+    {
+        var com = comOverride ?? TurzxScreen.Find().FirstOrDefault().ComPort;
+        if (com is null) { Log.Error("No Turzx screen found in the serial scan (pass --com COMx to force)."); return 1; }
+
+        var port = Acquire(com, Handshake.None, dtr: true, rts: true, writeTimeoutMs: 4000);
+        if (port is null)
+        {
+            Log.Warning("could not acquire {Com} (the desktop app holds it; note it backs off 5 min after a failed handshake, so retry then or exit the app)", com);
+            return 1;
+        }
+
+        try
+        {
+            port.ReadTimeout = 250;
+            Log.Information("Listening on {Com} for {Sec}s — NOT sending any protocol command. Watching for a banner / ID / heartbeat...", com, seconds);
+            var total = ListenWindow(port, seconds * 1000, "passive");
+
+            Log.Information("Toggling DTR (drop 150 ms, re-assert) then listening 3 s...");
+            try { port.DtrEnable = false; Thread.Sleep(150); port.DtrEnable = true; } catch (Exception ex) { Log.Warning("DTR toggle failed: {Msg}", ex.Message); }
+            total += ListenWindow(port, 3000, "after DTR re-assert");
+
+            Log.Information("Sending a single CR/LF then listening 3 s...");
+            try { port.Write(new byte[] { 0x0d, 0x0a }, 0, 2); } catch (Exception ex) { Log.Warning("CR/LF write failed: {Msg}", ex.Message); }
+            total += ListenWindow(port, 3000, "after CR/LF");
+
+            Log.Information(total == 0
+                ? "Panel emitted NOTHING unsolicited across all windows — it is a write-first protocol (only replies when addressed with the command it expects)."
+                : "Panel emitted {Total} byte(s) total — see the hex dumps above; a leading printable run is likely its device ID.", total);
+        }
+        finally { port.Dispose(); }
+
+        return 0;
+    }
+
+    /// <summary>Reads for <paramref name="windowMs"/>, dumping any bytes as hex + printable ASCII. Returns the byte count.</summary>
+    private static int ListenWindow(SerialPort port, int windowMs, string label)
+    {
+        var buffer = new List<byte>();
+        var scratch = new byte[512];
+        var deadline = Environment.TickCount64 + windowMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            try
+            {
+                if (port.BytesToRead > 0)
+                {
+                    var n = port.Read(scratch, 0, Math.Min(scratch.Length, port.BytesToRead));
+                    for (var i = 0; i < n; i++)
+                    {
+                        buffer.Add(scratch[i]);
+                    }
+
+                    deadline = Environment.TickCount64 + 400; // extend a little while bytes keep flowing
+                }
+                else
+                {
+                    Thread.Sleep(20);
+                }
+            }
+            catch (TimeoutException) { /* keep polling until the window closes */ }
+            catch (Exception ex) { Log.Warning("[{Label}] read error: {Msg}", label, ex.Message); break; }
+        }
+
+        if (buffer.Count == 0)
+        {
+            Log.Information("[{Label}] (silence)", label);
+            return 0;
+        }
+
+        var bytes = buffer.ToArray();
+        var hex = Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, 64)));
+        var ascii = new StringBuilder();
+        foreach (var b in bytes)
+        {
+            ascii.Append(b is >= 0x20 and < 0x7f ? (char)b : '.');
+        }
+
+        Log.Information("[{Label}] {Count} byte(s): {Hex}{More}", label, bytes.Length, hex, bytes.Length > 64 ? "…" : "");
+        Log.Information("[{Label}] ascii: {Ascii}", label, ascii.ToString());
+        return bytes.Length;
     }
 
     private static SerialPort? Acquire(string com, Handshake hs, bool dtr, bool rts, int writeTimeoutMs)

@@ -40,8 +40,12 @@ public static class KnownDeviceRegistry
         Entry(0x0CF2, 0xA104, DeviceKind.LianLiUniHub, "Lian Li Uni Hub AL V2", supportPlanned: false),
 
         // ---- Turzx / Turing smart screen ----
+        // NB: CA88 is only the panel's STANDBY/CONTROL port. Its protocol lives on a second,
+        // gadget-serial DATA port (0525:A4A7 / serial 20080411 / 1D6B:0121|0106); TurzxScreen
+        // opens that one, authorised by this CA88 identity being co-present. See docs.
         Entry(0x1A86, 0xCA88, DeviceKind.TurzxScreen, "Turzx/Turing 8.8\" smart screen", supportPlanned: true,
-            "*USB serial (usbser), device serial string CT88INCH. Protocol revision confirmed in Stage 5."),
+            "*USB serial (usbser), serial string CT88INCH — standby/control port. Protocol (rev_c REV_8INCH) "
+            + "runs on the paired 0525:A4A7 gadget-serial DATA port; verified live (rom 1.90)."),
 
         // ---- ASUS Aura (motherboard RGB) ----
         Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: true,

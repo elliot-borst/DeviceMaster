@@ -102,16 +102,31 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 
 | Device | VID:PID | Transport |
 |---|---|---|
-| 8.8" smart screen | `1A86:CA88` | USB serial (`usbser`), device serial string `CT88INCH` |
+| 8.8" smart screen — control port | `1A86:CA88` | USB serial (`usbser`), device serial string `CT88INCH` |
+| 8.8" smart screen — **data port** | `0525:A4A7` (Linux `g_serial`) | USB serial CDC-ACM; also seen as serial `20080411` / `1D6B:0121` / `1D6B:0106` |
 
-- Protocol ported from turing-smart-screen-python (`lcd_comm_rev_c.py`, the `REV_8INCH` /
-  `CT88INCH` sub-revision). Commands are byte sequences padded to a multiple of 250 bytes; a
-  full frame is BGRA pixel data with a `0x00` inserted after every 249 bytes. The panel is
-  480×1920 native (portrait); DeviceMaster renders landscape 1920×480 content and rotates it
-  onto the panel. Baud is nominal — the `usbser` CDC port transfers at USB speed.
-- Full-frame push only (change-driven). A full frame is ~3.7 MB, so it is driven from a
-  dedicated worker thread and never blocks the 1 Hz fan/pump loop. Partial-region updates
-  (`_generate_update_image`) remain a future optimisation if refresh latency matters.
+- **Two serial ports (this was the whole trick).** The 8.8" panel enumerates *two* COM ports.
+  The `1A86:CA88` `CT88INCH` port is only a standby/control endpoint — it never answers the
+  protocol and stalls on a frame write. A second Linux gadget-serial port (the panel SoC
+  re-enumerated as `g_serial`, identified by `0525:A4A7` / serial `20080411` / `1D6B:0121|0106`)
+  is the **data endpoint** that speaks the protocol and replies to `HELLO` with e.g.
+  `chs_88inch.dev1_rom1.90`. DeviceMaster drives the data port; the data port's generic gadget
+  VID:PID is not write-allowed on its own — it is only opened when the `CA88` control port is
+  co-present (that is the positive identification). Windows often labels the data port
+  "PI USB to Serial" (it looks like a Raspberry Pi gadget) — do not dismiss it.
+- If only the control port is present, opening then closing it wakes the SoC and the data port
+  enumerates; DeviceMaster does this automatically and waits for the data port to appear.
+- Protocol is turing-smart-screen-python `lcd_comm_rev_c.py`, the `REV_8INCH` sub-revision
+  (verified byte-for-byte against a vendor Bus Hound capture). Commands are padded to a multiple
+  of 250 bytes; a full frame is BGRA pixel data with a `0x00` inserted after every 249 bytes,
+  wrapped `PRE_UPDATE_BITMAP → START_DISPLAY_BITMAP → DISPLAY_BITMAP_8INCH → payload →
+  QUERY_STATUS`. The panel is 480×1920 native (portrait); DeviceMaster renders landscape
+  1920×480 content and rotates it on. Baud is nominal (CDC transfers at USB speed).
+- **The ~3.7 MB frame must be written in paced ~24,900-byte chunks (≈1 ms apart), never one
+  blast** — a single large write stalls the CDC endpoint ("semaphore timeout"). Do not enlarge
+  the driver's `WriteBufferSize`. A full frame takes ~2.3 s; the push runs on a dedicated worker
+  thread and never blocks the 1 Hz fan/pump loop. Partial/differential updates (rev_c
+  `UPDATE_BITMAP`, or the vendor's command `0xCC`/204) remain a future optimisation.
 - Controlled from the **Turzx** side-menu page: Off / On (metrics) / Black / White, a metric
   picker, a brightness slider, and a landscape orientation toggle.
 

@@ -51,12 +51,26 @@ Architecture (confirmed against our enumeration):
   firmware stores and loops the animation (send once, not per frame).
 - Library: LibUsbDotNet or WinUSB P/Invoke — HidSharp cannot open these (vendor WinUSB class).
 
-## Turzx 8.8" screen (`1A86:CA88`, COM3, serial id `CT88INCH`)
+## Turzx 8.8" screen (`1A86:CA88` control + `0525:A4A7` data, serial id `CT88INCH`) — ✅ SOLVED
 
-- **mathoudebine/turing-smart-screen-python** — primary. Its model detection maps USB
-  serial/PID to protocol revision; find the 8.8" class (revision family for `CA88`/
-  `CT88INCH`) and port init/orientation/bitmap-push commands.
-- **tedd/Tedd.TuringScreen** (C#) — C# framing conventions, likely 3.5"-oriented; adapt.
+Protocol confirmed working on real hardware 2026-07-08 (rom 1.90). It is plain rev_c
+`REV_8INCH`; the long-standing blocker was purely that the panel exposes **two** serial
+ports and we were driving the wrong one (see docs/SUPPORTED-DEVICES.md).
+
+- **mathoudebine/turing-smart-screen-python** — primary. `library/lcd/lcd_comm_rev_c.py`
+  `REV_8INCH` is what we ported (HELLO `01 ef 69 … c5 d3`, `DISPLAY_BITMAP_8INCH`
+  `c8 ef 69 00 38 40` + `0x0E10`, `0x00`-join per 249, 250-byte padding). Its
+  `auto_detect_com_port()` selects the DATA port by `0525:A4A7` / serial `20080411` /
+  `1D6B:0121|0106` — **not** by `1A86:CA88`. Issues #724 (rom-1.90 pixel encoding) and #727
+  (our exact `CT88INCH`/`CA88` two-port device) are the authoritative threads.
+- **wlyaaaaa/TURZX-SideScreen** (C#) — independent driver for this exact 480×1920 panel;
+  source of the 24,900-byte paced-chunk transport fact (a single big write stalls; the vendor
+  and this driver both chunk).
+- **Vendor app** `TURZX.exe` / `UsbMonitorS.exe` (8.8", `88inchENG.rar` on the turzx myqcloud
+  bucket) — .NET/WPF, Dotfuscator-obfuscated, bundles `RJCP.SerialPortStream`; a Bus Hound
+  capture of it confirmed the rev_c command order byte-for-byte. Decompile kept in the session
+  scratchpad for a future differential-frame (`0xCC`/204) optimisation.
+- **tedd/Tedd.TuringScreen** (C#) — C# framing conventions, 3.5"-oriented; adapt.
 
 ## ASUS Aura motherboard RGB (`0B05:19AF`), ENE RAM RGB, NVIDIA GPU RGB
 
