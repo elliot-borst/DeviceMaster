@@ -486,7 +486,7 @@ public sealed class MainWindow : Window
 
     // ---------- Turzx 8.8" screen page ----------
 
-    private readonly WrapPanel _turzxButtons = new() { Orientation = Orientation.Horizontal };
+    private readonly WrapPanel _turzxButtons = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
     private readonly TextBlock _turzxStatus = new()
     {
         FontSize = 12,
@@ -502,21 +502,12 @@ public sealed class MainWindow : Window
         var page = new StackPanel();
         page.Children.Add(PageTitle("Turzx Screen", "the 8.8\" ultrawide serial display"));
 
-        var card = Theme.CardShell("▤", "Turzx 8.8\"", "backlight, brightness, and what the ultrawide bar shows", out var body, out _);
+        var card = Theme.CardShell("▤", "Turzx 8.8\"", "backlight and brightness — On shows the CPU · FPS · GPU dashboard", out var body, out _);
         card.HorizontalAlignment = HorizontalAlignment.Left;
         card.MaxWidth = 560;
 
         RebuildTurzxButtons();
         body.Children.Add(_turzxButtons);
-
-        var metricDrop = new DmDropdown(LcdMetricNames, LcdMetricChoiceIndex(_controlSettings.TurzxMetric), 150);
-        metricDrop.SelectionChanged += index =>
-        {
-            _controlSettings.TurzxMetric = LcdMetricChoices[index].Metric;
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-        };
-        body.Children.Add(TurzxLabeledRow("Metric (when On)", metricDrop));
 
         var brightPanel = new StackPanel { Orientation = Orientation.Horizontal };
         brightPanel.Children.Add(Theme.SmallLabel("Brightness"));
@@ -577,8 +568,6 @@ public sealed class MainWindow : Window
         {
             (LcdMode.Off, "Off"),
             (LcdMode.Metrics, "On"),
-            (LcdMode.Black, "Black"),
-            (LcdMode.White, "White"),
         })
         {
             var selected = _controlSettings.TurzxScreen == mode;

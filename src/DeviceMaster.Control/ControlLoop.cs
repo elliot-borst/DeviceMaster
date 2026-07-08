@@ -1063,6 +1063,8 @@ public sealed class ControlLoop : IDisposable
     private byte[]? _turzxFrame;
     private string? _turzxFrameKey;
     private long _turzxMetricsDue;
+    private string? _turzxDashKey;       // last rendered dashboard content key (tick thread)
+    private bool _turzxStatsLogged;      // log the gathered dashboard stats once, for verification
     private volatile string? _turzxStatusText;
 
     // worker-thread-only state
@@ -1079,11 +1081,30 @@ public sealed class ControlLoop : IDisposable
         if (settings.TurzxScreen == LcdMode.Metrics && Environment.TickCount64 >= _turzxMetricsDue)
         {
             _turzxMetricsDue = Environment.TickCount64 + 2_000;
-            IReadOnlyList<Core.Sensors.SensorReading>? lhm = null;
-            if (ReadLcdMetric(settings.TurzxMetric, readings, duty, ref lhm) is { } m)
+            try
             {
-                key = $"{settings.TurzxMetric}|{m.Value}|{m.Unit}|{m.Accent}";
-                frame = LcdMetricRenderer.Render(TurzxLandscapeWidth, TurzxLandscapeHeight, m.Label, m.Value, m.Unit, m.Accent);
+                _lhm ??= new Sensors.LhmSensorSource();
+                var stats = _lhm.ReadSystemStats();
+                var fps = Sensors.RtssFpsReader.ReadCurrentFps();
+                var dashKey = TurzxDashboardKey(stats, fps);
+                if (dashKey != _turzxDashKey) // only re-render when a displayed value actually changed
+                {
+                    _turzxDashKey = dashKey;
+                    key = dashKey;
+                    frame = TurzxDashboardRenderer.Render(TurzxLandscapeWidth, TurzxLandscapeHeight, stats, fps);
+                    if (!_turzxStatsLogged)
+                    {
+                        _turzxStatsLogged = true;
+                        _log?.Invoke($"Turzx dashboard: CPU {stats.CpuName} load={stats.CpuLoadPercent:F0}% "
+                            + $"temp={stats.CpuTempC:F0}°C pow={stats.CpuPowerW:F0}W ram={stats.RamUsedGb:F0}GB | "
+                            + $"GPU {stats.GpuName} load={stats.GpuLoadPercent:F0}% temp={stats.GpuTempC:F0}°C "
+                            + $"pow={stats.GpuPowerW:F0}W vram={stats.VramUsedGb:F0}GB | FPS {(fps?.ToString() ?? "n/a")}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"Turzx dashboard render failed: {ex.Message}");
             }
         }
 
@@ -1101,6 +1122,12 @@ public sealed class ControlLoop : IDisposable
 
         _turzxWake.Set();
     }
+
+    /// <summary>Content key for the dashboard — rounded to the displayed precision so an unchanged
+    /// picture is neither re-rendered nor re-pushed.</summary>
+    private static string TurzxDashboardKey(Sensors.SystemStats s, int? fps) =>
+        $"{s.CpuName}|{s.CpuLoadPercent:F0}|{s.CpuTempC:F0}|{s.RamUsedGb:F0}|{s.CpuPowerW:F0}|"
+        + $"{s.GpuName}|{s.GpuLoadPercent:F0}|{s.GpuTempC:F0}|{s.VramUsedGb:F0}|{s.GpuPowerW:F0}|{fps}";
 
     /// <summary>Worker-thread half: owns the serial port, applies brightness/mode, pushes frames on change.</summary>
     private void RunTurzx(CancellationToken token)

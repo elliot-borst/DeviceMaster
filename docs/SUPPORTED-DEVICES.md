@@ -127,8 +127,10 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   the driver's `WriteBufferSize`. A full frame takes ~2.3 s; the push runs on a dedicated worker
   thread and never blocks the 1 Hz fan/pump loop. Partial/differential updates (rev_c
   `UPDATE_BITMAP`, or the vendor's command `0xCC`/204) remain a future optimisation.
-- Controlled from the **Turzx** side-menu page: Off / On (metrics) / Black / White, a metric
-  picker, a brightness slider, and a landscape orientation toggle.
+- Controlled from the **Turzx** side-menu page: Off / On, a brightness slider, and a landscape
+  orientation toggle. **On** shows a fixed dashboard — a large FPS reading (from RivaTuner
+  Statistics Server's shared memory, when running) with CPU and GPU telemetry rows (name, usage,
+  temperature, memory GB, power W); chip names are coloured, all other figures white.
 
 ## Sensors
 

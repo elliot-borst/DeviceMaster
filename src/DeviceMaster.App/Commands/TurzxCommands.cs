@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.IO.Ports;
 using System.Text;
 using DeviceMaster.Control;
 using DeviceMaster.Devices.Turzx;
+using DeviceMaster.Sensors;
 using Serilog;
 
 namespace DeviceMaster.App.Commands;
@@ -24,6 +26,7 @@ public static class TurzxCommands
             "probe" => Probe(GetCom(args)),
             "frame" => Frame(GetCom(args), GetColor(args)),
             "metric" => MetricFrame(GetCom(args)),
+            "dash" => Dash(args),
             "bench" => Bench(GetCom(args)),
             "baud" => BaudScan(GetCom(args)),
             "hello" => HelloLoop(GetCom(args)),
@@ -37,6 +40,7 @@ public static class TurzxCommands
         Log.Information("usage: turzx probe [--com COM3]");
         Log.Information("       turzx frame [--color white|black|red|green|blue] [--com COM3]  (drive a solid full frame)");
         Log.Information("       turzx metric [--com COM3]                        (render a sample metric frame through the real renderer)");
+        Log.Information("       turzx dash [--live] [--out path.png]             (render the CPU/FPS/GPU dashboard to a PNG for inspection)");
         Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
         return 1;
     }
@@ -159,6 +163,48 @@ public static class TurzxCommands
         }
 
         return 0;
+    }
+
+    /// <summary>Renders the CPU/FPS/GPU dashboard to a PNG (sample data, or --live from real sensors) for inspection.</summary>
+    private static int Dash(string[] args)
+    {
+        var outPath = GetOut(args) ?? Path.Combine(Path.GetTempPath(), "turzx-dash.png");
+        var live = args.Any(a => a.Equals("--live", StringComparison.OrdinalIgnoreCase));
+
+        SystemStats stats;
+        int? fps;
+        if (live)
+        {
+            using var lhm = new LhmSensorSource();
+            _ = lhm.ReadSystemStats(); // first read primes some LHM counters (e.g. loads)
+            Thread.Sleep(750);
+            stats = lhm.ReadSystemStats();
+            fps = RtssFpsReader.ReadCurrentFps();
+        }
+        else
+        {
+            stats = new SystemStats("AMD Ryzen 7 9800X3D", 80, 60, 324, 36,
+                "NVIDIA GeForce RTX 5090", 76, 45, 467, 22);
+            fps = 144;
+        }
+
+        var png = TurzxDashboardRenderer.Render(1920, 480, stats, fps);
+        File.WriteAllBytes(outPath, png);
+        Log.Information("dashboard PNG ({Mode}) written: {Path}", live ? "live" : "sample", outPath);
+        Log.Information("  CPU {Name}: load={Load} temp={Temp} pow={Pow} ram={Ram}GB",
+            stats.CpuName, F(stats.CpuLoadPercent, "%"), F(stats.CpuTempC, "°C"), F(stats.CpuPowerW, "W"), F(stats.RamUsedGb, ""));
+        Log.Information("  GPU {Name}: load={Load} temp={Temp} pow={Pow} vram={Vram}GB",
+            stats.GpuName, F(stats.GpuLoadPercent, "%"), F(stats.GpuTempC, "°C"), F(stats.GpuPowerW, "W"), F(stats.VramUsedGb, ""));
+        Log.Information("  FPS {Fps}", fps?.ToString() ?? "— (RTSS not running)");
+        return 0;
+
+        static string F(double? v, string u) => v is { } x ? $"{x:F0}{u}" : "—";
+    }
+
+    private static string? GetOut(string[] args)
+    {
+        var i = Array.FindIndex(args, a => a.Equals("--out", StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
     }
 
     /// <summary>Writes increasing raw payloads and reports throughput — reveals if the device drains fast (USB) or slow (real UART).</summary>
