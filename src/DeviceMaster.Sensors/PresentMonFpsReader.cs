@@ -73,12 +73,14 @@ public sealed class PresentMonFpsReader : IDisposable
             // crash without touching StarMaster's PresentMon. No --process_name: capture every
             // process and pick the foreground one in CurrentFps.
             var args = $"--stop_existing_session --session_name {_sessionName} --no_console_stats --v1_metrics --output_stdout";
+            // UseShellExecute=false keeps a real parent/child handle so Kill(entireProcessTree)
+            // reliably takes PresentMon down with cmd; CreateNoWindow=true still gives cmd a
+            // (windowless) console, which PresentMon needs to emit --output_stdout.
             var psi = new ProcessStartInfo("cmd.exe")
             {
                 Arguments = $"/c \"\"{exe}\" {args} > \"{_csvPath}\"\"",
-                UseShellExecute = true,
+                UseShellExecute = false,
                 CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
             };
             _proc = Process.Start(psi);
 
