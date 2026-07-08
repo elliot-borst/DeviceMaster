@@ -9,10 +9,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>DeviceMaster</AssemblyName>
     <!-- Whole-number release versioning: bump the major only (1, 2, 3, ...). The UI, the
-         update check, and build-installer.ps1 all derive the display version from this. -->
+         update check, and build-installer.ps1 all derive the display version from this.
+         DO NOT pin FileVersion/AssemblyVersion here: the update check reads AssemblyVersion
+         (GetName().Version.Major), so a pinned AssemblyVersion that lags <Version> makes the
+         installed build under-report its version and auto-update in an infinite loop. Leaving
+         them unset lets both derive from <Version>, keeping this the single source of truth. -->
     <Version>58.0.0</Version>
-    <FileVersion>57.0.0.0</FileVersion>
-    <AssemblyVersion>57.0.0.0</AssemblyVersion>
     <!-- Embedded version info -> Task Manager shows the name (FileDescription/Product)
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>
