@@ -133,11 +133,16 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   header `cc ef 69 00 | (rawLen+2) BE3 | 00 00 00 | count BE4`. A full frame is re-sent every ~30
   partials (and whenever >50 % of the frame changes) to heal any region the panel dropped.
 - Controlled from the **Turzx** side-menu page: Off / On, a brightness slider, and a landscape
-  orientation toggle. **On** shows a fixed dashboard — a large FPS reading (measured in-app via
-  an ETW DXGI present-monitor, PresentMon-style: no extra software, needs the app's admin rights;
-  falls back to RTSS shared memory if present; a dash when nothing is rendering) with CPU and GPU
-  telemetry rows (name, usage, temperature, memory GB, power W); chip names are coloured, all
-  other figures white.
+  orientation toggle. **On** shows a fixed dashboard — a large FPS reading centred, with CPU and
+  GPU telemetry rows (name, usage, temperature, memory GB, power W). The chip name is coloured
+  (CPU red, GPU green by default), all other figures white.
+- **FPS** is measured with **Intel PresentMon** (downloaded once to `%LocalAppData%\DeviceMaster`,
+  or reused from a StarMaster install) — it captures the full present pipeline over ETW, so it
+  reads every renderer including Vulkan and DX12 (a DXGI-only capture misses those). PresentMon is
+  launched via `cmd … > csv` (it needs a console) and the `msBetweenPresents` column is tailed;
+  FPS is the foreground process's rolling ~60-frame average. The app runs elevated, so no extra
+  elevation is needed; the ETW session name is scoped so it never collides with StarMaster's
+  PresentMon. Shows a dash when nothing is rendering.
 
 ## Sensors
 

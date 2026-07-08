@@ -42,7 +42,7 @@ public static class TurzxCommands
         Log.Information("       turzx frame [--color white|black|red|green|blue] [--com COM3]  (drive a solid full frame)");
         Log.Information("       turzx metric [--com COM3]                        (render a sample metric frame through the real renderer)");
         Log.Information("       turzx dash [--live] [--out path.png]             (render the CPU/FPS/GPU dashboard to a PNG for inspection)");
-        Log.Information("       turzx fps [--seconds 15]                         (ELEVATED: ETW present monitor — prints live FPS; run a game)");
+        Log.Information("       turzx fps [--seconds 15]                         (ELEVATED: PresentMon — prints live FPS; run a game)");
         Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
         return 1;
     }
@@ -213,11 +213,11 @@ public static class TurzxCommands
     /// <summary>Runs the ETW present monitor and prints live FPS — needs an elevated terminal.</summary>
     private static int FpsProbe(int seconds)
     {
-        Log.Information("Starting the DXGI present ETW monitor for {Sec}s (needs admin). Run a game/3D app to see FPS...", seconds);
+        Log.Information("Starting PresentMon for {Sec}s (needs admin; downloads PresentMon on first run). Run a game/3D app to see FPS...", seconds);
         using var reader = PresentMonFpsReader.StartOrNull(msg => Log.Information("  {Msg}", msg), "DeviceMaster-FPS-Probe");
         if (reader is null)
         {
-            Log.Warning("Could not start the FPS monitor — run this from an ELEVATED terminal (ETW real-time sessions need admin).");
+            Log.Warning("Could not start the FPS monitor (PresentMon unavailable) — run this from an ELEVATED terminal.");
             return 1;
         }
 

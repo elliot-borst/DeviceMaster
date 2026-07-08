@@ -9,8 +9,8 @@ namespace DeviceMaster.Control;
 /// <summary>
 /// Renders the fixed Turzx 8.8" dashboard: a big FPS reading centred on the ultrawide bar with a
 /// CPU telemetry row across the top and a GPU row across the bottom. Each row is five columns —
-/// name, usage %, temperature, memory (GB), power (W) — with the chip name coloured (CPU green,
-/// GPU red by default) and every other field white. Output is a landscape 1920×480 PNG; the
+/// name, usage %, temperature, memory (GB), power (W) — with the chip name coloured (CPU red,
+/// GPU green by default) and every other field white. Output is a landscape 1920×480 PNG; the
 /// panel-rotation onto the native portrait framebuffer is done by <c>TurzxScreen</c>, so this
 /// draws upright landscape only. Pure/deterministic — safe to unit-test.
 /// </summary>
@@ -26,8 +26,8 @@ public static class TurzxDashboardRenderer
         int width, int height, SystemStats stats, int? fps,
         (byte R, byte G, byte B)? cpuNameColor = null, (byte R, byte G, byte B)? gpuNameColor = null)
     {
-        var cpuColor = ToColor(cpuNameColor ?? ((byte)80, (byte)220, (byte)120));   // green
-        var gpuColor = ToColor(gpuNameColor ?? ((byte)240, (byte)90, (byte)90));    // red
+        var cpuColor = ToColor(cpuNameColor ?? ((byte)240, (byte)90, (byte)90));    // red  (AMD)
+        var gpuColor = ToColor(gpuNameColor ?? ((byte)80, (byte)220, (byte)120));   // green (NVIDIA)
         var white = Color.FromArgb(236, 238, 244);
 
         using var bitmap = new Bitmap(width, height);

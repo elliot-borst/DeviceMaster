@@ -1070,7 +1070,7 @@ public sealed class ControlLoop : IDisposable
     private long _turzxMetricsDue;
     private string? _turzxDashKey;       // last rendered dashboard content key (tick thread)
     private bool _turzxStatsLogged;      // log the gathered dashboard stats once, for verification
-    private Sensors.PresentMonFpsReader? _fps; // ETW present monitor for the dashboard's FPS
+    private Sensors.PresentMonFpsReader? _fps; // PresentMon-based FPS for the dashboard
     private bool _fpsStarted;
     private volatile string? _turzxStatusText;
 
@@ -1094,7 +1094,7 @@ public sealed class ControlLoop : IDisposable
                 var stats = _lhm.ReadSystemStats();
                 if (!_fpsStarted)
                 {
-                    _fpsStarted = true; // start the ETW present monitor once; null if it can't (e.g. not elevated)
+                    _fpsStarted = true; // start the PresentMon monitor once; null if it can't be launched/fetched
                     _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
                 }
 
