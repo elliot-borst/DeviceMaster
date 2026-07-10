@@ -1000,7 +1000,7 @@ public sealed class ControlLoop : IDisposable
             // weakest group). Re-push colors starting 3 s after the burst, with extra
             // confirmations spanning the deaf window.
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 3);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
         }
 
         // the pump panel reasserts its own liquid-temp screen ~30 s after frames stop —
@@ -1279,6 +1279,20 @@ public sealed class ControlLoop : IDisposable
     // their frame indefinitely — and their radios dislike LCD traffic — so they stay
     // change-only.
     private const int PumpLcdKeepaliveMs = 10_000;
+
+    // Fan-LCD refreshes are the main disruptor of SL V3 RGB: writing a frame to a fan's LCD node
+    // resets that fan's stored lighting effect (it drops to firmware rainbow) and leaves its radio
+    // deaf for several seconds, so the colour re-assert can't land right away. To keep the colour
+    // rock-solid we refresh the fan screens rarely (once a minute) — their metrics just lag a
+    // little — and heal each reset with a wider colour-confirmation burst (see Slv3LcdHealConfirms).
+    private const int FanLcdBatchMs = 60_000;
+
+    // Colour re-sends queued after a fan-LCD push, ~1.5 s apart. Enough to span past the radio's
+    // deaf window so the (weak-RF) group catches the colour the moment it comes back, instead of
+    // staying rainbow until the 20 s steady-state refresh. Bounded burst — NOT a continuous loop
+    // (that flooded the RF network in v17).
+    private const int Slv3LcdHealConfirms = 6;
+
     private long _pumpLcdKeepaliveDue;
     private long _lcdMetricsDue;
     private readonly Dictionary<string, string> _lcdShownKey = [];
@@ -1362,14 +1376,15 @@ public sealed class ControlLoop : IDisposable
 
         if (batchDue)
         {
-            _fanLcdBatchDue = Environment.TickCount64 + 15_000;
+            _fanLcdBatchDue = Environment.TickCount64 + FanLcdBatchMs;
         }
 
         if (pushedAny)
         {
-            // fan radios go briefly deaf around LCD traffic — follow every burst with confirms
+            // fan radios go briefly deaf around LCD traffic — follow every burst with a colour
+            // re-send burst wide enough to outlast the deaf window (see Slv3LcdHealConfirms)
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, 2);
+            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
         }
     }
 
