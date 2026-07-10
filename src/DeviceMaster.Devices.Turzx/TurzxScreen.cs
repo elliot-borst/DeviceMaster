@@ -170,6 +170,15 @@ public sealed class TurzxScreen : IDisposable
             RtsEnable = true,
             ReadTimeout = 1000,
             WriteTimeout = 5000,
+
+            // Headroom for the panel's per-frame status replies. The panel emits a status block
+            // after each command (the reference reads 1024 bytes every frame); a full-frame push
+            // takes ~2.3 s, during which several replies queue up. If the host RX ring fills, the
+            // USB-CDC IN endpoint back-pressures the gadget, its firmware blocks writing status,
+            // and it stops draining our frames — the panel freezes after a few frames. A large
+            // ReadBufferSize (unlike WriteBufferSize, this is safe on this CDC port) plus the
+            // reliable per-frame drain in DrainInput keeps that from ever accumulating.
+            ReadBufferSize = 1 << 16,
         };
         port.Open();
         return new TurzxScreen(port, comPort, serial);
@@ -397,16 +406,39 @@ public sealed class TurzxScreen : IDisposable
 
     private void Write(byte[] data) => _port.Write(data, 0, data.Length);
 
-    /// <summary>Drain the panel's acknowledgement bytes so they don't back up the read buffer.</summary>
+    /// <summary>
+    /// Consume the panel's per-frame status reply so it never backs up the read buffer. The
+    /// reference reads a fixed 1024 bytes after every frame; the panel emits a status block after
+    /// each command and, being a USB-CDC gadget, blocks writing that status once the host stops
+    /// reading — which stalls its command loop and freezes the display after a handful of frames.
+    /// So this must actually READ the reply, not just poll: it waits briefly for the reply to
+    /// begin, then drains until a short quiet gap, bounded by an overall deadline. (The earlier
+    /// best-effort version exited the moment <c>BytesToRead</c> was 0, i.e. before the reply had
+    /// arrived over USB, so under continuous ~1 Hz streaming it drained almost nothing.)
+    /// </summary>
     private void DrainInput()
     {
         try
         {
-            var deadline = Environment.TickCount64 + 200;
-            var scratch = new byte[1024];
-            while (Environment.TickCount64 < deadline && _port.BytesToRead > 0)
+            var scratch = new byte[4096];
+            var overallDeadline = Environment.TickCount64 + 600;
+            var quietDeadline = Environment.TickCount64 + 150; // wait up to 150 ms for the reply to start
+            while (Environment.TickCount64 < overallDeadline)
             {
-                _ = _port.Read(scratch, 0, Math.Min(scratch.Length, _port.BytesToRead));
+                var available = _port.BytesToRead;
+                if (available > 0)
+                {
+                    _ = _port.Read(scratch, 0, Math.Min(scratch.Length, available));
+                    quietDeadline = Environment.TickCount64 + 40; // keep draining until 40 ms of silence
+                }
+                else if (Environment.TickCount64 >= quietDeadline)
+                {
+                    break;
+                }
+                else
+                {
+                    Thread.Sleep(5);
+                }
             }
         }
         catch
