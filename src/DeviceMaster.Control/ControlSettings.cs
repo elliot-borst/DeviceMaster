@@ -45,6 +45,10 @@ public enum LcdMetric
     VramLoad,
     FanRpm,
     PumpDuty,
+    GpuPower,
+    CpuPower,
+    GpuClock,
+    VramTemp,
 }
 
 /// <summary>Per-screen display configuration (metric, rotation, font color).</summary>

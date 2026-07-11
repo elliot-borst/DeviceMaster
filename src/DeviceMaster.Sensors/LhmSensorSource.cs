@@ -173,6 +173,8 @@ public sealed class LhmSensorSource : ISensorSource
         SensorType.Control => SensorKind.DutyCycle,
         SensorType.Load => SensorKind.Load,
         SensorType.Flow => SensorKind.FlowRate,
+        SensorType.Power => SensorKind.Power,
+        SensorType.Clock => SensorKind.Clock,
         _ => null,
     };
 
@@ -182,6 +184,8 @@ public sealed class LhmSensorSource : ISensorSource
         SensorType.Fan => "RPM",
         SensorType.Control or SensorType.Load => "%",
         SensorType.Flow => "L/h",
+        SensorType.Power => "W",
+        SensorType.Clock => "MHz",
         _ => "",
     };
 

@@ -1483,6 +1483,20 @@ public sealed class ControlLoop : IDisposable
             case LcdMetric.VramLoad:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "VRAM", "%",
                     preferNames: ["Memory"], excludeName: "controller");
+            case LcdMetric.GpuPower:
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Power, "GPU", "W",
+                    preferNames: ["GPU Package", "Package", "Power"]);
+            case LcdMetric.CpuPower:
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Power, "CPU", "W",
+                    preferNames: ["Package"]);
+            case LcdMetric.GpuClock:
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Clock, "GPU", "MHz",
+                    preferNames: ["GPU Core", "Core"]);
+            case LcdMetric.VramTemp:
+                // GPU memory-junction (GDDR7) temperature — runs hotter than the core, so it
+                // greens/ambers/reds on higher thresholds when coloured by value
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "VRAM", "°C",
+                    preferNames: ["Memory Junction", "Memory", "Junction"], warmC: 86, hotC: 96);
             default:
                 return null;
         }
@@ -1541,7 +1555,7 @@ public sealed class ControlLoop : IDisposable
     private (string, string, string, (byte, byte, byte))? LhmLcdMetric(
         ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings,
         string hardware, SensorKind kind, string label, string unit,
-        string[]? preferNames = null, string? excludeName = null)
+        string[]? preferNames = null, string? excludeName = null, double warmC = 60, double hotC = 80)
     {
         try
         {
@@ -1572,7 +1586,7 @@ public sealed class ControlLoop : IDisposable
             }
 
             var accent = kind == SensorKind.Temperature
-                ? TemperatureAccent(v, warm: 60, hot: 80)
+                ? TemperatureAccent(v, warm: warmC, hot: hotC)
                 : ((byte)122, (byte)167, (byte)255);
             return (label, $"{v:F0}", unit, accent);
         }

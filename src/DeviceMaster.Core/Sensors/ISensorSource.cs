@@ -1,6 +1,6 @@
 namespace DeviceMaster.Core.Sensors;
 
-public enum SensorKind { Temperature, FanRpm, PumpRpm, DutyCycle, Load, FlowRate }
+public enum SensorKind { Temperature, FanRpm, PumpRpm, DutyCycle, Load, FlowRate, Power, Clock }
 
 public sealed record SensorReading(
     string Id, string Name, SensorKind Kind, double Value, string Unit, DateTimeOffset Timestamp);
