@@ -1511,6 +1511,17 @@ public sealed class ControlLoop : IDisposable
         return [];
     }
 
+    /// <summary>
+    /// With a discrete NVIDIA card and an integrated GPU both present, LHM lists both under "gpu";
+    /// keep only the discrete card's sensors so an idle iGPU's load/temp can't win the .Max().
+    /// Mirrors LhmSensorSource.ReadSystemStats, which prefers the NVIDIA discrete GPU.
+    /// </summary>
+    private static List<Core.Sensors.SensorReading> IsolateDiscreteGpu(List<Core.Sensors.SensorReading> gpuCandidates)
+    {
+        var discrete = gpuCandidates.Where(r => r.Id.Contains("nvidia", StringComparison.OrdinalIgnoreCase)).ToList();
+        return discrete.Count > 0 ? discrete : gpuCandidates;
+    }
+
     /// <summary>Canonical temperature for a hardware family, using the same selection as the fan LCDs.</summary>
     private static double? CanonicalTemp(
         IReadOnlyList<Core.Sensors.SensorReading> readings, string hardware, string[] preferNames)
@@ -1518,6 +1529,11 @@ public sealed class ControlLoop : IDisposable
         var candidates = readings
             .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
             .ToList();
+        if (hardware == "gpu")
+        {
+            candidates = IsolateDiscreteGpu(candidates);
+        }
+
         var preferred = CanonicalMatch(candidates, preferNames);
         return (preferred.Count > 0 ? preferred : candidates).Select(r => (double?)r.Value).Max();
     }
@@ -1535,6 +1551,12 @@ public sealed class ControlLoop : IDisposable
                 .Where(r => r.Kind == kind && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
                 .Where(r => excludeName is null || !r.Name.Contains(excludeName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
+            if (hardware == "gpu")
+            {
+                // read the discrete card only — an integrated GPU (e.g. the Ryzen iGPU) is also
+                // listed under "gpu" and its idle load/temp would otherwise win the .Max()
+                candidates = IsolateDiscreteGpu(candidates);
+            }
 
             // prefer the canonical sensor ("CPU Total"/"CPU Package", "GPU Core") in priority
             // order over the max of every sensor the hardware happens to expose — otherwise a
