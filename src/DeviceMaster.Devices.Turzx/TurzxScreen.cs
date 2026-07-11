@@ -208,7 +208,7 @@ public sealed class TurzxScreen : IDisposable
         byte[]? spans = null;
         if (!full)
         {
-            spans = BuildPartialSpans(_prevNative!, native);
+            spans = TurzxProtocol.BuildPartialSpans(_prevNative!, native);
             if (spans is null)
             {
                 full = true; // more than half the frame changed — a full frame is cheaper
@@ -264,58 +264,6 @@ public sealed class TurzxScreen : IDisposable
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
         DrainInput();
         _updateCount++;
-    }
-
-    /// <summary>
-    /// Row-major native-frame diff (480×1920 BGRA). Returns the changed pixel spans encoded as
-    /// [3-byte BE address][2-byte BE width][BGRA run] per changed native row, or null when more
-    /// than half the frame changed (caller should send a full frame instead). Empty means nothing
-    /// changed.
-    /// </summary>
-    private static byte[]? BuildPartialSpans(byte[] prev, byte[] cur)
-    {
-        const int w = TurzxProtocol.ScreenWidth;   // 480
-        const int h = TurzxProtocol.ScreenHeight;  // 1920
-        const int bpp = 4;
-        const int stride = w * bpp;                // 1920 bytes per native row
-        var maxChanged = cur.Length / 2;
-        var changed = 0;
-        var raw = new List<byte>(8192);
-
-        for (var row = 0; row < h; row++)
-        {
-            var ro = row * stride;
-            var curRow = cur.AsSpan(ro, stride);
-            var prevRow = prev.AsSpan(ro, stride);
-            if (curRow.SequenceEqual(prevRow))
-            {
-                continue;
-            }
-
-            var first = 0;
-            while (first < stride && curRow[first] == prevRow[first]) first++;
-            var last = stride - 1;
-            while (last > first && curRow[last] == prevRow[last]) last--;
-
-            var startPx = first / bpp;
-            var widthPx = (last / bpp) - startPx + 1;
-            var addr = (row * w) + startPx;
-
-            raw.Add((byte)(addr >> 16));
-            raw.Add((byte)(addr >> 8));
-            raw.Add((byte)addr);
-            raw.Add((byte)(widthPx >> 8));
-            raw.Add((byte)widthPx);
-            raw.AddRange(cur.AsSpan(ro + (startPx * bpp), widthPx * bpp));
-
-            changed += widthPx * bpp;
-            if (changed > maxChanged)
-            {
-                return null;
-            }
-        }
-
-        return raw.Count == 0 ? [] : raw.ToArray();
     }
 
     /// <summary>

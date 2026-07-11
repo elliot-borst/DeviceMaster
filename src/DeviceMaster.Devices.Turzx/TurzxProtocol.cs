@@ -108,6 +108,101 @@ public static class TurzxProtocol
         return result;
     }
 
+    /// <summary>Bridging an unchanged gap this small (px) is cheaper than a new 5-byte span header.</summary>
+    public const int GapMergePx = 8;
+
+    /// <summary>
+    /// Diffs two native <see cref="ScreenWidth"/>×<see cref="ScreenHeight"/> BGRA frames and returns
+    /// the changed pixel runs as concatenated <c>[3-byte BE address][2-byte BE width][BGRA run]</c>
+    /// tuples for an UPDATE_BITMAP push. Emits MULTIPLE tight runs per row so an unchanged gap
+    /// inside a row is not retransmitted — critical here because the landscape dashboard is rotated
+    /// onto the portrait panel, so a single native row spans the CPU row, the FPS number and the GPU
+    /// row; when only the ends change, a first-to-last span would resend the whole empty middle.
+    /// Runs separated by ≤ <see cref="GapMergePx"/> unchanged pixels are merged. Returns null when
+    /// more than half the frame changed (caller sends a full frame), or empty when nothing changed.
+    /// </summary>
+    public static byte[]? BuildPartialSpans(ReadOnlySpan<byte> prev, ReadOnlySpan<byte> cur)
+    {
+        const int bpp = 4;
+        const int stride = ScreenWidth * bpp;
+        if (cur.Length != stride * ScreenHeight || prev.Length != cur.Length)
+        {
+            return null; // unexpected size — heal with a full frame
+        }
+
+        var maxChanged = cur.Length / 2;
+        var changed = 0;
+        var raw = new List<byte>(8192);
+
+        for (var row = 0; row < ScreenHeight; row++)
+        {
+            var ro = row * stride;
+            var curRow = cur.Slice(ro, stride);
+            var prevRow = prev.Slice(ro, stride);
+            if (curRow.SequenceEqual(prevRow))
+            {
+                continue;
+            }
+
+            var px = 0;
+            while (px < ScreenWidth)
+            {
+                while (px < ScreenWidth && PixelEqual(curRow, prevRow, px))
+                {
+                    px++;
+                }
+
+                if (px >= ScreenWidth)
+                {
+                    break;
+                }
+
+                // extend the run over changed pixels, bridging unchanged gaps ≤ GapMergePx
+                var runStart = px;
+                var lastChanged = px;
+                var gap = 0;
+                px++;
+                while (px < ScreenWidth)
+                {
+                    if (!PixelEqual(curRow, prevRow, px))
+                    {
+                        lastChanged = px;
+                        gap = 0;
+                    }
+                    else if (++gap > GapMergePx)
+                    {
+                        break;
+                    }
+
+                    px++;
+                }
+
+                var widthPx = lastChanged - runStart + 1;
+                var addr = (row * ScreenWidth) + runStart;
+                raw.Add((byte)(addr >> 16));
+                raw.Add((byte)(addr >> 8));
+                raw.Add((byte)addr);
+                raw.Add((byte)(widthPx >> 8));
+                raw.Add((byte)widthPx);
+                raw.AddRange(cur.Slice(ro + (runStart * bpp), widthPx * bpp));
+
+                changed += widthPx * bpp;
+                if (changed > maxChanged)
+                {
+                    return null;
+                }
+            }
+        }
+
+        return raw.Count == 0 ? [] : raw.ToArray();
+    }
+
+    private static bool PixelEqual(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, int px)
+    {
+        var o = px * 4;
+        return a[o] == b[o] && a[o + 1] == b[o + 1] && a[o + 2] == b[o + 2] && a[o + 3] == b[o + 3];
+    }
+
     /// <summary>
     /// Interleaves a single NULL byte after every 249 bytes of BGRA data — the reference's
     /// <c>b'\x00'.join(chunked(bgra_data, 249))</c> framing for the full-frame payload.

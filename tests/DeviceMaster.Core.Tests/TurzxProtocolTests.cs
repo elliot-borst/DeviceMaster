@@ -133,4 +133,89 @@ public class TurzxProtocolTests
         Assert.Equal(0xef, pixels[^2]);
         Assert.Equal(0x69, pixels[^1]);
     }
+
+    // ---- partial-update diff ----
+
+    private static byte[] NativeFrame() => new byte[TurzxProtocol.ScreenWidth * TurzxProtocol.ScreenHeight * 4];
+
+    private static void SetPixel(byte[] frame, int col, int row, byte value)
+    {
+        var o = ((row * TurzxProtocol.ScreenWidth) + col) * 4;
+        frame[o] = value;
+        frame[o + 1] = value;
+        frame[o + 2] = value;
+        frame[o + 3] = value;
+    }
+
+    private static int SpanAddr(byte[] spans, int offset) =>
+        (spans[offset] << 16) | (spans[offset + 1] << 8) | spans[offset + 2];
+
+    private static int SpanWidth(byte[] spans, int offset) =>
+        (spans[offset + 3] << 8) | spans[offset + 4];
+
+    [Fact]
+    public void BuildPartialSpans_IdenticalFramesAreEmpty()
+    {
+        var frame = NativeFrame();
+        Assert.Empty(TurzxProtocol.BuildPartialSpans(frame, (byte[])frame.Clone())!);
+    }
+
+    [Fact]
+    public void BuildPartialSpans_WrongSizeReturnsNull()
+    {
+        Assert.Null(TurzxProtocol.BuildPartialSpans(new byte[10], new byte[10]));
+    }
+
+    [Fact]
+    public void BuildPartialSpans_SingleChangedPixelIsOneTightSpan()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 3, row: 0, value: 0xFF);
+
+        var spans = TurzxProtocol.BuildPartialSpans(prev, cur)!;
+
+        Assert.Equal(3 + 2 + 4, spans.Length); // addr + width + one BGRA pixel
+        Assert.Equal(3, SpanAddr(spans, 0));
+        Assert.Equal(1, SpanWidth(spans, 0));
+    }
+
+    [Fact]
+    public void BuildPartialSpans_FarApartChangesSplitIntoTwoSpansNotOneWideSpan()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 0, row: 0, value: 0xFF);
+        SetPixel(cur, col: 200, row: 0, value: 0xFF); // gap ≫ GapMergePx
+
+        var spans = TurzxProtocol.BuildPartialSpans(prev, cur)!;
+
+        Assert.Equal(2 * (3 + 2 + 4), spans.Length); // two 1-px spans, NOT one 201-px span (5 + 201*4)
+        Assert.Equal(0, SpanAddr(spans, 0));
+        Assert.Equal(200, SpanAddr(spans, 9)); // second span starts after the first (9 bytes)
+    }
+
+    [Fact]
+    public void BuildPartialSpans_NearbyChangesMergeIntoOneSpan()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 0, row: 0, value: 0xFF);
+        SetPixel(cur, col: 5, row: 0, value: 0xFF); // 4-px gap ≤ GapMergePx ⇒ bridged
+
+        var spans = TurzxProtocol.BuildPartialSpans(prev, cur)!;
+
+        Assert.Equal(6, SpanWidth(spans, 0));      // one span covering col 0..5
+        Assert.Equal(3 + 2 + (6 * 4), spans.Length); // exactly one span, no second header
+    }
+
+    [Fact]
+    public void BuildPartialSpans_MoreThanHalfChangedReturnsNull()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        Array.Fill(cur, (byte)0xFF); // whole frame differs ⇒ full frame is cheaper
+
+        Assert.Null(TurzxProtocol.BuildPartialSpans(prev, cur));
+    }
 }
