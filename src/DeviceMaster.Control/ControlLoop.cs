@@ -1247,6 +1247,15 @@ public sealed class ControlLoop : IDisposable
                         {
                             _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
+
+                            // A full-frame heal can reset the panel's backlight to default, and the
+                            // guard above would then never re-send brightness (it thinks the level
+                            // is already applied) — so re-assert it right after every frame push,
+                            // which is why a static level "stuck" but never dimmed under streaming.
+                            if (wantBrightness != 100)
+                            {
+                                _turzx.SetBrightness(wantBrightness);
+                            }
                         }
 
                         break;

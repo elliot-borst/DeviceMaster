@@ -32,6 +32,7 @@ public static class TurzxCommands
             "baud" => BaudScan(GetCom(args)),
             "hello" => HelloLoop(GetCom(args)),
             "listen" => Listen(GetCom(args), GetSeconds(args, 8)),
+            "brightness" => BrightnessTest(GetCom(args)),
             _ => Usage(),
         };
     }
@@ -44,7 +45,74 @@ public static class TurzxCommands
         Log.Information("       turzx dash [--live] [--out path.png]             (render the CPU/FPS/GPU dashboard to a PNG for inspection)");
         Log.Information("       turzx fps [--seconds 15]                         (ELEVATED: PresentMon — prints live FPS; run a game)");
         Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
+        Log.Information("       turzx brightness [--com COM3]                    (sweep the backlight 100→0→100 so you can SEE if brightness works)");
         return 1;
+    }
+
+    /// <summary>
+    /// Sweeps the backlight through several levels with a white frame up, so you can watch whether
+    /// the panel dims at all — then sets a dim level and pushes a fresh frame to see if the frame
+    /// stream resets the backlight (the suspected cause of "brightness does nothing" under the
+    /// live dashboard). Run with the desktop app EXITED so the port is free.
+    /// </summary>
+    private static int BrightnessTest(string? comOverride)
+    {
+        var com = comOverride ?? TurzxScreen.Find().FirstOrDefault().ComPort;
+        if (com is null)
+        {
+            Log.Error("No Turzx screen found in the serial scan (pass --com COMx to force).");
+            return 1;
+        }
+
+        TurzxScreen? screen = null;
+        var deadline = Environment.TickCount64 + 25_000;
+        while (Environment.TickCount64 < deadline)
+        {
+            try { screen = TurzxScreen.Open(com); break; }
+            catch (UnauthorizedAccessException) { Thread.Sleep(500); } // app holds the port — exit it, or wait for a backoff window
+            catch (Exception ex) { Log.Error("open {Com} failed: {Msg}", com, ex.Message); return 1; }
+        }
+
+        if (screen is null)
+        {
+            Log.Warning("could not acquire {Com} within 25 s (exit the desktop app first)", com);
+            return 1;
+        }
+
+        try
+        {
+            Log.Information("Pushing a white frame, then sweeping brightness. WATCH THE PANEL and note each step (rom={Rom}).",
+                screen.RomVersion?.ToString() ?? "?");
+            screen.SetBrightness(100);
+            screen.SendJpegFrame(SolidJpeg(1920, 480, Color.White));
+
+            foreach (var level in new[] { 100, 60, 30, 10, 0, 100 })
+            {
+                screen.SetBrightness(level);
+                Log.Information("brightness = {Level}%  — does the panel match?", level);
+                Thread.Sleep(3500);
+            }
+
+            Log.Information("Now testing whether a FRAME PUSH resets the backlight: set 15%, wait, then push a fresh frame...");
+            screen.SetBrightness(15);
+            Thread.Sleep(1500);
+            screen.SendJpegFrame(SolidJpeg(1920, 480, Color.White));
+            Log.Information("Pushed a frame while at 15%. Did it STAY dim, or POP back to full? (pop ⇒ the frame stream resets brightness)");
+            Thread.Sleep(4000);
+
+            screen.SetBrightness(100);
+            Log.Information("Restored to 100%. Report: (1) which levels visibly dimmed, (2) whether the frame push reset it.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("brightness test failed: {Type}: {Msg}", ex.GetType().Name, ex.Message);
+        }
+        finally
+        {
+            screen.Dispose();
+        }
+
+        return 0;
     }
 
     /// <summary>Renders a sample metric (CPU 63 °C) via the control loop's exact renderer and pushes it — verifies text + orientation.</summary>
