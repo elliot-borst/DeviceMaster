@@ -371,12 +371,8 @@ public sealed class ControlLoop : IDisposable
         {
             _lhm ??= new LhmSensorSource();
             var readings = _lhm.Read();
-            _dashCpuTemp = readings
-                .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains("cpu", StringComparison.OrdinalIgnoreCase))
-                .Select(r => (double?)r.Value).Max();
-            _dashGpuTemp = readings
-                .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains("gpu", StringComparison.OrdinalIgnoreCase))
-                .Select(r => (double?)r.Value).Max();
+            _dashCpuTemp = CanonicalTemp(readings, "cpu", CpuTempPreference);
+            _dashGpuTemp = CanonicalTemp(readings, "gpu", GpuCorePreference);
         }
         catch
         {
@@ -1464,27 +1460,61 @@ public sealed class ControlLoop : IDisposable
                     : null;
 
             case LcdMetric.CpuTemp:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C");
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C", preferNames: CpuTempPreference);
             case LcdMetric.GpuTemp:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C");
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C", preferNames: GpuCorePreference);
             case LcdMetric.CpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%", preferName: "total");
+                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%", preferNames: ["Total"]);
             case LcdMetric.GpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%", preferName: "core");
+                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%", preferNames: GpuCorePreference);
             case LcdMetric.RamLoad:
                 return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%");
             case LcdMetric.VramLoad:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "VRAM", "%",
-                    preferName: "memory", excludeName: "controller");
+                    preferNames: ["Memory"], excludeName: "controller");
             default:
                 return null;
         }
     }
 
+    // Canonical sensor preference in priority order, mirroring LhmSensorSource.ReadSystemStats so
+    // the fan LCDs, the app dashboard tiles and the Turzx dashboard all agree on which GPU/CPU
+    // sensor they display — GPU Core (not the hotter memory-junction/hot-spot sensor) and CPU
+    // package/Tctl (not the hottest single core).
+    private static readonly string[] GpuCorePreference = ["GPU Core", "Core"];
+    private static readonly string[] CpuTempPreference = ["Tctl", "Package", "Core ("];
+
+    /// <summary>Sensors matching the first preference substring that hits any candidate, else empty.</summary>
+    private static List<Core.Sensors.SensorReading> CanonicalMatch(
+        List<Core.Sensors.SensorReading> candidates, string[]? preferNames)
+    {
+        foreach (var name in preferNames ?? [])
+        {
+            var matched = candidates.Where(r => r.Name.Contains(name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matched.Count > 0)
+            {
+                return matched;
+            }
+        }
+
+        return [];
+    }
+
+    /// <summary>Canonical temperature for a hardware family, using the same selection as the fan LCDs.</summary>
+    private static double? CanonicalTemp(
+        IReadOnlyList<Core.Sensors.SensorReading> readings, string hardware, string[] preferNames)
+    {
+        var candidates = readings
+            .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var preferred = CanonicalMatch(candidates, preferNames);
+        return (preferred.Count > 0 ? preferred : candidates).Select(r => (double?)r.Value).Max();
+    }
+
     private (string, string, string, (byte, byte, byte))? LhmLcdMetric(
         ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings,
         string hardware, SensorKind kind, string label, string unit,
-        string? preferName = null, string? excludeName = null)
+        string[]? preferNames = null, string? excludeName = null)
     {
         try
         {
@@ -1495,11 +1525,11 @@ public sealed class ControlLoop : IDisposable
                 .Where(r => excludeName is null || !r.Name.Contains(excludeName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            // prefer the canonical sensor ("CPU Total", "GPU Core", "GPU Memory") over the
-            // max of every load sensor the hardware happens to expose
-            var preferred = preferName is null
-                ? []
-                : candidates.Where(r => r.Name.Contains(preferName, StringComparison.OrdinalIgnoreCase)).ToList();
+            // prefer the canonical sensor ("CPU Total"/"CPU Package", "GPU Core") in priority
+            // order over the max of every sensor the hardware happens to expose — otherwise a
+            // hotter secondary sensor (e.g. GPU memory-junction) wins and the fan LCD disagrees
+            // with the Turzx dashboard, which selects these same canonical sensors.
+            var preferred = CanonicalMatch(candidates, preferNames);
             var value = (preferred.Count > 0 ? preferred : candidates)
                 .Select(r => (double?)r.Value)
                 .Max();
