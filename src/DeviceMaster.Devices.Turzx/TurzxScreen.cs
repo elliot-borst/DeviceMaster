@@ -61,6 +61,7 @@ public sealed class TurzxScreen : IDisposable
     private byte[]? _prevNative;   // last native frame pushed, for partial-update diffing
     private int _updateCount;      // UPDATE_BITMAP sequence counter (starts at 0, like the reference)
     private int _framesSinceFull;
+    private int? _lastBrightnessPercent; // last level set, re-asserted after a full frame
 
     private TurzxScreen(SerialPort port, string comPort, string? serial)
     {
@@ -188,6 +189,7 @@ public sealed class TurzxScreen : IDisposable
     public void SetBrightness(int percent)
     {
         EnsureInitialized();
+        _lastBrightnessPercent = Math.Clamp(percent, 0, 100);
         Write(TurzxProtocol.BuildBrightness(percent));
     }
 
@@ -242,6 +244,16 @@ public sealed class TurzxScreen : IDisposable
         WriteFramePayload(TurzxProtocol.BuildSendPayload(body));
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
         DrainInput();
+
+        // A full DISPLAY_BITMAP re-inits the panel and can reset the backlight to its default, and
+        // the control loop only re-sends brightness on a change — so re-assert a dimmed level here
+        // (draining its reply, so nothing backs up) to survive the periodic full-frame heal. 100%
+        // is the panel default, so skip it: that keeps the common case free of extra serial traffic.
+        if (_lastBrightnessPercent is { } b && b != 100)
+        {
+            Write(TurzxProtocol.BuildBrightness(b));
+            DrainInput();
+        }
     }
 
     /// <summary>Partial push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(changed spans) → QUERY_STATUS.</summary>

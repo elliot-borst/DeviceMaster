@@ -806,11 +806,13 @@ public sealed class MainWindow : Window
 
         RebuildSwatches();
         body.Children.Add(_swatchPanel);
-        body.Children.Add(BrightnessRow(_controlSettings.RgbBrightness, v =>
+        var rgbBrightness = BrightnessRow(_controlSettings.RgbBrightness, v =>
         {
             _controlSettings.RgbBrightness = v;
             OnControlSettingChanged(); // saves + re-applies the (now dimmed) color to every LED
-        }));
+        });
+        rgbBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the swatches above
+        body.Children.Add(rgbBrightness);
         body.Children.Add(_rgbStatus);
         UpdateRgbStatusText();
         return card;
@@ -1298,12 +1300,14 @@ public sealed class MainWindow : Window
         var card = Theme.CardShell("▣", "Screen Control", "every screen on or off · what each shows is set per group below", out var body, out _);
         RebuildLcdButtons();
         body.Children.Add(_lcdButtons);
-        body.Children.Add(BrightnessRow(_controlSettings.LcdBrightness, v =>
+        var lcdBrightness = BrightnessRow(_controlSettings.LcdBrightness, v =>
         {
             _controlSettings.LcdBrightness = v; // pump + fan LCD backlight (Turzx has its own on its page)
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
-        }));
+        });
+        lcdBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the On/Off buttons above
+        body.Children.Add(lcdBrightness);
         UpdateLcdStatusText();
         return card;
     }
