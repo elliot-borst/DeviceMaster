@@ -820,7 +820,9 @@ public sealed class ControlLoop : IDisposable
                 if (_slv3ConfirmSendsLeft > 0)
                 {
                     _slv3ConfirmSendsLeft--;
-                    _slv3RgbRefreshDue = Environment.TickCount64 + 1_500;
+                    // one re-send per tick: as short as the 1 Hz loop allows, so the colour
+                    // returns the instant the radio wakes rather than up to a tick later
+                    _slv3RgbRefreshDue = Environment.TickCount64 + 900;
                 }
                 else
                 {
@@ -997,9 +999,9 @@ public sealed class ControlLoop : IDisposable
 
             // the LCD node lives inside the fan — LCD commands reset the fan's stored RGB
             // effect AND leave its radio deaf for several seconds (observed live twice on the
-            // weakest group). Re-push colors starting 3 s after the burst, with extra
-            // confirmations spanning the deaf window.
-            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+            // weakest group). Re-push colours starting on the very next tick, one per tick, so
+            // the colour returns the instant the radio wakes (see Slv3LcdHealConfirms).
+            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
             _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
         }
 
@@ -1287,11 +1289,13 @@ public sealed class ControlLoop : IDisposable
     // little — and heal each reset with a wider colour-confirmation burst (see Slv3LcdHealConfirms).
     private const int FanLcdBatchMs = 60_000;
 
-    // Colour re-sends queued after a fan-LCD push, ~1.5 s apart. Enough to span past the radio's
-    // deaf window so the (weak-RF) group catches the colour the moment it comes back, instead of
-    // staying rainbow until the 20 s steady-state refresh. Bounded burst — NOT a continuous loop
-    // (that flooded the RF network in v17).
-    private const int Slv3LcdHealConfirms = 6;
+    // Colour re-sends queued after a fan-LCD push, one PER TICK (~1 s). The push drops the fan to
+    // rainbow immediately, so the visible flash lasts until the first re-colour lands AFTER the
+    // radio wakes — a tick-paced burst that starts on the very next tick lands a colour within ~1 s
+    // of recovery (v64 waited 3 s before the first attempt, so the flash was ~3 s every minute).
+    // The burst spans ~8 s to cover the whole deaf window plus a couple of reinforcing sends for
+    // the weak-RF group. Bounded burst — NOT a continuous loop (that flooded the RF network in v17).
+    private const int Slv3LcdHealConfirms = 8;
 
     private long _pumpLcdKeepaliveDue;
     private long _lcdMetricsDue;
@@ -1382,8 +1386,9 @@ public sealed class ControlLoop : IDisposable
         if (pushedAny)
         {
             // fan radios go briefly deaf around LCD traffic — follow every burst with a colour
-            // re-send burst wide enough to outlast the deaf window (see Slv3LcdHealConfirms)
-            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 3_000);
+            // re-send burst that starts on the next tick and repeats per tick, wide enough to
+            // outlast the deaf window (see Slv3LcdHealConfirms)
+            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
             _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
         }
     }
