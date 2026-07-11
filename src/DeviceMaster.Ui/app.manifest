@@ -11,4 +11,15 @@
       </requestedPrivileges>
     </security>
   </trustInfo>
+
+  <!-- Per-Monitor V2 DPI awareness: WPF renders natively at each monitor's true DPI instead
+       of being bitmap-stretched by Windows (which made text look blurry AND blocky on scaled
+       displays). PerMonitorV2 is honoured on Win10 1703+; the dpiAware=true fallback keeps
+       older systems system-DPI-aware rather than fully unaware. -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
 </assembly>

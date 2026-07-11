@@ -23,7 +23,7 @@ public sealed class MainWindow : Window
     public static string AppVersion { get; } =
         (Assembly.GetExecutingAssembly().GetName().Version?.Major ?? 0).ToString();
 
-    public const string VersionDate = "2026-07-10";
+    public const string VersionDate = "2026-07-11";
 
     private readonly ControlSettings _controlSettings = ControlSettings.Load();
     private ControlLoop? _loop;
@@ -107,6 +107,9 @@ public sealed class MainWindow : Window
         MinHeight = 720;
         WindowState = WindowState.Maximized; // full screen by default (owner preference)
         Background = Theme.Bg;
+        // Snap element positions and text baselines to whole device pixels so borders and glyph
+        // edges don't blur across half-pixel boundaries (inherits to every child control).
+        UseLayoutRounding = true;
         try
         {
             Resources.Add(typeof(System.Windows.Controls.Primitives.ScrollBar), Theme.DarkScrollBarStyle());
