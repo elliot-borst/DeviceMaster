@@ -717,6 +717,34 @@ public sealed class MainWindow : Window
         return block;
     }
 
+    /// <summary>A 0–100 brightness slider with a live "%" label, in an inset row.</summary>
+    private static Border BrightnessRow(int initial, Action<int> onChange)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(Theme.SmallLabel("Brightness"));
+        var value = Math.Clamp(initial, 0, 100);
+        var slider = new DmSlider(0, 100, value, 300);
+        var label = new TextBlock
+        {
+            Text = $"{value}%",
+            FontSize = 13,
+            Foreground = Theme.Accent2,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            MinWidth = 40,
+        };
+        slider.ValueChanged += _ =>
+        {
+            var v = (int)Math.Round(slider.Value);
+            label.Text = $"{v}%";
+            onChange(v);
+        };
+        panel.Children.Add(slider);
+        panel.Children.Add(label);
+        return Theme.InsetRow(panel);
+    }
+
     private void TrySaveSettings()
     {
         try
@@ -778,6 +806,11 @@ public sealed class MainWindow : Window
 
         RebuildSwatches();
         body.Children.Add(_swatchPanel);
+        body.Children.Add(BrightnessRow(_controlSettings.RgbBrightness, v =>
+        {
+            _controlSettings.RgbBrightness = v;
+            OnControlSettingChanged(); // saves + re-applies the (now dimmed) color to every LED
+        }));
         body.Children.Add(_rgbStatus);
         UpdateRgbStatusText();
         return card;
@@ -1261,6 +1294,12 @@ public sealed class MainWindow : Window
         var card = Theme.CardShell("▣", "Screen Control", "every screen on or off · what each shows is set per group below", out var body, out _);
         RebuildLcdButtons();
         body.Children.Add(_lcdButtons);
+        body.Children.Add(BrightnessRow(_controlSettings.LcdBrightness, v =>
+        {
+            _controlSettings.LcdBrightness = v; // pump + fan LCD backlight (Turzx has its own on its page)
+            TrySaveSettings();
+            _loop?.Apply(_controlSettings);
+        }));
         UpdateLcdStatusText();
         return card;
     }

@@ -159,7 +159,7 @@ public sealed class ControlLoop : IDisposable
         _settings = settings;
         _lastWrittenCorsairDuty = -1; // force a rewrite on the next tick
 
-        var rgbSignature = $"{settings.RgbEnabled}|{settings.RgbOff}|{settings.RgbR},{settings.RgbG},{settings.RgbB}";
+        var rgbSignature = $"{settings.RgbEnabled}|{settings.RgbOff}|{settings.RgbR},{settings.RgbG},{settings.RgbB}|{settings.RgbBrightness}";
         if (rgbSignature != _lastRgbSignature)
         {
             _lastRgbSignature = rgbSignature;
@@ -603,6 +603,7 @@ public sealed class ControlLoop : IDisposable
 
         _lcdNodes.Clear();
         _appliedLcd.Clear();
+        _appliedLcdBrightness.Clear();
 
         _headers?.Dispose(); // restores BIOS/driver-automatic control on every touched header
         _headers = null;
@@ -646,12 +647,13 @@ public sealed class ControlLoop : IDisposable
     {
         // "Off" is an active color: every surface gets black (and persists it), because
         // several devices (SL V3 firmware, hub hardware mode) fall back to their own rainbow
-        // effects the moment we merely stop writing
+        // effects the moment we merely stop writing. Brightness scales the chosen colour toward
+        // black — a device-agnostic dim that works uniformly across every LED family.
+        var bright = Math.Clamp(settings.RgbBrightness, 0, 100);
+        byte Scale(int channel) => (byte)Math.Clamp(Math.Clamp(channel, 0, 255) * bright / 100, 0, 255);
         var (r, g, b) = settings.RgbOff
             ? ((byte)0, (byte)0, (byte)0)
-            : ((byte)Math.Clamp(settings.RgbR, 0, 255),
-               (byte)Math.Clamp(settings.RgbG, 0, 255),
-               (byte)Math.Clamp(settings.RgbB, 0, 255));
+            : (Scale(settings.RgbR), Scale(settings.RgbG), Scale(settings.RgbB));
         var key = $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
@@ -836,6 +838,7 @@ public sealed class ControlLoop : IDisposable
     private CorsairLcdDevice? _corsairLcd;
     private readonly List<Slv3LcdNode> _lcdNodes = [];
     private readonly Dictionary<string, LcdMode> _appliedLcd = [];
+    private readonly Dictionary<string, int> _appliedLcdBrightness = [];
     private long _lcdRetryAt;
     private bool _lcdOpenFailedWarned;
 
@@ -899,6 +902,11 @@ public sealed class ControlLoop : IDisposable
             return;
         }
 
+        // Off forces the backlight dark; every other mode uses the user's brightness. Tracked
+        // per screen so a brightness change re-applies without re-sending frames (Metrics/Off
+        // set the backlight only — no JPEG, so no SL V3 RGB disruption on a slider drag).
+        var lcdBrightness = mode == LcdMode.Off ? 0 : Math.Clamp(settings.LcdBrightness, 0, 100);
+
         // open screens lazily, only once the user actually manages them
         if (_corsairLcd is null && CorsairLcdDevice.FindDevices().FirstOrDefault() is { } lcdHid)
         {
@@ -906,6 +914,7 @@ public sealed class ControlLoop : IDisposable
             {
                 _corsairLcd = CorsairLcdDevice.Open(lcdHid);
                 _appliedLcd.Remove("pump-lcd");
+                _appliedLcdBrightness.Remove("pump-lcd");
                 _log?.Invoke($"control: opened the pump LCD (serial {_corsairLcd.SerialNumber})");
             }
             catch (Exception ex)
@@ -940,16 +949,20 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_corsairLcd is { } pumpLcd && _appliedLcd.GetValueOrDefault("pump-lcd") != mode)
+        if (_corsairLcd is { } pumpLcd
+            && (_appliedLcd.GetValueOrDefault("pump-lcd") != mode
+                || _appliedLcdBrightness.GetValueOrDefault("pump-lcd", -1) != lcdBrightness))
         {
             try
             {
                 ApplyLcdMode(mode,
                     jpeg => pumpLcd.SendJpegFrame(jpeg),
                     percent => pumpLcd.SetBrightness(percent),
+                    lcdBrightness,
                     Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
                     Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight);
                 _appliedLcd["pump-lcd"] = mode;
+                _appliedLcdBrightness["pump-lcd"] = lcdBrightness;
                 _log?.Invoke($"pump LCD set to {mode}");
             }
             catch (Exception ex)
@@ -965,7 +978,8 @@ public sealed class ControlLoop : IDisposable
         var applied = 0;
         foreach (var node in _lcdNodes.ToList())
         {
-            if (_appliedLcd.GetValueOrDefault(node.Serial) == mode)
+            if (_appliedLcd.GetValueOrDefault(node.Serial) == mode
+                && _appliedLcdBrightness.GetValueOrDefault(node.Serial, -1) == lcdBrightness)
             {
                 continue;
             }
@@ -975,9 +989,11 @@ public sealed class ControlLoop : IDisposable
                 ApplyLcdMode(mode,
                     node.SendJpegFrame,
                     node.SetBrightness,
+                    lcdBrightness,
                     Slv3LcdProtocol.ScreenWidth,
                     Slv3LcdProtocol.ScreenHeight);
                 _appliedLcd[node.Serial] = mode;
+                _appliedLcdBrightness[node.Serial] = lcdBrightness;
                 applied++;
             }
             catch (Exception ex)
@@ -1029,25 +1045,20 @@ public sealed class ControlLoop : IDisposable
         }
     }
 
-    private static void ApplyLcdMode(LcdMode mode, Action<byte[]> sendFrame, Action<int> setBrightness, int width, int height)
+    private static void ApplyLcdMode(LcdMode mode, Action<byte[]> sendFrame, Action<int> setBrightness, int brightness, int width, int height)
     {
         switch (mode)
         {
-            case LcdMode.Off:
-                setBrightness(0);
-                break;
             case LcdMode.Black:
                 sendFrame(LcdFrames.Solid(width, height, 0, 0, 0));
-                setBrightness(100);
                 break;
             case LcdMode.White:
                 sendFrame(LcdFrames.Solid(width, height, 255, 255, 255));
-                setBrightness(100);
-                break;
-            case LcdMode.Metrics:
-                setBrightness(100); // frames come from the metric streamer
                 break;
         }
+
+        // Off passes brightness 0; Metrics streams its frames elsewhere — set the backlight only.
+        setBrightness(brightness);
     }
 
     // ---- Turzx 8.8" serial screen ----

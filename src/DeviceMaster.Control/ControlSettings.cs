@@ -102,8 +102,14 @@ public sealed class ControlSettings
     public int RgbG { get; set; } = 130;
     public int RgbB { get; set; } = 255;
 
+    /// <summary>Static-color brightness 0–100; scales the RGB value sent to every LED (100 = the chosen color as-is).</summary>
+    public int RgbBrightness { get; set; } = 100;
+
     /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, a solid background, or metrics.</summary>
     public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
+
+    /// <summary>Pump + fan LCD backlight brightness 0–100 (the Turzx screen keeps its own <see cref="TurzxBrightness"/>).</summary>
+    public int LcdBrightness { get; set; } = 100;
 
     /// <summary>Metric shown on the pump screen while <see cref="LcdScreens"/> is Metrics (default for new configs).</summary>
     public LcdMetric PumpScreenMetric { get; set; } = LcdMetric.Coolant;
