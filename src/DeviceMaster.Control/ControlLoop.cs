@@ -52,7 +52,8 @@ public sealed record ControlStatus
 public sealed class ControlLoop : IDisposable
 {
     private const int TickMs = 1000;
-    private long _nextTickLogAt; // throttle the periodic tick-duration diagnostic
+    private long _nextTickLogAt;         // throttle the periodic tick-duration diagnostic
+    private string _lastTickBreakdown = ""; // per-phase timing of the most recent tick
     private const int CorsairRefreshTicks = 10;   // rewrite unchanged duties every N ticks anyway
     private const int CorsairRescanTicks = 30;    // re-enumerate the Link chain every N ticks
 
@@ -276,7 +277,7 @@ public sealed class ControlLoop : IDisposable
             if (Environment.TickCount64 >= _nextTickLogAt)
             {
                 _nextTickLogAt = Environment.TickCount64 + 30_000;
-                _log?.Invoke($"control: tick took {elapsed} ms (target {TickMs})");
+                _log?.Invoke($"control: tick took {elapsed} ms (target {TickMs}) — {_lastTickBreakdown}");
             }
 
             var wait = (int)Math.Max(50, TickMs - elapsed);
@@ -293,7 +294,18 @@ public sealed class ControlLoop : IDisposable
         var warnings = new List<string>();
         _lhmPolledThisTick = false; // reset: the first LHM consumer this tick polls, the rest reuse it
 
+        // per-phase timing for the throttled tick diagnostic (see Run) — pinpoints what makes a tick slow
+        var phaseMark = Environment.TickCount64;
+        var phases = new List<string>(9);
+        void Lap(string name)
+        {
+            var t = Environment.TickCount64;
+            phases.Add($"{name}={t - phaseMark}");
+            phaseMark = t;
+        }
+
         EnsureDevices(warnings);
+        Lap("ensure");
 
         if (_rgbPriority)
         {
@@ -327,20 +339,29 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        Lap("duty");
         var pumpDuty = SafetyGuard.ClampPumpDuty(settings.PumpDutyPercent);
         var readings = new List<DeviceReading>();
         ApplyCorsair(duty, pumpDuty, readings, warnings);
+        Lap("corsair");
         ApplySlv3(duty, readings, warnings);
+        Lap("slv3");
         ApplyHeaders(duty, readings, warnings);
+        Lap("headers");
 
         if (settings.RgbEnabled)
         {
             ApplyRgb(settings, warnings);
         }
 
+        Lap("rgb");
         ApplyLcd(settings, readings, duty, warnings);
+        Lap("lcd");
         ApplyTurzx(settings, readings, duty);
+        Lap("turzx");
         SampleDashboardTemps();
+        Lap("dash");
+        _lastTickBreakdown = string.Join(" ", phases);
 
         var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
             ? sourceTemp
