@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+    <ProjectReference Include="..\..\src\DeviceMaster.Sensors\DeviceMaster.Sensors.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.LianLi\DeviceMaster.Devices.LianLi.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />

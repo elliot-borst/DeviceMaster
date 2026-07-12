@@ -23,13 +23,25 @@ public sealed class PresentMonFpsReader : IDisposable
     private const string PresentMonUrl = "https://github.com/GameTechDev/PresentMon/releases/download/v2.4.1/PresentMon-2.4.1-x64.exe";
     private const string MsColumn = "msBetweenPresents";
     private const string PidColumn = "ProcessID";
+    private const string AppColumn = "Application";
     private const int FrameWindow = 60;   // rolling average length, like StarMaster
-    private const long StaleMs = 1500;    // a process that stopped presenting this long ago → no FPS
+    private const long FreshMs = 2000;    // a frame older than this no longer counts toward "presenting now"
+
+    // Processes that always "present" (the desktop compositor, the shell, ourselves) but are never
+    // the game whose FPS we want. dwm.exe in particular presents at the refresh rate right alongside
+    // a composed game, so it must never win the "what is presenting" pick.
+    private static readonly HashSet<string> NonGame = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dwm.exe", "explorer.exe", "DeviceMaster.exe", "ApplicationFrameHost.exe", "SearchHost.exe",
+        "ShellExperienceHost.exe", "StartMenuExperienceHost.exe", "TextInputHost.exe", "SystemSettings.exe",
+    };
 
     private readonly Action<string>? _log;
     private readonly string _sessionName;
     private readonly object _gate = new();
     private readonly Dictionary<int, Queue<(long Tick, double Ms)>> _byPid = new();
+    private readonly Dictionary<int, string> _names = new(); // pid → Application, to skip non-game presenters
+    private int _fpsPid;                                     // the game we are locked onto (survives alt-tab)
 
     private Thread? _reader;
     private Process? _proc;
@@ -98,43 +110,131 @@ public sealed class PresentMonFpsReader : IDisposable
         }
     }
 
-    /// <summary>FPS of the foreground process (rolling ~60-frame average), or null if it isn't presenting.</summary>
+    /// <summary>
+    /// FPS of the game (rolling ~60-frame average), or null if nothing game-like is presenting.
+    ///
+    /// This does NOT hard-gate on the live foreground PID the way a naïve reader would — that blanks
+    /// the moment an alt-tab or a fullscreen⇄composed transition makes the foreground window's PID
+    /// stop lining up with the presenting PID, and then fails to re-acquire. Instead we lock onto the
+    /// game and keep reporting it (StarMaster stays locked to its target process the same way): prefer
+    /// the foreground process when it is itself a game that's presenting, otherwise keep reporting the
+    /// process we locked onto while it is still presenting, otherwise re-acquire the dominant non-system
+    /// presenter. dwm.exe/the shell/ourselves are excluded so the compositor can never win the pick.
+    /// </summary>
     public int? CurrentFps()
     {
-        int fg;
-        try { GetWindowThreadProcessId(GetForegroundWindow(), out fg); }
-        catch { return null; }
-        if (fg <= 0)
-        {
-            return null;
-        }
-
+        var fg = ForegroundPid();
         var now = Environment.TickCount64;
         lock (_gate)
         {
-            if (!_byPid.TryGetValue(fg, out var q))
+            _fpsPid = SelectFpsPid(_byPid, _names, fg, _fpsPid, now);
+            return _fpsPid != 0 ? RollingFps(_byPid[_fpsPid], now) : null;
+        }
+    }
+
+    /// <summary>
+    /// Chooses which process's FPS to report (0 = none), pure so it can be unit-tested. The order is
+    /// what makes the reading survive an alt-tab or a fullscreen⇄composed transition instead of
+    /// blanking: (1) the foreground window if it is itself a game presenting now; else (2) the game we
+    /// were already locked onto while it keeps presenting (foreground may briefly not line up with the
+    /// presenting PID); else (3) re-acquire the non-system process presenting the most frames. Entries
+    /// in <see cref="NonGame"/> (dwm/shell/ourselves) are never eligible — dwm.exe presents at the
+    /// refresh rate right alongside a composed game and must never win.
+    /// </summary>
+    public static int SelectFpsPid(
+        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
+        IReadOnlyDictionary<int, string> names,
+        int foregroundPid,
+        int lockedPid,
+        long now)
+    {
+        if (IsPresentingGame(byPid, names, foregroundPid, now))
+        {
+            return foregroundPid;
+        }
+
+        if (lockedPid != 0 && IsPresentingGame(byPid, names, lockedPid, now))
+        {
+            return lockedPid;
+        }
+
+        return DominantGame(byPid, names, now);
+    }
+
+    private static int ForegroundPid()
+    {
+        try { GetWindowThreadProcessId(GetForegroundWindow(), out var p); return p > 0 ? p : 0; }
+        catch { return 0; }
+    }
+
+    /// <summary>True if <paramref name="pid"/> is a non-system process presenting ≥5 frames recently.</summary>
+    private static bool IsPresentingGame(
+        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
+        IReadOnlyDictionary<int, string> names,
+        int pid,
+        long now)
+    {
+        if (pid <= 0 || (names.TryGetValue(pid, out var name) && NonGame.Contains(name)))
+        {
+            return false;
+        }
+
+        return byPid.TryGetValue(pid, out var q) && FreshCount(q, now) >= 5;
+    }
+
+    /// <summary>The non-system process with the most frames presented in the last <see cref="FreshMs"/>.</summary>
+    private static int DominantGame(
+        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
+        IReadOnlyDictionary<int, string> names,
+        long now)
+    {
+        int best = 0, bestCount = 0;
+        foreach (var (pid, q) in byPid)
+        {
+            if (names.TryGetValue(pid, out var name) && NonGame.Contains(name))
             {
-                return null;
+                continue;
             }
 
-            while (q.Count > 0 && now - q.Peek().Tick > StaleMs)
+            var count = FreshCount(q, now);
+            if (count > bestCount)
             {
-                q.Dequeue();
+                bestCount = count;
+                best = pid;
             }
+        }
 
-            if (q.Count < 5)
+        return bestCount >= 5 ? best : 0;
+    }
+
+    private static int FreshCount(Queue<(long Tick, double Ms)> q, long now)
+    {
+        var count = 0;
+        foreach (var e in q)
+        {
+            if (now - e.Tick <= FreshMs)
             {
-                return null;
+                count++;
             }
+        }
 
-            var sum = 0.0;
-            foreach (var e in q)
+        return count;
+    }
+
+    private static int? RollingFps(Queue<(long Tick, double Ms)> q, long now)
+    {
+        var sum = 0.0;
+        var n = 0;
+        foreach (var e in q)
+        {
+            if (now - e.Tick <= FreshMs)
             {
                 sum += e.Ms;
+                n++;
             }
-
-            return sum > 0 ? (int)((1000.0 * q.Count / sum) + 0.5) : null;
         }
+
+        return n >= 5 && sum > 0 ? (int)((1000.0 * n / sum) + 0.5) : null;
     }
 
     private void ReadLoop()
@@ -146,6 +246,7 @@ public sealed class PresentMonFpsReader : IDisposable
         var encChecked = false;
         var msCol = -1;
         var pidCol = -1;
+        var appCol = -1;
 
         while (_running)
         {
@@ -192,7 +293,7 @@ public sealed class PresentMonFpsReader : IDisposable
                         var lines = (lineLeft + chunk).Split('\n');
                         for (var i = 0; i < lines.Length - 1; i++)
                         {
-                            ParseLine(lines[i].TrimEnd('\r'), ref msCol, ref pidCol);
+                            ParseLine(lines[i].TrimEnd('\r'), ref msCol, ref pidCol, ref appCol);
                         }
 
                         lineLeft = lines[^1];
@@ -208,7 +309,7 @@ public sealed class PresentMonFpsReader : IDisposable
         }
     }
 
-    private void ParseLine(string line, ref int msCol, ref int pidCol)
+    private void ParseLine(string line, ref int msCol, ref int pidCol, ref int appCol)
     {
         if (line.Length == 0)
         {
@@ -228,6 +329,7 @@ public sealed class PresentMonFpsReader : IDisposable
                 var name = cols[j].Trim();
                 if (name.Equals(MsColumn, StringComparison.OrdinalIgnoreCase)) msCol = j;
                 else if (name.Equals(PidColumn, StringComparison.OrdinalIgnoreCase)) pidCol = j;
+                else if (name.Equals(AppColumn, StringComparison.OrdinalIgnoreCase)) appCol = j;
             }
 
             return;
@@ -249,12 +351,19 @@ public sealed class PresentMonFpsReader : IDisposable
             return;
         }
 
+        var app = appCol >= 0 && appCol < f.Length ? f[appCol].Trim() : null;
+
         var now = Environment.TickCount64;
         lock (_gate)
         {
             if (!_byPid.TryGetValue(pid, out var q))
             {
                 _byPid[pid] = q = new Queue<(long, double)>(FrameWindow + 1);
+            }
+
+            if (!string.IsNullOrEmpty(app))
+            {
+                _names[pid] = app;
             }
 
             q.Enqueue((now, ms));
@@ -291,6 +400,7 @@ public sealed class PresentMonFpsReader : IDisposable
         foreach (var pid in dead)
         {
             _byPid.Remove(pid);
+            _names.Remove(pid);
         }
     }
 
