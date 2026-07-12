@@ -30,9 +30,26 @@ public sealed class LhmSensorSource : ISensorSource
 
     public string Name => "LibreHardwareMonitor";
 
-    public IReadOnlyList<SensorReading> Read()
+    /// <summary>
+    /// Polls every hardware device once (the expensive part — NvAPI/kernel-driver/SuperIO I/O).
+    /// Call this once per control tick, then read with <c>refresh: false</c> from every consumer so
+    /// a single tick does one poll instead of one per consumer (which stretched the tick toward 2 s).
+    /// </summary>
+    public void RefreshHardware() => _computer.Accept(_visitor);
+
+    public IReadOnlyList<SensorReading> Read() => Read(refresh: true);
+
+    /// <param name="refresh">
+    /// Poll the hardware first. Pass false to read the most recent <see cref="RefreshHardware"/>
+    /// snapshot without re-polling (one poll per tick, shared across consumers).
+    /// </param>
+    public IReadOnlyList<SensorReading> Read(bool refresh)
     {
-        _computer.Accept(_visitor);
+        if (refresh)
+        {
+            _computer.Accept(_visitor);
+        }
+
         var now = DateTimeOffset.Now;
         var readings = new List<SensorReading>();
         foreach (var hardware in _computer.Hardware)
@@ -46,9 +63,13 @@ public sealed class LhmSensorSource : ISensorSource
     /// (Power, Data/SmallData), matched by hardware type + sensor-name keyword with fallbacks so
     /// it stays vendor-generic. Prefers a discrete NVIDIA GPU when an integrated one is also present.
     /// </summary>
-    public SystemStats ReadSystemStats()
+    /// <param name="refresh">Poll the hardware first (default); false reads the latest snapshot.</param>
+    public SystemStats ReadSystemStats(bool refresh = true)
     {
-        _computer.Accept(_visitor);
+        if (refresh)
+        {
+            _computer.Accept(_visitor);
+        }
 
         IHardware? cpu = null, mem = null, gpu = null;
         foreach (var hw in _computer.Hardware)

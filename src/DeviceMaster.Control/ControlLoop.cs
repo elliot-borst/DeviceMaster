@@ -52,6 +52,7 @@ public sealed record ControlStatus
 public sealed class ControlLoop : IDisposable
 {
     private const int TickMs = 1000;
+    private long _nextTickLogAt; // throttle the periodic tick-duration diagnostic
     private const int CorsairRefreshTicks = 10;   // rewrite unchanged duties every N ticks anyway
     private const int CorsairRescanTicks = 30;    // re-enumerate the Link chain every N ticks
 
@@ -84,6 +85,7 @@ public sealed class ControlLoop : IDisposable
     private Slv3Controller? _slv3;
     private AuraController? _aura;
     private LhmSensorSource? _lhm;
+    private bool _lhmPolledThisTick; // one hardware poll per tick, shared by every LHM consumer
     private LhmFanController? _headers;
     private bool _headersUnavailableWarned;
     private EneRamScanner? _ramScanner;
@@ -271,6 +273,12 @@ public sealed class ControlLoop : IDisposable
             }
 
             var elapsed = Environment.TickCount64 - started;
+            if (Environment.TickCount64 >= _nextTickLogAt)
+            {
+                _nextTickLogAt = Environment.TickCount64 + 30_000;
+                _log?.Invoke($"control: tick took {elapsed} ms (target {TickMs})");
+            }
+
             var wait = (int)Math.Max(50, TickMs - elapsed);
             if (WaitHandle.WaitAny([token.WaitHandle, _wake], wait) == 0)
             {
@@ -283,6 +291,7 @@ public sealed class ControlLoop : IDisposable
     {
         var settings = _settings;
         var warnings = new List<string>();
+        _lhmPolledThisTick = false; // reset: the first LHM consumer this tick polls, the rest reuse it
 
         EnsureDevices(warnings);
 
@@ -369,8 +378,7 @@ public sealed class ControlLoop : IDisposable
         _dashTempsDue = Environment.TickCount64 + 2_000;
         try
         {
-            _lhm ??= new LhmSensorSource();
-            var readings = _lhm.Read();
+            var readings = Lhm().Read(refresh: false);
             _dashCpuTemp = CanonicalTemp(readings, "cpu", CpuTempPreference);
             _dashGpuTemp = CanonicalTemp(readings, "gpu", GpuCorePreference);
         }
@@ -1101,8 +1109,7 @@ public sealed class ControlLoop : IDisposable
             _turzxMetricsDue = Environment.TickCount64 + 900; // ~1 s refresh (partial updates keep the push fast)
             try
             {
-                _lhm ??= new Sensors.LhmSensorSource();
-                var stats = _lhm.ReadSystemStats();
+                var stats = Lhm().ReadSystemStats(refresh: false);
                 if (!_fpsStarted)
                 {
                     _fpsStarted = true; // start the PresentMon monitor once; null if it can't be launched/fetched
@@ -1606,8 +1613,7 @@ public sealed class ControlLoop : IDisposable
     {
         try
         {
-            _lhm ??= new LhmSensorSource();
-            lhmReadings ??= _lhm.Read();
+            lhmReadings ??= Lhm().Read(refresh: false);
             var candidates = lhmReadings
                 .Where(r => r.Kind == kind && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
                 .Where(r => excludeName is null || !r.Name.Contains(excludeName, StringComparison.OrdinalIgnoreCase))
@@ -1671,6 +1677,24 @@ public sealed class ControlLoop : IDisposable
 
     // ---- temperature sources ----
 
+    /// <summary>
+    /// The LHM source with its hardware polled exactly once per control tick. Every consumer
+    /// (fan/pump LCDs, the Turzx dashboard, the app tiles, a CPU/GPU curve source) shares that one
+    /// poll — a full poll drives NvAPI/the kernel driver/SuperIO and doing it per-consumer stretched
+    /// the tick toward 2 s, which is what made the on-screen data refresh at ~2 s instead of ~1 s.
+    /// </summary>
+    private LhmSensorSource Lhm()
+    {
+        _lhm ??= new LhmSensorSource();
+        if (!_lhmPolledThisTick)
+        {
+            _lhm.RefreshHardware();
+            _lhmPolledThisTick = true;
+        }
+
+        return _lhm;
+    }
+
     private double? ReadSourceTemperature(CurveSource source, List<string> warnings)
     {
         if (source == CurveSource.Coolant)
@@ -1696,8 +1720,7 @@ public sealed class ControlLoop : IDisposable
 
         try
         {
-            _lhm ??= new LhmSensorSource();
-            var readings = _lhm.Read();
+            var readings = Lhm().Read(refresh: false);
             var wanted = source == CurveSource.Cpu ? "cpu" : "gpu";
             return readings
                 .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains(wanted, StringComparison.OrdinalIgnoreCase))
