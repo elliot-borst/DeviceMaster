@@ -21,6 +21,14 @@ namespace DeviceMaster.Devices.Turzx;
 /// portrait framebuffer as full BGRA frames, exactly as turing-smart-screen-python's REV_8INCH
 /// path does. Writes are gated on <see cref="KnownDeviceRegistry"/> (see <see cref="Find"/>).
 /// </summary>
+/// <summary>What <see cref="TurzxScreen.SendJpegFrame"/> actually pushed, for diagnostics.</summary>
+public enum TurzxPushKind
+{
+    Unchanged, // nothing visibly changed — no bytes sent
+    Partial,   // changed-region UPDATE_BITMAP
+    Full,      // full-frame DISPLAY_BITMAP heal
+}
+
 public sealed class TurzxScreen : IDisposable
 {
     private const ushort ScreenVid = 0x1A86;
@@ -218,10 +226,11 @@ public sealed class TurzxScreen : IDisposable
     }
 
     /// <summary>
-    /// Pushes one full frame. <paramref name="landscapeJpeg"/> is a 1920×480 landscape image;
-    /// it is rotated onto the native portrait panel and sent as BGRA.
+    /// Pushes one frame. <paramref name="landscapeJpeg"/> is a 1920×480 landscape image; it is
+    /// rotated onto the native portrait panel and sent as BGRA. Returns what was actually sent
+    /// (full heal / partial diff / nothing) so callers can log push activity.
     /// </summary>
-    public void SendJpegFrame(byte[] landscapeJpeg)
+    public TurzxPushKind SendJpegFrame(byte[] landscapeJpeg)
     {
         EnsureInitialized();
         var native = LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape);
@@ -240,7 +249,7 @@ public sealed class TurzxScreen : IDisposable
             else if (spans.Length == 0)
             {
                 _prevNative = native; // nothing visibly changed
-                return;
+                return TurzxPushKind.Unchanged;
             }
         }
 
@@ -256,6 +265,7 @@ public sealed class TurzxScreen : IDisposable
         }
 
         _prevNative = native;
+        return full ? TurzxPushKind.Full : TurzxPushKind.Partial;
     }
 
     /// <summary>Full-frame push: PRE_UPDATE → START → DISPLAY_BITMAP_8INCH → BGRA payload → QUERY_STATUS.</summary>

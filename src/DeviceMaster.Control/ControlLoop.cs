@@ -1119,6 +1119,8 @@ public sealed class ControlLoop : IDisposable
     private long _turzxRetryAt;
     private int _turzxWriteFailures;      // consecutive frame-write failures (a wedged CDC gadget)
     private long _turzxUsbReplugAfter;    // rate-limit the software-replug recovery
+    private int _hbPartial, _hbFull, _hbNoNew; // Turzx worker heartbeat counters (freeze diagnostic)
+    private long _hbLastPushMs, _hbAt;         // last push duration, next heartbeat time
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
     private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
@@ -1275,11 +1277,29 @@ public sealed class ControlLoop : IDisposable
                     case LcdMode.Metrics:
                         if (frame is not null && _turzxShownKey != key)
                         {
-                            _turzx.SendJpegFrame(frame);
+                            var pushStart = Environment.TickCount64;
+                            var kind = _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
+                            _hbLastPushMs = Environment.TickCount64 - pushStart;
+                            if (kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;
+                        }
+                        else if (frame is not null)
+                        {
+                            _hbNoNew++; // a new tick, but the dashboard key is unchanged — nothing to push
                         }
 
                         break;
+                }
+
+                // Diagnostic heartbeat: shows whether the worker is still pushing new frames during a
+                // "frozen" screen (→ panel firmware freeze) or has simply run out of new frames to push
+                // (→ upstream: the stats/dashboard key stopped changing). Throttled so it isn't spam.
+                if (mode == LcdMode.Metrics && Environment.TickCount64 >= _hbAt)
+                {
+                    _hbAt = Environment.TickCount64 + 8_000;
+                    _log?.Invoke($"turzx worker: partial={_hbPartial} full={_hbFull} noNew={_hbNoNew} "
+                        + $"lastPushMs={_hbLastPushMs} shownKey={(_turzxShownKey is null ? "none" : "set")}");
+                    _hbPartial = _hbFull = _hbNoNew = 0;
                 }
 
                 _turzxStatusText = $"Connected · {_turzx.ComPort}"
