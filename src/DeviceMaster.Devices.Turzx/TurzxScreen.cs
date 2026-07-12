@@ -99,6 +99,29 @@ public sealed class TurzxScreen : IDisposable
         return data is null ? [] : [(data.ComPort, data.SerialHint)];
     }
 
+    /// <summary>
+    /// The PnP device-instance id of the panel's DATA port, for a targeted software "replug"
+    /// (disable/enable that node) when the CDC gadget wedges and a plain COM reopen can no longer
+    /// clear it. Returns null unless the panel is positively identified — same safety gate as
+    /// <see cref="Find"/> (its <c>1A86:CA88</c> control port must be present and write-allowed).
+    /// This is the panel's OWN function node; callers must NEVER reset its parent hub, which other
+    /// devices (including the coolant hub) can share.
+    /// </summary>
+    public static string? FindDataPortInstanceId()
+    {
+        var ports = DeviceScanner.ScanSerialPorts();
+        var control = ports.FirstOrDefault(p =>
+            p.Identification?.Kind == DeviceKind.TurzxScreen
+            && p.UsbId is { } id && KnownDeviceRegistry.IsWriteAllowed(id));
+        if (control is null)
+        {
+            return null;
+        }
+
+        var data = FindDataPort(ports);
+        return string.IsNullOrEmpty(data?.PnpInstanceId) ? null : data.PnpInstanceId;
+    }
+
     private static SerialPortInfo? FindDataPort(IReadOnlyList<SerialPortInfo> ports) =>
         ports.FirstOrDefault(p =>
             (p.UsbId is { } id && DataPortIds.Contains(id))
@@ -191,6 +214,7 @@ public sealed class TurzxScreen : IDisposable
         EnsureInitialized();
         _lastBrightnessPercent = Math.Clamp(percent, 0, 100);
         Write(TurzxProtocol.BuildBrightness(percent));
+        DrainInput(); // consume the panel's reply — an undrained status back-pressures the next write
     }
 
     /// <summary>
@@ -273,10 +297,24 @@ public sealed class TurzxScreen : IDisposable
     /// </summary>
     private void WriteFramePayload(byte[] data)
     {
+        var scratch = new byte[4096];
         for (var offset = 0; offset < data.Length; offset += FramePayloadChunkBytes)
         {
             var count = Math.Min(FramePayloadChunkBytes, data.Length - offset);
             _port.Write(data, offset, count);
+
+            // The gadget streams its status reply throughout this multi-MB write. If we never read
+            // during the ~2.3 s it takes, our RX ring fills, the CDC IN endpoint back-pressures, the
+            // gadget blocks writing status and stops draining our frame — the write then stalls with
+            // "the semaphore timeout period has expired" and the panel wedges until it re-enumerates.
+            // Drain opportunistically between chunks (one non-blocking pass; BytesToRead > 0 means
+            // Read returns at once) to keep the ring empty, mirroring the reference's per-frame reads.
+            var pending = _port.BytesToRead;
+            if (pending > 0)
+            {
+                _ = _port.Read(scratch, 0, Math.Min(scratch.Length, pending));
+            }
+
             if (offset + count < data.Length)
             {
                 Thread.Sleep(1);
@@ -291,9 +329,15 @@ public sealed class TurzxScreen : IDisposable
             return;
         }
 
+        // Every command makes the CDC gadget queue a status reply; leaving those replies unread
+        // is exactly what back-pressures its IN endpoint and eventually wedges the panel (v63/v72).
+        // So drain after each init command — Hello already reads the ID, this clears any tail.
         Hello();
+        DrainInput();
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.StopVideo));
+        DrainInput();
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.StopMedia));
+        DrainInput();
         _initialized = true;
     }
 

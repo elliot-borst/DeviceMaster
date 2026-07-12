@@ -1088,6 +1088,8 @@ public sealed class ControlLoop : IDisposable
     private int _turzxAppliedBrightness = -1;
     private string? _turzxShownKey;
     private long _turzxRetryAt;
+    private int _turzxWriteFailures;      // consecutive frame-write failures (a wedged CDC gadget)
+    private long _turzxUsbReplugAfter;    // rate-limit the software-replug recovery
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
     private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
@@ -1254,6 +1256,7 @@ public sealed class ControlLoop : IDisposable
 
                 _turzxStatusText = $"Connected · {_turzx.ComPort}"
                     + (_turzx.RomVersion is { } rom ? $" · ROM {rom}" : "");
+                _turzxWriteFailures = 0; // a clean cycle — the panel is draining our writes again
             }
             catch (TurzxUnsupportedException ex)
             {
@@ -1275,12 +1278,56 @@ public sealed class ControlLoop : IDisposable
                 _turzx = null;
                 _turzxShownKey = null;
                 _turzxAppliedBrightness = -1;
-                _turzxRetryAt = Environment.TickCount64 + 10_000;
+                _turzxWriteFailures++;
+                _turzxRetryAt = Environment.TickCount64 + 5_000;
+
+                // Reopening the COM port cannot clear a wedged USB-CDC gadget: its device→host
+                // status endpoint is back-pressured, so every subsequent frame write stalls
+                // ("semaphore timeout"). The panel still answers the small HELLO, so Open() keeps
+                // "succeeding" while nothing ever displays — the historical fix was a manual USB
+                // replug. So once a plain reopen has failed twice, do the software equivalent:
+                // disable/enable the panel's OWN data-port device node to force it to re-enumerate.
+                // Never its parent hub (other devices — including the coolant hub — can share it).
+                // Rate-limited so a persistent hardware fault can't thrash the USB stack.
+                if (_turzxWriteFailures >= 2 && Environment.TickCount64 >= _turzxUsbReplugAfter)
+                {
+                    _turzxUsbReplugAfter = Environment.TickCount64 + 60_000;
+                    _turzxWriteFailures = 0;
+                    TryReplugTurzx();
+                    _turzxRetryAt = Environment.TickCount64 + 6_000; // let the node re-enumerate
+                }
             }
         }
 
         try { _turzx?.Dispose(); } catch { /* shutting down */ }
         _turzx = null;
+    }
+
+    /// <summary>
+    /// Software "replug" of a wedged Turzx panel: disable/enable its OWN data-port USB node so it
+    /// re-enumerates and clears the back-pressured CDC endpoint. Targets only the panel's function
+    /// node (never its parent hub, which the coolant hub may share) and needs elevation — every
+    /// failure degrades to a logged message and the ordinary reopen retry.
+    /// </summary>
+    private void TryReplugTurzx()
+    {
+        try
+        {
+            var instanceId = TurzxScreen.FindDataPortInstanceId();
+            if (instanceId is null)
+            {
+                _log?.Invoke("Turzx: cannot locate the panel's USB node to reset — skipping software replug");
+                return;
+            }
+
+            _log?.Invoke($"Turzx: panel wedged — resetting its USB device node ({instanceId}) to re-enumerate it");
+            Core.Discovery.UsbDeviceRestarter.Restart(instanceId, settleMs: 2500);
+            _log?.Invoke("Turzx: USB device node reset complete — reopening");
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"Turzx: USB device reset failed ({ex.Message}) — a manual USB replug may be needed");
+        }
     }
 
     // The pump panel's firmware reasserts its own liquid-temp screen ~30 s after frames stop
