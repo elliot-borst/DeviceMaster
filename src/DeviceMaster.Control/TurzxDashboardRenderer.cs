@@ -7,8 +7,9 @@ using DeviceMaster.Sensors;
 namespace DeviceMaster.Control;
 
 /// <summary>
-/// Renders the fixed Turzx 8.8" dashboard: a big FPS reading centred on the ultrawide bar with a
-/// CPU telemetry row across the top and a GPU row across the bottom. Each row is five columns —
+/// Renders the fixed Turzx 8.8" dashboard: a big FPS reading on the LEFT of the ultrawide bar (no
+/// label), with a CPU telemetry row across the top-right and a GPU row across the bottom-right, so
+/// the FPS sits to the left of both the CPU and GPU names. Each row is five columns —
 /// name, usage %, temperature, memory (GB), power (W) — with the chip name coloured (CPU red,
 /// GPU green by default) and every other field white. Output is a landscape 1920×480 PNG; the
 /// panel-rotation onto the native portrait framebuffer is done by <c>TurzxScreen</c>, so this
@@ -45,30 +46,34 @@ public static class TurzxDashboardRenderer
                 FormatFlags = StringFormatFlags.NoWrap,
             };
 
-            // top: CPU row, bottom: GPU row (5 columns each, aligned vertically)
-            DrawRow(g, center, width, height * 0.04f, height * 0.26f,
-                Shorten(stats.CpuName, dropLeadingNumbers: true), cpuColor,
-                stats.CpuLoadPercent, stats.CpuTempC, stats.RamUsedGb, stats.CpuPowerW, white);
-
-            DrawRow(g, center, width, height * 0.70f, height * 0.26f,
-                Shorten(stats.GpuName, dropLeadingNumbers: false), gpuColor,
-                stats.GpuLoadPercent, stats.GpuTempC, stats.VramUsedGb, stats.GpuPowerW, white);
-
-            // middle: the FPS hero — a big number dead-centre of the panel, no label. Real reading
-            // is big and white; when nothing is rendering, a small dim dash instead of a huge bar.
-            var fpsRect = new RectangleF(0, height * 0.30f, width, height * 0.40f);
+            // left: the FPS number (no label), vertically centred so it sits to the LEFT of both the
+            // CPU name (top row) and the GPU name (bottom row). Dim dash when nothing is rendering.
+            var fpsColW = width * 0.20f;
+            var fpsRect = new RectangleF(0, 0, fpsColW, height);
             if (fps is { } f)
             {
-                using var fpsFont = FitFont(g, f.ToString(), height * 0.40f, width * 0.55f, FontStyle.Bold);
+                using var fpsFont = FitFont(g, f.ToString(), height * 0.44f, fpsColW * 0.86f, FontStyle.Bold);
                 using var fpsBrush = new SolidBrush(white);
                 g.DrawString(f.ToString(), fpsFont, fpsBrush, fpsRect, center);
             }
             else
             {
-                using var idleFont = new Font("Segoe UI", height * 0.14f, FontStyle.Bold, GraphicsUnit.Pixel);
+                using var idleFont = new Font("Segoe UI", height * 0.16f, FontStyle.Bold, GraphicsUnit.Pixel);
                 using var idleBrush = new SolidBrush(Color.FromArgb(110, 120, 140));
                 g.DrawString("—", idleFont, idleBrush, fpsRect, center);
             }
+
+            // right of the FPS: CPU row (top) and GPU row (bottom) across the remaining width — five
+            // columns each (name, usage %, temp, memory GB, power W), aligned vertically.
+            var rowsX = fpsColW;
+            var rowsW = width - fpsColW;
+            DrawRow(g, center, rowsX, rowsW, height * 0.04f, height * 0.26f,
+                Shorten(stats.CpuName, dropLeadingNumbers: true), cpuColor,
+                stats.CpuLoadPercent, stats.CpuTempC, stats.RamUsedGb, stats.CpuPowerW, white);
+
+            DrawRow(g, center, rowsX, rowsW, height * 0.70f, height * 0.26f,
+                Shorten(stats.GpuName, dropLeadingNumbers: false), gpuColor,
+                stats.GpuLoadPercent, stats.GpuTempC, stats.VramUsedGb, stats.GpuPowerW, white);
         }
 
         using var stream = new MemoryStream();
@@ -77,7 +82,7 @@ public static class TurzxDashboardRenderer
     }
 
     private static void DrawRow(
-        Graphics g, StringFormat center, int width, float yTop, float rowH,
+        Graphics g, StringFormat center, float xLeft, float areaWidth, float yTop, float rowH,
         string name, Color nameColor,
         double? load, double? temp, double? mem, double? power, Color white)
     {
@@ -90,12 +95,12 @@ public static class TurzxDashboardRenderer
             (FmtOrDash(power, "W"), white),
         };
 
-        var colW = width / 5f;
+        var colW = areaWidth / 5f;
         for (var i = 0; i < cells.Length; i++)
         {
             using var font = FitFont(g, cells[i].Text, rowH * 0.66f, colW * 0.94f, FontStyle.Bold);
             using var brush = new SolidBrush(cells[i].Color);
-            g.DrawString(cells[i].Text, font, brush, new RectangleF(i * colW, yTop, colW, rowH), center);
+            g.DrawString(cells[i].Text, font, brush, new RectangleF(xLeft + (i * colW), yTop, colW, rowH), center);
         }
     }
 
