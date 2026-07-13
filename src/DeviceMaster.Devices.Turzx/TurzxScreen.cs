@@ -29,6 +29,15 @@ public enum TurzxPushKind
     Full,      // full-frame DISPLAY_BITMAP heal
 }
 
+/// <summary>
+/// Outcome of <see cref="TurzxScreen.SendJpegFrame"/>: what was pushed, plus how many status
+/// bytes the panel sent back during the push. A live panel answers every command with a status
+/// block, so <see cref="AckBytes"/> is the panel-liveness signal — 0 means it did not reply.
+/// That is the ONLY tell for the "silent freeze", where a firmware-hung panel keeps draining our
+/// writes at the USB level (nothing throws) but has stopped rendering and answering.
+/// </summary>
+public readonly record struct TurzxPushResult(TurzxPushKind Kind, int AckBytes);
+
 public sealed class TurzxScreen : IDisposable
 {
     private const ushort ScreenVid = 0x1A86;
@@ -230,7 +239,7 @@ public sealed class TurzxScreen : IDisposable
     /// rotated onto the native portrait panel and sent as BGRA. Returns what was actually sent
     /// (full heal / partial diff / nothing) so callers can log push activity.
     /// </summary>
-    public TurzxPushKind SendJpegFrame(byte[] landscapeJpeg)
+    public TurzxPushResult SendJpegFrame(byte[] landscapeJpeg)
     {
         EnsureInitialized();
         var native = LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape);
@@ -249,35 +258,40 @@ public sealed class TurzxScreen : IDisposable
             else if (spans.Length == 0)
             {
                 _prevNative = native; // nothing visibly changed
-                return TurzxPushKind.Unchanged;
+                return new TurzxPushResult(TurzxPushKind.Unchanged, 0);
             }
         }
 
+        int ackBytes;
         if (full)
         {
-            SendFullNative(native);
+            ackBytes = SendFullNative(native);
             _framesSinceFull = 0;
         }
         else
         {
-            SendPartialNative(spans!);
+            ackBytes = SendPartialNative(spans!);
             _framesSinceFull++;
         }
 
         _prevNative = native;
-        return full ? TurzxPushKind.Full : TurzxPushKind.Partial;
+        return new TurzxPushResult(full ? TurzxPushKind.Full : TurzxPushKind.Partial, ackBytes);
     }
 
-    /// <summary>Full-frame push: PRE_UPDATE → START → DISPLAY_BITMAP_8INCH → BGRA payload → QUERY_STATUS.</summary>
-    private void SendFullNative(byte[] native)
+    /// <summary>
+    /// Full-frame push: PRE_UPDATE → START → DISPLAY_BITMAP_8INCH → BGRA payload → QUERY_STATUS.
+    /// Returns the total status bytes the panel replied with across the push (mid-write drains +
+    /// the QUERY_STATUS reply) — a live panel answers, a silently-frozen one returns ~0.
+    /// </summary>
+    private int SendFullNative(byte[] native)
     {
         var body = TurzxProtocol.EncodeFullFrameBody(native);
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.PreUpdateBitmap));
         Write(TurzxProtocol.BuildStartDisplayBitmap());
         Write(TurzxProtocol.BuildDisplayBitmap8Inch());
-        WriteFramePayload(TurzxProtocol.BuildSendPayload(body));
+        var ackBytes = WriteFramePayload(TurzxProtocol.BuildSendPayload(body));
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
-        DrainInput();
+        ackBytes += DrainInput();
 
         // A full DISPLAY_BITMAP re-inits the panel and can reset the backlight to its default, and
         // the control loop only re-sends brightness on a change — so re-assert a dimmed level here
@@ -288,16 +302,22 @@ public sealed class TurzxScreen : IDisposable
             Write(TurzxProtocol.BuildBrightness(b));
             DrainInput();
         }
+
+        return ackBytes;
     }
 
-    /// <summary>Partial push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(changed spans) → QUERY_STATUS.</summary>
-    private void SendPartialNative(byte[] rawSpans)
+    /// <summary>
+    /// Partial push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(changed spans) → QUERY_STATUS.
+    /// Returns the total status bytes the panel replied with during the push (liveness signal).
+    /// </summary>
+    private int SendPartialNative(byte[] rawSpans)
     {
         Write(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdateHeader(rawSpans.Length, _updateCount)));
-        WriteFramePayload(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdatePixels(rawSpans)));
+        var ackBytes = WriteFramePayload(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdatePixels(rawSpans)));
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
-        DrainInput();
+        ackBytes += DrainInput();
         _updateCount++;
+        return ackBytes;
     }
 
     /// <summary>
@@ -305,9 +325,10 @@ public sealed class TurzxScreen : IDisposable
     /// A single write of the whole frame stalls the CDC endpoint; the vendor paces identically
     /// (1 ms every 24900 bytes), so we do too.
     /// </summary>
-    private void WriteFramePayload(byte[] data)
+    private int WriteFramePayload(byte[] data)
     {
         var scratch = new byte[4096];
+        var drained = 0;
         for (var offset = 0; offset < data.Length; offset += FramePayloadChunkBytes)
         {
             var count = Math.Min(FramePayloadChunkBytes, data.Length - offset);
@@ -319,10 +340,11 @@ public sealed class TurzxScreen : IDisposable
             // "the semaphore timeout period has expired" and the panel wedges until it re-enumerates.
             // Drain opportunistically between chunks (one non-blocking pass; BytesToRead > 0 means
             // Read returns at once) to keep the ring empty, mirroring the reference's per-frame reads.
+            // These bytes count toward liveness (returned to the caller): a frozen panel sends none.
             var pending = _port.BytesToRead;
             if (pending > 0)
             {
-                _ = _port.Read(scratch, 0, Math.Min(scratch.Length, pending));
+                drained += _port.Read(scratch, 0, Math.Min(scratch.Length, pending));
             }
 
             if (offset + count < data.Length)
@@ -330,6 +352,8 @@ public sealed class TurzxScreen : IDisposable
                 Thread.Sleep(1);
             }
         }
+
+        return drained;
     }
 
     private void EnsureInitialized()
@@ -430,8 +454,9 @@ public sealed class TurzxScreen : IDisposable
     /// best-effort version exited the moment <c>BytesToRead</c> was 0, i.e. before the reply had
     /// arrived over USB, so under continuous ~1 Hz streaming it drained almost nothing.)
     /// </summary>
-    private void DrainInput()
+    private int DrainInput()
     {
+        var drained = 0;
         try
         {
             var scratch = new byte[4096];
@@ -442,7 +467,7 @@ public sealed class TurzxScreen : IDisposable
                 var available = _port.BytesToRead;
                 if (available > 0)
                 {
-                    _ = _port.Read(scratch, 0, Math.Min(scratch.Length, available));
+                    drained += _port.Read(scratch, 0, Math.Min(scratch.Length, available));
                     quietDeadline = Environment.TickCount64 + 40; // keep draining until 40 ms of silence
                 }
                 else if (Environment.TickCount64 >= quietDeadline)
@@ -459,6 +484,8 @@ public sealed class TurzxScreen : IDisposable
         {
             // acknowledgements are advisory
         }
+
+        return drained;
     }
 
     /// <summary>Decode a landscape JPEG, rotate it onto the native portrait panel, return BGRA bytes.</summary>

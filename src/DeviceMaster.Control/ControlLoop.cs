@@ -1119,8 +1119,19 @@ public sealed class ControlLoop : IDisposable
     private long _turzxRetryAt;
     private int _turzxWriteFailures;      // consecutive frame-write failures (a wedged CDC gadget)
     private long _turzxUsbReplugAfter;    // rate-limit the software-replug recovery
+    private int _turzxSilentPushes;       // consecutive pushes the panel didn't answer (silent freeze)
     private int _hbPartial, _hbFull, _hbNoNew; // Turzx worker heartbeat counters (freeze diagnostic)
     private long _hbLastPushMs, _hbAt;         // last push duration, next heartbeat time
+    private int _hbLastAckBytes;               // status bytes the panel replied with on the last push
+
+    /// <summary>
+    /// Consecutive unanswered pushes that mark a silent firmware freeze. In this mode our writes
+    /// still succeed (the CDC gadget drains bytes) so no exception is ever thrown and the v74
+    /// write-error recovery never fires — the panel just stops rendering AND replying. A live panel
+    /// answers every command, so any answered push resets this. ~1 push/s ⇒ ~20 s of confirmed
+    /// silence before we act, high enough that an occasional missed status reply can't false-trigger.
+    /// </summary>
+    private const int TurzxSilentPushesBeforeReplug = 20;
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
     private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
@@ -1242,6 +1253,7 @@ public sealed class ControlLoop : IDisposable
                     _turzx = TurzxScreen.Open(target.ComPort, target.Serial);
                     _turzxShownKey = null;
                     _turzxAppliedBrightness = -1;
+                    _turzxSilentPushes = 0; // fresh connection — start the liveness count clean
                     _log?.Invoke($"control: opened the Turzx screen ({_turzx.ComPort})");
                 }
 
@@ -1278,10 +1290,16 @@ public sealed class ControlLoop : IDisposable
                         if (frame is not null && _turzxShownKey != key)
                         {
                             var pushStart = Environment.TickCount64;
-                            var kind = _turzx.SendJpegFrame(frame);
+                            var push = _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
                             _hbLastPushMs = Environment.TickCount64 - pushStart;
-                            if (kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;
+                            _hbLastAckBytes = push.AckBytes;
+                            if (push.Kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;
+
+                            // Silent-freeze tracking: a live panel replies to every command; a
+                            // firmware-hung panel keeps draining our writes (no throw) but answers
+                            // nothing. Any answered push clears the count; sustained silence escalates.
+                            if (push.AckBytes > 0) _turzxSilentPushes = 0; else _turzxSilentPushes++;
                         }
                         else if (frame is not null)
                         {
@@ -1298,8 +1316,32 @@ public sealed class ControlLoop : IDisposable
                 {
                     _hbAt = Environment.TickCount64 + 8_000;
                     _log?.Invoke($"turzx worker: partial={_hbPartial} full={_hbFull} noNew={_hbNoNew} "
+                        + $"ack={_hbLastAckBytes} silent={_turzxSilentPushes} "
                         + $"lastPushMs={_hbLastPushMs} shownKey={(_turzxShownKey is null ? "none" : "set")}");
                     _hbPartial = _hbFull = _hbNoNew = 0;
+                }
+
+                // Silent-freeze recovery: the panel has ignored many consecutive pushes while our
+                // writes kept succeeding (no exception, so the catch-based v74 recovery never runs).
+                // A full DISPLAY_BITMAP heal cannot clear a firmware command-parser hang — only a
+                // re-enumeration does — so escalate straight to the software replug, rate-limited by
+                // _turzxUsbReplugAfter exactly like the write-error path, then reopen on a later cycle.
+                if (mode == LcdMode.Metrics
+                    && _turzxSilentPushes >= TurzxSilentPushesBeforeReplug
+                    && Environment.TickCount64 >= _turzxUsbReplugAfter)
+                {
+                    _log?.Invoke($"Turzx: panel stopped answering for {_turzxSilentPushes} pushes "
+                        + "(silent freeze — writes still succeeding) — recovering via USB re-enumeration");
+                    _turzxUsbReplugAfter = Environment.TickCount64 + 60_000;
+                    _turzxSilentPushes = 0;
+                    _turzxStatusText = "Recovering (screen stopped responding)";
+                    try { _turzx?.Dispose(); } catch { /* wedged; discarding anyway */ }
+                    _turzx = null;
+                    _turzxShownKey = null;
+                    _turzxAppliedBrightness = -1;
+                    TryReplugTurzx();
+                    _turzxRetryAt = Environment.TickCount64 + 6_000; // let the node re-enumerate
+                    continue;
                 }
 
                 _turzxStatusText = $"Connected · {_turzx.ComPort}"
