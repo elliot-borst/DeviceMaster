@@ -43,6 +43,59 @@ public static class UsbDeviceRestarter
             : null;
     }
 
+    /// <summary>
+    /// Every present USB device-node instance id for the given VID:PID — INCLUDING nodes in an error
+    /// state (Code 10/43 "device cannot start" / "descriptor request failed"). Such a node exposes NO
+    /// device interface, so it is invisible to interface-GUID enumeration (WinUSB, etc.), yet it can
+    /// still be reset by its own instance id via <see cref="Restart"/>. CfgMgr lists every present
+    /// devnode regardless of driver status, so this is how a wedged device is found and reset directly
+    /// instead of cycling its (often shared) parent hub. Empty if the device is truly off the bus.
+    /// </summary>
+    public static IReadOnlyList<string> FindInstanceIds(ushort vid, ushort pid)
+    {
+        const uint flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
+        if (CM_Get_Device_ID_List_SizeW(out var length, "USB", flags) != 0 || length < 2)
+        {
+            return [];
+        }
+
+        var buffer = new char[length];
+        if (CM_Get_Device_ID_ListW("USB", buffer, (uint)buffer.Length, flags) != 0)
+        {
+            return [];
+        }
+
+        // multi-sz: null-separated instance ids, double-null terminated. Keep only this VID:PID.
+        var prefix = $@"USB\VID_{vid:X4}&PID_{pid:X4}\";
+        var result = new List<string>();
+        var start = 0;
+        for (var i = 0; i < buffer.Length; i++)
+        {
+            if (buffer[i] != '\0')
+            {
+                continue;
+            }
+
+            if (i > start)
+            {
+                var id = new string(buffer, start, i - start);
+                if (id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(id);
+                }
+            }
+
+            if (i + 1 >= buffer.Length || buffer[i + 1] == '\0')
+            {
+                break;
+            }
+
+            start = i + 1;
+        }
+
+        return result;
+    }
+
     /// <summary>Disables the device node, waits, and re-enables it. Throws on failure.</summary>
     public static void Restart(string pnpInstanceId, int settleMs = 2000)
     {
@@ -94,6 +147,8 @@ public static class UsbDeviceRestarter
         }
     }
 
+    private const uint CM_GETIDLIST_FILTER_ENUMERATOR = 0x00000001;
+    private const uint CM_GETIDLIST_FILTER_PRESENT = 0x00000100;
     private const uint DIF_PROPERTYCHANGE = 0x12;
     private const uint DICS_ENABLE = 0x01;
     private const uint DICS_DISABLE = 0x02;
@@ -142,6 +197,12 @@ public static class UsbDeviceRestarter
 
     [DllImport("setupapi.dll", SetLastError = true)]
     private static extern bool SetupDiDestroyDeviceInfoList(IntPtr deviceInfoSet);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CM_Get_Device_ID_List_SizeW(out uint length, string filter, uint flags);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CM_Get_Device_ID_ListW(string filter, char[] buffer, uint bufferLen, uint flags);
 
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
     private static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, uint flags);

@@ -12,6 +12,7 @@ namespace DeviceMaster.Devices.LianLi;
 /// </summary>
 public sealed class Slv3Controller : IDisposable
 {
+    private const ushort Vid = 0x0416;
     private const ushort TxPid = 0x8040;
     private const ushort RxPid = 0x8041;
     // Poll timeouts stay SHORT: polling holds the same gate as the 800 ms keepalive (the
@@ -565,47 +566,43 @@ public sealed class Slv3Controller : IDisposable
     /// </summary>
     public static int RestartDongleDevices(Action<string>? log = null)
     {
-        var candidates = WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid)
-            .Where(c => c.UsbId.Pid is TxPid or RxPid && KnownDeviceRegistry.IsWriteAllowed(c.UsbId))
-            .ToList();
-
         var restarted = 0;
-        foreach (var (path, usbId) in candidates)
+        var parentsToCycle = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Reset each dongle by its OWN node. A dongle whose firmware has wedged stays on the bus in an
+        // ERROR state (Code 10/43 — seen live 2026-07-13: the TX dropped its WinUSB interface and showed
+        // as "Error" while the RX was fine). Interface-GUID enumeration is BLIND to an errored node, so
+        // resolve each expected PID by VID:PID via PnP (which lists errored nodes) and disable/enable THAT
+        // node — targeted, and it actually clears the error, unlike cycling the shared parent hub. Only a
+        // dongle PnP cannot see at all is truly off the bus, and only then do we fall back to the hub.
+        foreach (var (pid, role, lastParent) in new[]
+                 {
+                     (TxPid, "TX", _lastTxParentId),
+                     (RxPid, "RX", _lastRxParentId),
+                 })
         {
-            if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(path) is not { } instanceId)
+            var nodes = Core.Discovery.UsbDeviceRestarter.FindInstanceIds(Vid, pid);
+            if (nodes.Count == 0)
             {
-                log?.Invoke($"SL V3 dongle {usbId}: could not derive a device instance id from its path — skipped");
+                if (lastParent is not null)
+                {
+                    parentsToCycle.Add(lastParent); // truly absent — its port must re-enumerate
+                }
+
                 continue;
             }
 
-            log?.Invoke($"SL V3 dongle {usbId}: restarting its USB device node (software replug)");
-            Core.Discovery.UsbDeviceRestarter.Restart(instanceId);
-            restarted++;
-        }
-
-        // vanished dongles: cycle the hub whose port they were last seen on
-        var parentsToCycle = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!candidates.Any(c => c.UsbId.Pid == TxPid) && _lastTxParentId is { } txParent)
-        {
-            parentsToCycle.Add(txParent);
-        }
-
-        if (!candidates.Any(c => c.UsbId.Pid == RxPid) && _lastRxParentId is { } rxParent)
-        {
-            parentsToCycle.Add(rxParent);
-        }
-
-        if (candidates.Count < 2 && parentsToCycle.Count == 0)
-        {
-            // no remembered topology (fresh process) — assume the pair shares a hub and use a
-            // present sibling's parent
-            foreach (var (path, _) in candidates)
+            foreach (var instanceId in nodes)
             {
-                if (Core.Discovery.UsbDeviceRestarter.InstanceIdFromInterfacePath(path) is { } id
-                    && Core.Discovery.UsbDeviceRestarter.TryGetParentInstanceId(id) is { } parent)
+                log?.Invoke($"SL V3 {role} dongle 0416:{pid:X4}: restarting its USB device node ({instanceId})");
+                try
                 {
-                    parentsToCycle.Add(parent);
-                    break;
+                    Core.Discovery.UsbDeviceRestarter.Restart(instanceId);
+                    restarted++;
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke($"SL V3 {role} node restart failed: {ex.Message}");
                 }
             }
         }
@@ -619,7 +616,7 @@ public sealed class Slv3Controller : IDisposable
                 continue;
             }
 
-            log?.Invoke($"SL V3 dongle missing from the USB bus — restarting its parent hub ({parent}) to re-enumerate the port");
+            log?.Invoke($"SL V3 dongle is off the USB bus entirely — restarting its parent hub ({parent}) to re-enumerate the port");
             try
             {
                 Core.Discovery.UsbDeviceRestarter.Restart(parent, settleMs: 3000);
