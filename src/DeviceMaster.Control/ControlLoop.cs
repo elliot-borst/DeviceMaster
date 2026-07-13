@@ -1310,7 +1310,12 @@ public sealed class ControlLoop : IDisposable
                             var pushStart = Environment.TickCount64;
                             var push = _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
-                            _turzxNextPushAt = Environment.TickCount64 + TurzxFullFrameGapMs; // idle the link
+                            // Full frames (~2.3 s / 3.7 MB) can't go back-to-back — they saturate the
+                            // CDC link and drop the panel off the bus — so idle the link after one.
+                            // Rectangle partials are a few KB, so they push freely (~1 s cadence).
+                            _turzxNextPushAt = push.Kind == TurzxPushKind.Full
+                                ? Environment.TickCount64 + TurzxFullFrameGapMs
+                                : Environment.TickCount64;
                             _hbLastPushMs = Environment.TickCount64 - pushStart;
                             _hbLastAckBytes = push.AckBytes;
                             if (push.Kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;

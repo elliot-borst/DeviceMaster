@@ -218,4 +218,87 @@ public class TurzxProtocolTests
 
         Assert.Null(TurzxProtocol.BuildPartialSpans(prev, cur));
     }
+
+    [Fact]
+    public void FindChangedRects_IdenticalFramesAreEmpty()
+    {
+        var frame = NativeFrame();
+        Assert.Empty(TurzxProtocol.FindChangedRects(frame, (byte[])frame.Clone())!);
+    }
+
+    [Fact]
+    public void FindChangedRects_WrongSizeReturnsNull()
+    {
+        Assert.Null(TurzxProtocol.FindChangedRects(new byte[10], new byte[10]));
+    }
+
+    [Fact]
+    public void FindChangedRects_SingleChangedPixelIsOneUnitRect()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 10, row: 5, value: 0xFF);
+
+        var rects = TurzxProtocol.FindChangedRects(prev, cur)!;
+
+        Assert.Single(rects);
+        Assert.Equal(new TurzxProtocol.ChangedRect(Top: 5, Left: 10, Width: 1, Height: 1), rects[0]);
+    }
+
+    [Fact]
+    public void FindChangedRects_VerticallyFarChangesSplitIntoTwoRects()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 10, row: 0, value: 0xFF);
+        SetPixel(cur, col: 10, row: 100, value: 0xFF); // gap ≫ RowBandGap
+
+        var rects = TurzxProtocol.FindChangedRects(prev, cur)!;
+
+        Assert.Equal(2, rects.Count);
+        Assert.Equal(0, rects[0].Top);
+        Assert.Equal(100, rects[1].Top);
+    }
+
+    [Fact]
+    public void FindChangedRects_NearbyRowsMergeIntoOneBand()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        SetPixel(cur, col: 10, row: 0, value: 0xFF);
+        SetPixel(cur, col: 10, row: 10, value: 0xFF); // gap ≤ RowBandGap ⇒ one band
+
+        var rects = TurzxProtocol.FindChangedRects(prev, cur)!;
+
+        Assert.Single(rects);
+        Assert.Equal(0, rects[0].Top);
+        Assert.Equal(11, rects[0].Height); // rows 0..10 inclusive
+    }
+
+    [Fact]
+    public void FindChangedRects_WholeFrameChangedReturnsNull()
+    {
+        var prev = NativeFrame();
+        var cur = NativeFrame();
+        Array.Fill(cur, (byte)0xFF);
+
+        Assert.Null(TurzxProtocol.FindChangedRects(prev, cur));
+    }
+
+    [Fact]
+    public void BuildRectangleSpans_OneUniformTuplePerRow()
+    {
+        var cur = NativeFrame();
+        SetPixel(cur, col: 3, row: 2, value: 0xAB); // top-left pixel of the rect
+        var rect = new TurzxProtocol.ChangedRect(Top: 2, Left: 3, Width: 4, Height: 5);
+
+        var raw = TurzxProtocol.BuildRectangleSpans(cur, rect);
+
+        var tuple = 3 + 2 + (4 * 4); // addr + width + 4 BGRA pixels
+        Assert.Equal(5 * tuple, raw.Length);
+        Assert.Equal((2 * TurzxProtocol.ScreenWidth) + 3, SpanAddr(raw, 0)); // row 2, col 3
+        Assert.Equal(4, SpanWidth(raw, 0));
+        Assert.Equal((3 * TurzxProtocol.ScreenWidth) + 3, SpanAddr(raw, tuple)); // next row, addr += width-of-panel
+        Assert.Equal(0xAB, raw[5]); // first payload byte = the pixel at (row 2, col 3)
+    }
 }

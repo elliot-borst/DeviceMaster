@@ -203,6 +203,141 @@ public static class TurzxProtocol
         return a[o] == b[o] && a[o + 1] == b[o + 1] && a[o + 2] == b[o + 2] && a[o + 3] == b[o + 3];
     }
 
+    /// <summary>A changed rectangular region in native portrait pixel coords, for one dense UPDATE_BITMAP.</summary>
+    public readonly record struct ChangedRect(int Top, int Left, int Width, int Height);
+
+    /// <summary>Consecutive changed rows this close vertically are merged into one band/rectangle.</summary>
+    public const int RowBandGap = 24;
+
+    /// <summary>Beyond this many rectangles, or this fraction of the frame changed, a full frame is cheaper.</summary>
+    public const int MaxRects = 12;
+
+    /// <summary>
+    /// Diffs two native BGRA frames into a SMALL set of DENSE rectangles — the shape the panel
+    /// actually paints. Unlike <see cref="BuildPartialSpans"/> (sparse multi-run tuples, which this
+    /// rom-1.90 panel ACKs but never renders), each rectangle here is a contiguous block of rows of
+    /// uniform width, exactly matching the reference's <c>_generate_update_image</c> (one rectangle
+    /// per UPDATE_BITMAP). Changed rows within <see cref="RowBandGap"/> of each other are grouped into
+    /// one band spanning min→max changed column. Returns null when too much changed / too many bands
+    /// (caller heals with a full frame), or empty when nothing changed.
+    /// </summary>
+    public static IReadOnlyList<ChangedRect>? FindChangedRects(ReadOnlySpan<byte> prev, ReadOnlySpan<byte> cur)
+    {
+        const int bpp = 4;
+        const int stride = ScreenWidth * bpp;
+        if (cur.Length != stride * ScreenHeight || prev.Length != cur.Length)
+        {
+            return null; // unexpected size — heal with a full frame
+        }
+
+        var rects = new List<ChangedRect>();
+        // open band: [top, bottom] rows, [minCol, maxCol] changed columns
+        var haveBand = false;
+        int bandTop = 0, bandBottom = 0, bandMinCol = 0, bandMaxCol = 0;
+        long totalArea = 0;
+
+        void Flush()
+        {
+            if (!haveBand)
+            {
+                return;
+            }
+
+            rects.Add(new ChangedRect(bandTop, bandMinCol, bandMaxCol - bandMinCol + 1, bandBottom - bandTop + 1));
+            totalArea += (long)(bandMaxCol - bandMinCol + 1) * (bandBottom - bandTop + 1);
+            haveBand = false;
+        }
+
+        for (var row = 0; row < ScreenHeight; row++)
+        {
+            var ro = row * stride;
+            var curRow = cur.Slice(ro, stride);
+            var prevRow = prev.Slice(ro, stride);
+            if (curRow.SequenceEqual(prevRow))
+            {
+                continue;
+            }
+
+            var minCol = -1;
+            var maxCol = -1;
+            for (var px = 0; px < ScreenWidth; px++)
+            {
+                if (!PixelEqual(curRow, prevRow, px))
+                {
+                    if (minCol < 0)
+                    {
+                        minCol = px;
+                    }
+
+                    maxCol = px;
+                }
+            }
+
+            if (minCol < 0)
+            {
+                continue; // row differs only in ignored bytes — treat as unchanged
+            }
+
+            if (haveBand && row - bandBottom <= RowBandGap)
+            {
+                bandBottom = row;
+                if (minCol < bandMinCol) bandMinCol = minCol;
+                if (maxCol > bandMaxCol) bandMaxCol = maxCol;
+            }
+            else
+            {
+                Flush();
+                haveBand = true;
+                bandTop = bandBottom = row;
+                bandMinCol = minCol;
+                bandMaxCol = maxCol;
+            }
+        }
+
+        Flush();
+
+        if (rects.Count == 0)
+        {
+            return [];
+        }
+
+        if (rects.Count > MaxRects || totalArea > (long)ScreenWidth * ScreenHeight / 2)
+        {
+            return null; // too fragmented / too much changed — a full frame is cheaper and cleaner
+        }
+
+        return rects;
+    }
+
+    /// <summary>
+    /// Builds the raw span stream for ONE dense rectangle: for every row of the rectangle, a single
+    /// run <c>[3-byte BE addr = row*ScreenWidth + Left][2-byte BE Width][Width×4 BGRA]</c>. Feed this
+    /// to <see cref="BuildUpdateHeader"/> / <see cref="BuildUpdatePixels"/> exactly like a partial —
+    /// it is the reference's uniform-width rectangle, not our sparse multi-run.
+    /// </summary>
+    public static byte[] BuildRectangleSpans(ReadOnlySpan<byte> cur, ChangedRect rect)
+    {
+        const int bpp = 4;
+        const int stride = ScreenWidth * bpp;
+        var rowBytes = rect.Width * bpp;
+        var raw = new byte[rect.Height * (5 + rowBytes)];
+        var o = 0;
+        for (var r = 0; r < rect.Height; r++)
+        {
+            var row = rect.Top + r;
+            var addr = (row * ScreenWidth) + rect.Left;
+            raw[o++] = (byte)(addr >> 16);
+            raw[o++] = (byte)(addr >> 8);
+            raw[o++] = (byte)addr;
+            raw[o++] = (byte)(rect.Width >> 8);
+            raw[o++] = (byte)rect.Width;
+            cur.Slice((row * stride) + (rect.Left * bpp), rowBytes).CopyTo(raw.AsSpan(o));
+            o += rowBytes;
+        }
+
+        return raw;
+    }
+
     /// <summary>
     /// Interleaves a single NULL byte after every 249 bytes of BGRA data — the reference's
     /// <c>b'\x00'.join(chunked(bgra_data, 249))</c> framing for the full-frame payload.

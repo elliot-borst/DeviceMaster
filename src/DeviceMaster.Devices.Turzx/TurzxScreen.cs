@@ -74,12 +74,14 @@ public sealed class TurzxScreen : IDisposable
     private const int FullFrameEvery = 30;
 
     /// <summary>
-    /// 0xCC partial (UPDATE_BITMAP) updates are DISABLED on this panel: verified live 2026-07-13,
-    /// this rom-1.90 unit ACKs partial commands but never paints them — only full DISPLAY_BITMAP
-    /// frames render (cf. turing-smart-screen-python issue #724, "rom-1.90 pixel encoding", and the
-    /// reference only ever sends one dense rectangle per UPDATE_BITMAP, not our multi-run spans). So
-    /// we push full frames exclusively. They are ~2.3 s each, so the CALLER must throttle the push
-    /// cadence — back-to-back full frames saturate the CDC endpoint and knock the panel off the bus.
+    /// Partial (UPDATE_BITMAP / 0xCC) updates — DISABLED, because the dev rig's rom-1.90 panel ACKs
+    /// them but NEVER PAINTS them (verified live 2026-07-13, both our v73 SPARSE multi-run spans AND
+    /// the reference's DENSE-RECTANGLE shape via <see cref="TurzxProtocol.FindChangedRects"/> — the
+    /// screen stays frozen while ack stays healthy; cf. turing-smart-screen-python #724 "rom-1.90 pixel
+    /// encoding"). Only full DISPLAY_BITMAP frames render, so we push those exclusively (the caller
+    /// throttles them so a ~3.7 MB full frame never saturates the Full-Speed CDC link and drops the
+    /// bus). The partial path is kept and tested behind this switch: a different panel/rom that honors
+    /// UPDATE_BITMAP could set this true for ~1 s refresh at a few KB per push instead of ~5 s.
     /// </summary>
     private const bool UsePartialUpdates = false;
 
@@ -257,15 +259,15 @@ public sealed class TurzxScreen : IDisposable
         // First frame after (re)connect must be a full DISPLAY_BITMAP to establish the framebuffer;
         // then push only the changed pixels. A periodic full frame heals any dropped region.
         var full = !UsePartialUpdates || _prevNative is null || _framesSinceFull >= FullFrameEvery;
-        byte[]? spans = null;
+        IReadOnlyList<TurzxProtocol.ChangedRect>? rects = null;
         if (!full)
         {
-            spans = TurzxProtocol.BuildPartialSpans(_prevNative!, native);
-            if (spans is null)
+            rects = TurzxProtocol.FindChangedRects(_prevNative!, native);
+            if (rects is null)
             {
-                full = true; // more than half the frame changed — a full frame is cheaper
+                full = true; // too fragmented / too much changed — a full frame is cheaper
             }
-            else if (spans.Length == 0)
+            else if (rects.Count == 0)
             {
                 _prevNative = native; // nothing visibly changed
                 return new TurzxPushResult(TurzxPushKind.Unchanged, 0);
@@ -280,7 +282,12 @@ public sealed class TurzxScreen : IDisposable
         }
         else
         {
-            ackBytes = SendPartialNative(spans!);
+            ackBytes = 0;
+            foreach (var rect in rects!) // one dense-rectangle UPDATE_BITMAP per changed region
+            {
+                ackBytes += SendRectangleNative(native, rect);
+            }
+
             _framesSinceFull++;
         }
 
@@ -317,13 +324,15 @@ public sealed class TurzxScreen : IDisposable
     }
 
     /// <summary>
-    /// Partial push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(changed spans) → QUERY_STATUS.
-    /// Returns the total status bytes the panel replied with during the push (liveness signal).
+    /// One dense-rectangle push: SEND_PAYLOAD(update header) → SEND_PAYLOAD(rectangle rows) →
+    /// QUERY_STATUS. One UPDATE_BITMAP per changed rectangle, exactly as the reference does. Returns
+    /// the total status bytes the panel replied with during the push (liveness signal).
     /// </summary>
-    private int SendPartialNative(byte[] rawSpans)
+    private int SendRectangleNative(byte[] native, TurzxProtocol.ChangedRect rect)
     {
-        Write(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdateHeader(rawSpans.Length, _updateCount)));
-        var ackBytes = WriteFramePayload(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdatePixels(rawSpans)));
+        var raw = TurzxProtocol.BuildRectangleSpans(native, rect);
+        Write(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdateHeader(raw.Length, _updateCount)));
+        var ackBytes = WriteFramePayload(TurzxProtocol.BuildSendPayload(TurzxProtocol.BuildUpdatePixels(raw)));
         Write(TurzxProtocol.BuildCommand(TurzxProtocol.QueryStatus));
         ackBytes += DrainInput();
         _updateCount++;
