@@ -1110,6 +1110,8 @@ public sealed class ControlLoop : IDisposable
     private bool _turzxStatsLogged;      // log the gathered dashboard stats once, for verification
     private Sensors.PresentMonFpsReader? _fps; // PresentMon-based FPS for the dashboard
     private bool _fpsStarted;
+    private long _fpsHealthyAt;     // last time PresentMon yielded an FPS; drives the stale self-heal
+    private long _fpsRestartAfter;  // rate-limit PresentMon (re)starts
     private volatile string? _turzxStatusText;
 
     // worker-thread-only state
@@ -1163,9 +1165,28 @@ public sealed class ControlLoop : IDisposable
                 {
                     _fpsStarted = true; // start the PresentMon monitor once; null if it can't be launched/fetched
                     _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
+                    _fpsHealthyAt = Environment.TickCount64;
                 }
 
                 var fps = _fps?.CurrentFps() ?? Sensors.RtssFpsReader.ReadCurrentFps();
+
+                // Self-heal: with the "busiest renderer" selection PresentMon yields a number whenever it's
+                // alive (the compositor always presents), so a sustained null means the capture died — e.g.
+                // an app update/restart left an orphaned ETW session. (Re)start it, rate-limited, so FPS
+                // recovers on its own instead of staying blank.
+                var fpsNow = Environment.TickCount64;
+                if (fps is not null)
+                {
+                    _fpsHealthyAt = fpsNow;
+                }
+                else if (fpsNow - _fpsHealthyAt > 15_000 && fpsNow >= _fpsRestartAfter)
+                {
+                    _fpsRestartAfter = fpsNow + 60_000;
+                    _fpsHealthyAt = fpsNow;
+                    _log?.Invoke("FPS monitor: no frames for 15 s — (re)starting PresentMon");
+                    try { _fps?.Dispose(); } catch { /* replacing it anyway */ }
+                    _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
+                }
                 var dashKey = TurzxDashboardKey(stats, fps);
                 if (dashKey != _turzxDashKey) // only re-render when a displayed value actually changed
                 {

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DeviceMaster.Sensors;
@@ -30,30 +29,29 @@ public sealed class PresentMonFpsReader : IDisposable
     // Processes that always "present" (the desktop compositor, the shell, ourselves) but are never
     // the game whose FPS we want. dwm.exe in particular presents at the refresh rate right alongside
     // a composed game, so it must never win the "what is presenting" pick.
+    // Compositor + shell: excluded from the primary "busiest app" pick so a real app (game/video/
+    // any self-rendering window) wins over the desktop. dwm.exe is still eligible as the LAST resort
+    // (its rate = the monitor refresh), so the readout never blanks on an idle desktop.
     private static readonly HashSet<string> NonGame = new(StringComparer.OrdinalIgnoreCase)
     {
         "dwm.exe", "explorer.exe", "DeviceMaster.exe", "ApplicationFrameHost.exe", "SearchHost.exe",
         "ShellExperienceHost.exe", "StartMenuExperienceHost.exe", "TextInputHost.exe", "SystemSettings.exe",
     };
 
+    private const string Self = "DeviceMaster.exe"; // never report our own present rate
+
     private readonly Action<string>? _log;
     private readonly string _sessionName;
     private readonly object _gate = new();
     private readonly Dictionary<int, Queue<(long Tick, double Ms)>> _byPid = new();
     private readonly Dictionary<int, string> _names = new(); // pid → Application, to skip non-game presenters
-    private int _fpsPid;                                     // the game we are locked onto (survives alt-tab)
+    private int _fpsPid;                                     // last selected presenter (recomputed each read)
 
     private Thread? _reader;
     private Process? _proc;
     private string? _csvPath;
     private volatile bool _running;
     private bool _loggedFrames;
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
 
     private PresentMonFpsReader(Action<string>? log, string sessionName)
     {
@@ -111,87 +109,55 @@ public sealed class PresentMonFpsReader : IDisposable
     }
 
     /// <summary>
-    /// FPS of the game (rolling ~60-frame average), or null if nothing game-like is presenting.
-    ///
-    /// This does NOT hard-gate on the live foreground PID the way a naïve reader would — that blanks
-    /// the moment an alt-tab or a fullscreen⇄composed transition makes the foreground window's PID
-    /// stop lining up with the presenting PID, and then fails to re-acquire. Instead we lock onto the
-    /// game and keep reporting it (StarMaster stays locked to its target process the same way): prefer
-    /// the foreground process when it is itself a game that's presenting, otherwise keep reporting the
-    /// process we locked onto while it is still presenting, otherwise re-acquire the dominant non-system
-    /// presenter. dwm.exe/the shell/ourselves are excluded so the compositor can never win the pick.
+    /// FPS to display: the rolling ~2 s average of whatever is RENDERING MOST right now, or null only if
+    /// nothing is presenting at all. Window focus is ignored on purpose — the reading stays on your game/
+    /// video no matter which window you click into, and never blanks on an alt-tab.
     /// </summary>
     public int? CurrentFps()
     {
-        var fg = ForegroundPid();
         var now = Environment.TickCount64;
         lock (_gate)
         {
-            _fpsPid = SelectFpsPid(_byPid, _names, fg, _fpsPid, now);
+            _fpsPid = SelectFpsPid(_byPid, _names, now);
             return _fpsPid != 0 ? RollingFps(_byPid[_fpsPid], now) : null;
         }
     }
 
     /// <summary>
-    /// Chooses which process's FPS to report (0 = none), pure so it can be unit-tested. The order is
-    /// what makes the reading survive an alt-tab or a fullscreen⇄composed transition instead of
-    /// blanking: (1) the foreground window if it is itself a game presenting now; else (2) the game we
-    /// were already locked onto while it keeps presenting (foreground may briefly not line up with the
-    /// presenting PID); else (3) re-acquire the non-system process presenting the most frames. Entries
-    /// in <see cref="NonGame"/> (dwm/shell/ourselves) are never eligible — dwm.exe presents at the
-    /// refresh rate right alongside a composed game and must never win.
+    /// Which process's FPS to report (0 = nothing presenting), pure so it can be unit-tested.
+    /// "Whatever's rendering most": the app presenting the most frames in the last <see cref="FreshMs"/>,
+    /// independent of window focus. The compositor + shell (<see cref="NonGame"/>) are excluded from that
+    /// pick so a real app always wins over the desktop; but if NOTHING app-like is presenting we fall back
+    /// to the busiest presenter of all — dwm.exe, the compositor, i.e. the monitor's refresh rate — so an
+    /// idle desktop shows a number instead of blanking.
     /// </summary>
     public static int SelectFpsPid(
         IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
         IReadOnlyDictionary<int, string> names,
-        int foregroundPid,
-        int lockedPid,
         long now)
     {
-        if (IsPresentingGame(byPid, names, foregroundPid, now))
-        {
-            return foregroundPid;
-        }
-
-        if (lockedPid != 0 && IsPresentingGame(byPid, names, lockedPid, now))
-        {
-            return lockedPid;
-        }
-
-        return DominantGame(byPid, names, now);
+        var app = DominantPresenter(byPid, names, now, excludeInfrastructure: true);
+        return app != 0 ? app : DominantPresenter(byPid, names, now, excludeInfrastructure: false);
     }
 
-    private static int ForegroundPid()
-    {
-        try { GetWindowThreadProcessId(GetForegroundWindow(), out var p); return p > 0 ? p : 0; }
-        catch { return 0; }
-    }
-
-    /// <summary>True if <paramref name="pid"/> is a non-system process presenting ≥5 frames recently.</summary>
-    private static bool IsPresentingGame(
+    /// <summary>
+    /// The process presenting the most frames in the last <see cref="FreshMs"/> (0 = fewer than 5 from
+    /// anything eligible). With <paramref name="excludeInfrastructure"/> the compositor/shell
+    /// (<see cref="NonGame"/>) are skipped so a real app wins; without it only ourselves are skipped, so
+    /// dwm.exe (the desktop compositor = refresh rate) is eligible as the never-blank last resort.
+    /// </summary>
+    private static int DominantPresenter(
         IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
         IReadOnlyDictionary<int, string> names,
-        int pid,
-        long now)
-    {
-        if (pid <= 0 || (names.TryGetValue(pid, out var name) && NonGame.Contains(name)))
-        {
-            return false;
-        }
-
-        return byPid.TryGetValue(pid, out var q) && FreshCount(q, now) >= 5;
-    }
-
-    /// <summary>The non-system process with the most frames presented in the last <see cref="FreshMs"/>.</summary>
-    private static int DominantGame(
-        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
-        IReadOnlyDictionary<int, string> names,
-        long now)
+        long now,
+        bool excludeInfrastructure)
     {
         int best = 0, bestCount = 0;
         foreach (var (pid, q) in byPid)
         {
-            if (names.TryGetValue(pid, out var name) && NonGame.Contains(name))
+            if (names.TryGetValue(pid, out var name)
+                && (name.Equals(Self, StringComparison.OrdinalIgnoreCase)
+                    || (excludeInfrastructure && NonGame.Contains(name))))
             {
                 continue;
             }
