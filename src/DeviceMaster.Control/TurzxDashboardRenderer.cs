@@ -95,12 +95,32 @@ public static class TurzxDashboardRenderer
             (FmtOrDash(power, "W"), white),
         };
 
-        var colW = areaWidth / 5f;
+        // The name is longer than the metrics, so give its column extra width; then size EVERY cell
+        // with one shared font (the largest that fits them all in their own columns) so the name
+        // renders at the same size as its metrics instead of being shrunk to a metric-width column.
+        var weights = new[] { 1.8f, 1f, 1f, 1f, 1f };
+        var totalWeight = weights.Sum();
+        var colW = new float[cells.Length];
+        var colX = new float[cells.Length];
+        var x = xLeft;
         for (var i = 0; i < cells.Length; i++)
         {
-            using var font = FitFont(g, cells[i].Text, rowH * 0.66f, colW * 0.94f, FontStyle.Bold);
+            colW[i] = areaWidth * weights[i] / totalWeight;
+            colX[i] = x;
+            x += colW[i];
+        }
+
+        var size = rowH * 0.66f;
+        for (var i = 0; i < cells.Length; i++)
+        {
+            size = Math.Min(size, MaxFitSize(g, cells[i].Text, size, colW[i] * 0.94f));
+        }
+
+        using var font = new Font("Segoe UI", Math.Max(size, 10f), FontStyle.Bold, GraphicsUnit.Pixel);
+        for (var i = 0; i < cells.Length; i++)
+        {
             using var brush = new SolidBrush(cells[i].Color);
-            g.DrawString(cells[i].Text, font, brush, new RectangleF(xLeft + (i * colW), yTop, colW, rowH), center);
+            g.DrawString(cells[i].Text, font, brush, new RectangleF(colX[i], yTop, colW[i], rowH), center);
         }
     }
 
@@ -128,21 +148,24 @@ public static class TurzxDashboardRenderer
 
     /// <summary>Largest font ≤ <paramref name="startSize"/> px whose text fits <paramref name="maxWidth"/>.</summary>
     private static Font FitFont(Graphics g, string text, float startSize, float maxWidth, FontStyle style)
+        => new("Segoe UI", MaxFitSize(g, text, startSize, maxWidth), style, GraphicsUnit.Pixel);
+
+    /// <summary>Largest bold font size ≤ <paramref name="startSize"/> px whose text fits <paramref name="maxWidth"/>.</summary>
+    private static float MaxFitSize(Graphics g, string text, float startSize, float maxWidth)
     {
         var size = Math.Max(startSize, 10f);
         while (size > 12f)
         {
-            var font = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
+            using var font = new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel);
             if (string.IsNullOrEmpty(text) || g.MeasureString(text, font).Width <= maxWidth)
             {
-                return font;
+                return size;
             }
 
-            font.Dispose();
             size *= 0.92f;
         }
 
-        return new Font("Segoe UI", 12f, style, GraphicsUnit.Pixel);
+        return 12f;
     }
 
     private static Color ToColor((byte R, byte G, byte B) c) => Color.FromArgb(c.R, c.G, c.B);
