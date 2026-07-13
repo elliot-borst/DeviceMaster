@@ -73,6 +73,16 @@ public sealed class TurzxScreen : IDisposable
     /// </summary>
     private const int FullFrameEvery = 30;
 
+    /// <summary>
+    /// 0xCC partial (UPDATE_BITMAP) updates are DISABLED on this panel: verified live 2026-07-13,
+    /// this rom-1.90 unit ACKs partial commands but never paints them — only full DISPLAY_BITMAP
+    /// frames render (cf. turing-smart-screen-python issue #724, "rom-1.90 pixel encoding", and the
+    /// reference only ever sends one dense rectangle per UPDATE_BITMAP, not our multi-run spans). So
+    /// we push full frames exclusively. They are ~2.3 s each, so the CALLER must throttle the push
+    /// cadence — back-to-back full frames saturate the CDC endpoint and knock the panel off the bus.
+    /// </summary>
+    private const bool UsePartialUpdates = false;
+
     private readonly SerialPort _port;
     private bool _initialized;
     private byte[]? _prevNative;   // last native frame pushed, for partial-update diffing
@@ -246,7 +256,7 @@ public sealed class TurzxScreen : IDisposable
 
         // First frame after (re)connect must be a full DISPLAY_BITMAP to establish the framebuffer;
         // then push only the changed pixels. A periodic full frame heals any dropped region.
-        var full = _prevNative is null || _framesSinceFull >= FullFrameEvery;
+        var full = !UsePartialUpdates || _prevNative is null || _framesSinceFull >= FullFrameEvery;
         byte[]? spans = null;
         if (!full)
         {

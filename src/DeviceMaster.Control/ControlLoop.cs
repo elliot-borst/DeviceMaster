@@ -1120,6 +1120,8 @@ public sealed class ControlLoop : IDisposable
     private int _turzxWriteFailures;      // consecutive frame-write failures (a wedged CDC gadget)
     private long _turzxUsbReplugAfter;    // rate-limit the software-replug recovery
     private int _turzxSilentPushes;       // consecutive pushes the panel didn't answer (silent freeze)
+    private long _turzxNextPushAt;        // USB-safety throttle: earliest time the next full frame may go out
+    private int _turzxHelloFailures;      // consecutive HELLO misses (panel still booting vs genuinely unsupported)
     private int _hbPartial, _hbFull, _hbNoNew; // Turzx worker heartbeat counters (freeze diagnostic)
     private long _hbLastPushMs, _hbAt;         // last push duration, next heartbeat time
     private int _hbLastAckBytes;               // status bytes the panel replied with on the last push
@@ -1132,6 +1134,16 @@ public sealed class ControlLoop : IDisposable
     /// silence before we act, high enough that an occasional missed status reply can't false-trigger.
     /// </summary>
     private const int TurzxSilentPushesBeforeReplug = 20;
+
+    /// <summary>
+    /// Idle gap left AFTER each full-frame push before the next one may go out. Full frames are
+    /// ~2.3 s / 3.7 MB each; sending them back-to-back saturates the Full-Speed CDC link and knocks
+    /// the panel off the USB bus (seen live 2026-07-13). This keeps the link roughly half idle, so
+    /// the dashboard refreshes every ~5 s while the panel stays connected. The ~1 s partial-update
+    /// path that would avoid this is disabled — this rom-1.90 panel ACKs but never paints partials
+    /// (see <see cref="TurzxScreen"/>.UsePartialUpdates).
+    /// </summary>
+    private const int TurzxFullFrameGapMs = 2_500;
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
     private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
@@ -1254,6 +1266,7 @@ public sealed class ControlLoop : IDisposable
                     _turzxShownKey = null;
                     _turzxAppliedBrightness = -1;
                     _turzxSilentPushes = 0; // fresh connection — start the liveness count clean
+                    _turzxNextPushAt = 0;   // let the first frame push immediately after (re)open
                     _log?.Invoke($"control: opened the Turzx screen ({_turzx.ComPort})");
                 }
 
@@ -1287,11 +1300,17 @@ public sealed class ControlLoop : IDisposable
 
                         break;
                     case LcdMode.Metrics:
-                        if (frame is not null && _turzxShownKey != key)
+                        // Push the freshest frame only once the USB-safety gap since the last full
+                        // frame has elapsed (full frames are the only thing this panel paints, and
+                        // back-to-back ones drop it off the bus). Until then we hold, then push the
+                        // latest key/frame — so the screen always shows current data, just every ~5 s.
+                        if (frame is not null && _turzxShownKey != key
+                            && Environment.TickCount64 >= _turzxNextPushAt)
                         {
                             var pushStart = Environment.TickCount64;
                             var push = _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
+                            _turzxNextPushAt = Environment.TickCount64 + TurzxFullFrameGapMs; // idle the link
                             _hbLastPushMs = Environment.TickCount64 - pushStart;
                             _hbLastAckBytes = push.AckBytes;
                             if (push.Kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;
@@ -1303,7 +1322,7 @@ public sealed class ControlLoop : IDisposable
                         }
                         else if (frame is not null)
                         {
-                            _hbNoNew++; // a new tick, but the dashboard key is unchanged — nothing to push
+                            _hbNoNew++; // no new content yet, or still inside the inter-frame gap
                         }
 
                         break;
@@ -1317,7 +1336,7 @@ public sealed class ControlLoop : IDisposable
                     _hbAt = Environment.TickCount64 + 8_000;
                     _log?.Invoke($"turzx worker: partial={_hbPartial} full={_hbFull} noNew={_hbNoNew} "
                         + $"ack={_hbLastAckBytes} silent={_turzxSilentPushes} "
-                        + $"lastPushMs={_hbLastPushMs} shownKey={(_turzxShownKey is null ? "none" : "set")}");
+                        + $"lastPushMs={_hbLastPushMs} key=[{_turzxShownKey}]");
                     _hbPartial = _hbFull = _hbNoNew = 0;
                 }
 
@@ -1347,18 +1366,28 @@ public sealed class ControlLoop : IDisposable
                 _turzxStatusText = $"Connected · {_turzx.ComPort}"
                     + (_turzx.RomVersion is { } rom ? $" · ROM {rom}" : "");
                 _turzxWriteFailures = 0; // a clean cycle — the panel is draining our writes again
+                _turzxHelloFailures = 0; // HELLO answered and frames flow — clear the boot-retry count
             }
             catch (TurzxUnsupportedException ex)
             {
-                // the panel is present but not a Turing-protocol device — stop hammering it
-                _turzxStatusText = $"Found on {_turzx?.ComPort ?? "the port"} but not responding to the Turing protocol "
-                    + "— likely a newer 8.8\" revision. Screen control is unavailable on this panel.";
-                _log?.Invoke($"Turzx: {ex.Message}");
+                // HELLO also fails transiently for a few seconds right after the panel resets/reboots
+                // (it comes up on its own wallpaper before it can answer). Condemning it for 5 minutes
+                // on the first miss left a freshly-rebooted panel stuck on that wallpaper (seen live
+                // 2026-07-13). So retry quickly at first — HELLO is a tiny command and we never blast
+                // frames until it answers, so frequent retries can't re-stall the port — and only back
+                // off to the long "unsupported panel" interval after sustained failure.
+                _turzxHelloFailures++;
+                var stillBooting = _turzxHelloFailures < 12; // ~2 min of 10 s retries before we give up
+                var backoffMs = stillBooting ? 10_000 : 120_000;
+                _turzxStatusText = stillBooting
+                    ? "Waiting for the screen to respond…"
+                    : $"Found on {_turzx?.ComPort ?? "the port"} but not answering the Turing protocol — likely a newer 8.8\" revision.";
+                _log?.Invoke($"Turzx: HELLO not answered (#{_turzxHelloFailures}) — retrying in {backoffMs / 1000}s: {ex.Message}");
                 _turzx?.Dispose();
                 _turzx = null;
                 _turzxShownKey = null;
                 _turzxAppliedBrightness = -1;
-                _turzxRetryAt = Environment.TickCount64 + 300_000; // 5 min: no protocol yet, don't re-stall the port
+                _turzxRetryAt = Environment.TickCount64 + backoffMs;
             }
             catch (Exception ex)
             {
