@@ -67,11 +67,14 @@ public static class TurzxDashboardRenderer
             // columns each (name, usage %, temp, memory GB, power W), aligned vertically.
             var rowsX = fpsColW;
             var rowsW = width - fpsColW;
-            DrawRow(g, center, rowsX, rowsW, height * 0.04f, height * 0.26f,
+
+            // Vertically balanced: equal gap above the CPU row, between the two rows, and below the
+            // GPU row. Two 0.26h rows ⇒ 3·gap + 2·0.26 = 1.0 ⇒ gap = 0.16h; CPU at 0.16h, GPU at 0.58h.
+            DrawRow(g, center, rowsX, rowsW, height * 0.16f, height * 0.26f,
                 Shorten(stats.CpuName, dropLeadingNumbers: true), cpuColor,
                 stats.CpuLoadPercent, stats.CpuTempC, stats.RamUsedGb, stats.CpuPowerW, white);
 
-            DrawRow(g, center, rowsX, rowsW, height * 0.70f, height * 0.26f,
+            DrawRow(g, center, rowsX, rowsW, height * 0.58f, height * 0.26f,
                 Shorten(stats.GpuName, dropLeadingNumbers: false), gpuColor,
                 stats.GpuLoadPercent, stats.GpuTempC, stats.VramUsedGb, stats.GpuPowerW, white);
         }

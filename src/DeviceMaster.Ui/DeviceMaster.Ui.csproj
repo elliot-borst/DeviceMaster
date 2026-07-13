@@ -14,7 +14,7 @@
          (GetName().Version.Major), so a pinned AssemblyVersion that lags <Version> makes the
          installed build under-report its version and auto-update in an infinite loop. Leaving
          them unset lets both derive from <Version>, keeping this the single source of truth. -->
-    <Version>85.0.0</Version>
+    <Version>86.0.0</Version>
     <!-- Embedded version info -> Task Manager shows the name (FileDescription/Product)
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>
