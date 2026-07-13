@@ -80,7 +80,15 @@ public sealed class LhmSensorSource : ISensorSource
                     cpu ??= hw;
                     break;
                 case HardwareType.Memory:
-                    mem ??= hw;
+                    // LHM exposes TWO Memory devices, both with a "Memory Used" Data sensor:
+                    // "Virtual Memory" (commit charge, ~total — misleading) and "Total Memory"
+                    // (physical in-use = Task Manager's "In use"). Prefer the physical one, whatever
+                    // the enumeration order, by rejecting the "Virtual" device once a plain one appears.
+                    if (mem is null || mem.Name.Contains("Virtual", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mem = hw;
+                    }
+
                     break;
                 case HardwareType.GpuNvidia:
                 case HardwareType.GpuAmd:

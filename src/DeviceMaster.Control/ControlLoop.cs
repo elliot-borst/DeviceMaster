@@ -1136,14 +1136,17 @@ public sealed class ControlLoop : IDisposable
     private const int TurzxSilentPushesBeforeReplug = 20;
 
     /// <summary>
-    /// Idle gap left AFTER each full-frame push before the next one may go out. Full frames are
-    /// ~2.3 s / 3.7 MB each; sending them back-to-back saturates the Full-Speed CDC link and knocks
-    /// the panel off the USB bus (seen live 2026-07-13). This keeps the link roughly half idle, so
-    /// the dashboard refreshes every ~5 s while the panel stays connected. The ~1 s partial-update
-    /// path that would avoid this is disabled — this rom-1.90 panel ACKs but never paints partials
-    /// (see <see cref="TurzxScreen"/>.UsePartialUpdates).
+    /// Minimum interval between full-frame push STARTS. A full frame is ~2.35 s / 3.7 MB over this
+    /// Full-Speed CDC link (≈1.57 MB/s — the hard throughput limit; the 0xCC partial path that would
+    /// beat it doesn't paint on this panel). Sending frames with no idle saturates the link and drops
+    /// the panel off the bus (seen live 2026-07-13), but the vendor's OWN app runs a 3000 ms loop
+    /// (2.35 s frame + ~0.65 s idle) with no drop — so we pace to the same interval: ~3 s refresh,
+    /// vendor-validated safe. <see cref="TurzxFullFrameMinIdleMs"/> floors the idle after a slow push.
     /// </summary>
-    private const int TurzxFullFrameGapMs = 2_500;
+    private const int TurzxFullFrameIntervalMs = 3_000;
+
+    /// <summary>Idle floor after a full-frame push regardless of interval — guards an unusually slow push.</summary>
+    private const int TurzxFullFrameMinIdleMs = 600;
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
     private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
@@ -1310,13 +1313,15 @@ public sealed class ControlLoop : IDisposable
                             var pushStart = Environment.TickCount64;
                             var push = _turzx.SendJpegFrame(frame);
                             _turzxShownKey = key;
-                            // Full frames (~2.3 s / 3.7 MB) can't go back-to-back — they saturate the
-                            // CDC link and drop the panel off the bus — so idle the link after one.
-                            // Rectangle partials are a few KB, so they push freely (~1 s cadence).
+                            var pushEnd = Environment.TickCount64;
+                            // Full frames are throughput-bound (~2.35 s) and can't go back-to-back —
+                            // that saturates the CDC link and drops the panel. Pace to the vendor's
+                            // proven ~3 s interval between frame STARTS (frame + ~0.65 s idle), with a
+                            // min-idle floor for an unusually slow push. Partials (if enabled) push freely.
                             _turzxNextPushAt = push.Kind == TurzxPushKind.Full
-                                ? Environment.TickCount64 + TurzxFullFrameGapMs
-                                : Environment.TickCount64;
-                            _hbLastPushMs = Environment.TickCount64 - pushStart;
+                                ? Math.Max(pushStart + TurzxFullFrameIntervalMs, pushEnd + TurzxFullFrameMinIdleMs)
+                                : pushEnd;
+                            _hbLastPushMs = pushEnd - pushStart;
                             _hbLastAckBytes = push.AckBytes;
                             if (push.Kind == TurzxPushKind.Full) _hbFull++; else _hbPartial++;
 
@@ -1650,7 +1655,9 @@ public sealed class ControlLoop : IDisposable
             case LcdMetric.GpuLoad:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%", preferNames: GpuCorePreference);
             case LcdMetric.RamLoad:
-                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%");
+                // exclude LHM's "Virtual Memory" device (commit charge, ~93%); the physical
+                // "Total Memory" load is the Task-Manager figure the user expects.
+                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%", excludeName: "Virtual");
             case LcdMetric.VramLoad:
                 return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "VRAM", "%",
                     preferNames: ["Memory"], excludeName: "controller");
