@@ -430,6 +430,7 @@ public sealed class ControlLoop : IDisposable
 
                     _hubs.Add(hub);
                     _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
+                    _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
                     _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
                     try
                     {
@@ -657,8 +658,18 @@ public sealed class ControlLoop : IDisposable
     // Hub color writes are ACKed with no readback of what's painted: a chain device that
     // resets its own LED controller (XD6 pump after a link blip, 2026-08-29) reverts to its
     // firmware-default effect and stays there for as long as we trust the one write that
-    // "took". Steady re-stream of the current frame repaints it within one cycle.
+    // "took". Steady re-stream keeps ordinary paint loss at bay cheaply — but a blipped
+    // device ACKs re-streamed frames WITHOUT painting them (proven live: a reverted pump
+    // sat through continuous 20 s re-streams), so pump-bearing hubs additionally get a
+    // periodic deep repaint (see HubDeepRepaintMs in ApplyCorsair).
     private const int HubRgbRefreshMs = 20_000;
+
+    // Deep-repaint cadence for pump-bearing hubs: software-mode re-assert + full color-path
+    // rebuild (endpoint re-open, black reset frame + 40 ms) + re-stream — the app-restart
+    // init sequence, the only thing proven to repaint a link-blipped device. Cost per pass:
+    // ~0.5 s of tick time and ~40 ms of black on that hub's chain.
+    private const int HubDeepRepaintMs = 3 * 60_000;
+    private readonly Dictionary<string, long> _hubDeepRepaintDue = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
     private string? _appliedChipRgb;
@@ -1924,6 +1935,21 @@ public sealed class ControlLoop : IDisposable
                 if (!hub.InSoftwareMode)
                 {
                     hub.EnterSoftwareMode();
+                }
+
+                // deep repaint (pump-bearing hubs): a link-blipped device ACKs re-streamed
+                // frames without painting them and gives no protocol-visible signal, so run
+                // the app-restart init sequence on a timer — the only proven heal
+                if (hub.Channels.Any(c => c.IsPump)
+                    && Environment.TickCount64 >= _hubDeepRepaintDue.GetValueOrDefault(hub.SerialNumber))
+                {
+                    _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
+                    hub.EnterSoftwareMode(); // re-assert even though already in software mode
+                    hub.InvalidateColorPath();
+                    _appliedHubRgb.Remove(hub.SerialNumber);
+                    mustWrite = true; // re-assert duties right behind the mode re-entry
+                    _log?.Invoke($"hub {hub.SerialNumber[..8]}… deep repaint: software mode re-asserted, "
+                        + "color path invalidated — colors re-stream this tick");
                 }
 
                 if (rescanDue)

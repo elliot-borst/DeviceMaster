@@ -713,6 +713,18 @@ public sealed class LinkHub : IDisposable
     }
 
     /// <summary>
+    /// Forces the next color write to rebuild the whole color path: registry read, endpoint
+    /// re-open, black reset frame + 40 ms. A chain device that renegotiated its hub link
+    /// (XD6 pump after a link blip, 2026-08-29) keeps ACK-ing re-streamed frames without
+    /// painting them — only this init sequence makes it accept color again.
+    /// </summary>
+    public void InvalidateColorPath()
+    {
+        _colorReady = false;
+        _colorAttached = false;
+    }
+
+    /// <summary>
     /// Pulses chain LED power (0x15 0x01) so the hub re-registers its LED devices. Used when a
     /// fan's link comes alive mid-session (physical reseat) — colors must be re-applied after.
     /// </summary>

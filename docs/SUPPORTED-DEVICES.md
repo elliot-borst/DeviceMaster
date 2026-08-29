@@ -44,10 +44,15 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - **Color writes are ACKed with no readback of the painted state.** A chain device that
   resets its own LED controller (observed live: XD6 pump after a link blip) silently reverts
   to its firmware-default effect while the rest of the chain keeps its colors, and nothing in
-  the protocol reveals this. A static color therefore cannot be written once and trusted: the
-  control loop re-streams the current frame every 20 s (`ControlLoop.HubRgbRefreshMs`), which
-  repaints a reverted device within one cycle — the same self-heal pattern as the SL V3
-  firmware-effect refresh.
+  the protocol reveals this. Worse, **re-streaming frames does not repaint such a device**:
+  the hub keeps ACKing frames it no longer delivers to the renegotiated device (verified
+  live — a reverted XD6 sat through continuous 20 s re-streams, endpoint re-opens included,
+  without repainting). What does repaint it is the session-init sequence: software-mode
+  re-assert plus a full color-path rebuild (endpoint re-open, black reset frame + 40 ms —
+  the same reset-frame quirk QX/RX chains need before accepting color). The control loop
+  therefore re-streams the current frame every 20 s (`ControlLoop.HubRgbRefreshMs`) for
+  ordinary paint loss, and runs that deep-repaint sequence on pump-bearing hubs every 3 min
+  (`ControlLoop.HubDeepRepaintMs`) — cost: ~40 ms of black on that hub's chain per pass.
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
 - Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.
