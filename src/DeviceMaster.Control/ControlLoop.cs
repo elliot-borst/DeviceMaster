@@ -411,12 +411,32 @@ public sealed class ControlLoop : IDisposable
 
     // ---- device lifecycle ----
 
+    // A failed hub is closed and removed mid-session (ApplyCorsair's catch), so rediscovery
+    // must run even while OTHER hubs are healthy: gating it on _hubs.Count == 0 left a
+    // two-hub rig with the pump hub permanently closed after one bad tick — no duty writes,
+    // and the hub's keepalive lapsed into hardware mode (default lighting) with nothing to
+    // heal it, because the v89 deep repaint only reaches open hubs.
+    private const int HubRediscoverMs = 15_000;
+    private long _hubRediscoverDue;
+
+    // paths skipped for unrecognized chain devices: opening enters software mode and then
+    // abandons the hub, so re-poke those only occasionally in case the chain was rearranged
+    private readonly Dictionary<string, long> _hubPathRetryNotBefore = [];
+
     private void EnsureDevices(List<string> warnings)
     {
-        if (_hubs.Count == 0)
+        if (_hubs.Count == 0 || Environment.TickCount64 >= _hubRediscoverDue)
         {
+            _hubRediscoverDue = Environment.TickCount64 + HubRediscoverMs;
+            var openHubPaths = _hubs.Select(h => h.DevicePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var device in LinkHub.FindHubDevices())
             {
+                if (openHubPaths.Contains(device.DevicePath)
+                    || Environment.TickCount64 < _hubPathRetryNotBefore.GetValueOrDefault(device.DevicePath))
+                {
+                    continue;
+                }
+
                 try
                 {
                     var hub = LinkHub.Open(device);
@@ -424,13 +444,17 @@ public sealed class ControlLoop : IDisposable
                     if (hub.HasUnknownChannels)
                     {
                         warnings.Add($"Hub {hub.SerialNumber[..8]}… has unrecognized chain devices — skipped");
+                        _hubPathRetryNotBefore[device.DevicePath] = Environment.TickCount64 + 5 * 60_000;
                         hub.Dispose();
                         continue;
                     }
 
+                    _hubPathRetryNotBefore.Remove(device.DevicePath);
+
                     _hubs.Add(hub);
                     _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
                     _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
+                    _lastWrittenCorsairDuty = -1; // duties must reach the reopened hub this tick, not next refresh
                     _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
                     try
                     {
@@ -2058,7 +2082,10 @@ public sealed class ControlLoop : IDisposable
             }
             catch (Exception ex)
             {
-                warnings.Add($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — reopening next tick");
+                warnings.Add($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
+                // also into the log — this removal used to be invisible post-mortem, and on a
+                // multi-hub rig it silently orphaned the pump hub for the rest of the session
+                _log?.Invoke($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
                 hub.Dispose();
                 _hubs.Remove(hub);
             }
