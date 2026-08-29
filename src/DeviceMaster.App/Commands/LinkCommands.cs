@@ -211,9 +211,15 @@ internal static class LinkCommands
                 var entries = new Dictionary<int, byte>();
                 foreach (var channel in hub.Channels.Where(c => wanted.Contains(c.Channel)))
                 {
-                    // command code: catalog first, then whatever the hub already uses — never invented
+                    // command code: catalog first, then whatever the hub already uses — never invented,
+                    // and never a zero code (a corrupted registry reads back 0x00 junk entries)
                     var code = channel.Info?.LedCommandCode ?? 0;
-                    if (code == 0 && !current.TryGetValue(channel.Channel, out code))
+                    if (code == 0)
+                    {
+                        current.TryGetValue(channel.Channel, out code);
+                    }
+
+                    if (code == 0)
                     {
                         Log.Warning("ch{Channel}: no known LED command code — skipped", channel.Channel);
                         continue;

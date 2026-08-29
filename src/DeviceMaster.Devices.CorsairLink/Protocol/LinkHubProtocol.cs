@@ -55,6 +55,9 @@ public static class LinkHubProtocol
 
         /// <summary>LED registry writes (endpoint 0x1E) — OpenLinkHub's dataTypeCommandMode.</summary>
         public static ReadOnlySpan<byte> LedRegistry => new byte[] { 0x0d, 0x00 };
+
+        /// <summary>LED count table reads (endpoint 0x1D via the color handle) — read back live (fw 3.10.636).</summary>
+        public static ReadOnlySpan<byte> LedCounts => new byte[] { 0x0c, 0x00 };
     }
 
     public static class ResponseStatus

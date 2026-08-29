@@ -528,11 +528,22 @@ public sealed class LinkHub : IDisposable
     {
         lock (_ioLock)
         {
-            return (ReadViaColorHandle(0x1E), ReadViaColorHandle(0x1D));
+            return (
+                ReadViaColorHandle(0x1E, LinkHubProtocol.DataTypes.LedRegistry),
+                ReadViaColorHandle(0x1D, LinkHubProtocol.DataTypes.LedCounts));
         }
     }
 
     private List<int> _lastUnenrolled = [];
+    private string? _pendingRegistryPlan;
+    private long _registryWriteNotBeforeTicks;
+    private long? _pulseRetryAtTicks;
+
+    /// <summary>Floor between registry flash writes — the hub must never be hammered if a write doesn't stick.</summary>
+    private const int RegistryWriteCooldownMs = 10 * 60_000;
+
+    /// <summary>Retry interval after a failed LED power pulse (seen live: chronic error 0x07).</summary>
+    private const int PulseRetryCooldownMs = 5 * 60_000;
 
     /// <summary>
     /// Reconciles the hub's LED registry (endpoint 0x1E) with the enumerated chain — WITHOUT
@@ -540,10 +551,12 @@ public sealed class LinkHub : IDisposable
     /// itself as fans complete LED enrollment; entries appear and decay on their own.
     /// Force-writing entries for fans the hub cannot enroll never lit anything and risks
     /// clobbering the hub's own enrollment bookkeeping. So this only:
-    ///  1. removes PHANTOM entries (registered channels with no device on the chain — the
-    ///     one genuinely stale case, left behind when the chain is re-arranged),
-    ///  2. pulses LED power when the set of unenrolled LED-capable fans changes, giving the
-    ///     hub a fresh chance to enroll them,
+    ///  1. removes PHANTOM entries and repairs junk command codes (see LedRegistryPlanner) —
+    ///     and only when TWO consecutive reads agree on the same plan: a single disagreeing
+    ///     read has historically been a misparsed foreign packet, and flash-writing one
+    ///     shredded the hub's own enrollment (all Corsair fans dark, 2026-08),
+    ///  2. pulses LED power when the set of unenrolled LED-capable fans changes (retrying on
+    ///     a cooldown if the pulse itself fails), giving the hub a fresh chance to enroll,
     ///  3. flags registry drift so the color slots (built from the registry) get rebuilt.
     /// Returns true when colors must be re-applied.
     /// </summary>
@@ -555,38 +568,81 @@ public sealed class LinkHub : IDisposable
         }
 
         var current = ReadLedRegistry();
-        var ledChannels = _channels
+        var ledCodes = _channels
             .Where(c => c.Info is { LedCount: > 0 })
-            .Select(c => c.Channel)
-            .ToHashSet();
+            .ToDictionary(c => c.Channel, c => c.Info!.LedCommandCode);
 
         var mustReapply = false;
+        var pulsed = false;
 
-        var phantoms = current.Keys.Where(ch => !ledChannels.Contains(ch)).OrderBy(ch => ch).ToList();
-        if (phantoms.Count > 0)
+        var plan = LedRegistryPlanner.Compute(current, ledCodes);
+        if (plan is null)
         {
-            var target = current
-                .Where(kv => !phantoms.Contains(kv.Key))
-                .ToDictionary(kv => kv.Key, kv => kv.Value);
-            log?.Invoke($"hub {SerialNumber[..8]}… LED registry has phantom entries "
-                + $"(ch{string.Join(", ch", phantoms)} carry no device) — removing them, keeping [{Describe(target)}]");
-            WriteLedRegistry(target); // settles 100 ms, pulses LED power, invalidates color slots
-            current = target;
+            _pendingRegistryPlan = null;
+        }
+        else if (plan.Signature != _pendingRegistryPlan)
+        {
+            _pendingRegistryPlan = plan.Signature;
+            log?.Invoke($"hub {SerialNumber[..8]}… LED registry looks stale (phantom ch[{string.Join(",", plan.Phantoms)}], "
+                + $"code repairs ch[{string.Join(",", plan.CodeRepairs)}]) — rewriting if the next check agrees");
+        }
+        else if (Environment.TickCount64 < _registryWriteNotBeforeTicks)
+        {
+            log?.Invoke($"hub {SerialNumber[..8]}… LED registry rewrite confirmed but inside the write cooldown — skipped");
+        }
+        else
+        {
+            log?.Invoke($"hub {SerialNumber[..8]}… rewriting LED registry to [{Describe(plan.Target)}] "
+                + $"(dropping phantom ch[{string.Join(",", plan.Phantoms)}], repairing codes on ch[{string.Join(",", plan.CodeRepairs)}])");
+            _registryWriteNotBeforeTicks = Environment.TickCount64 + RegistryWriteCooldownMs;
+            _pendingRegistryPlan = null;
+            WriteLedRegistryEntries(plan.Target); // throws on failure → flash untouched, sync aborts
+            current = plan.Target;
             mustReapply = true;
+
+            try
+            {
+                PulseLedPower();
+                pulsed = true;
+            }
+            catch (LinkHubException ex)
+            {
+                _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
+                log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse after the registry write failed: {ex.Message} "
+                    + $"— colors still re-apply; pulse retries in ~{PulseRetryCooldownMs / 60_000} min");
+            }
         }
 
-        var unenrolled = ledChannels.Where(ch => !current.ContainsKey(ch)).OrderBy(ch => ch).ToList();
-        if (!unenrolled.SequenceEqual(_lastUnenrolled))
+        var unenrolled = ledCodes.Keys.Where(ch => !current.ContainsKey(ch)).OrderBy(ch => ch).ToList();
+        if (unenrolled.Count == 0)
         {
-            _lastUnenrolled = unenrolled;
-            if (unenrolled.Count > 0 && !mustReapply)
+            _lastUnenrolled = [];
+            _pulseRetryAtTicks = null;
+        }
+        else if (pulsed)
+        {
+            _lastUnenrolled = unenrolled; // the write's pulse already nudged enrollment this pass
+        }
+        else if (!unenrolled.SequenceEqual(_lastUnenrolled)
+            || (_pulseRetryAtTicks is { } retryAt && Environment.TickCount64 >= retryAt))
+        {
+            // pulse once per change of the unenrolled set — not every rescan, a pulse visibly
+            // blinks the chain. But a FAILED pulse must retry on the cooldown: latching the
+            // set on failure left unenrolled fans without their nudge for weeks (2026-08)
+            log?.Invoke($"hub {SerialNumber[..8]}… has not LED-enrolled ch{string.Join(", ch", unenrolled)} "
+                + "— pulsing LED power so it retries");
+            try
             {
-                // pulse once per change of the unenrolled set — not every rescan, a pulse
-                // visibly blinks the chain
-                log?.Invoke($"hub {SerialNumber[..8]}… has not LED-enrolled ch{string.Join(", ch", unenrolled)} "
-                    + "— pulsing LED power so it retries");
                 PulseLedPower();
+                _lastUnenrolled = unenrolled;
+                _pulseRetryAtTicks = null;
                 mustReapply = true;
+            }
+            catch (LinkHubException ex)
+            {
+                _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
+                log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse failed: {ex.Message} "
+                    + $"— retrying in ~{PulseRetryCooldownMs / 60_000} min");
             }
         }
 
@@ -606,21 +662,39 @@ public sealed class LinkHub : IDisposable
             string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
     }
 
+    /// <summary>Chains carry at most 24 devices (two-packet enumeration, fw 2.5+) — larger slot counts are garbage.</summary>
+    private const int MaxRegistrySlots = 24;
+
     /// <summary>The hub's current persisted LED registry (channel → LED command code).</summary>
     public IReadOnlyDictionary<int, byte> ReadLedRegistry()
     {
         lock (_ioLock)
         {
-            return LinkHubParser.ParseLedRegistry(ReadViaColorHandle(0x1E));
+            var packet = ReadViaColorHandle(0x1E, LinkHubProtocol.DataTypes.LedRegistry);
+            int slots = packet[6];
+            if (slots > MaxRegistrySlots)
+            {
+                throw new LinkHubException(
+                    $"LED registry read reports {slots} slots (chain max {MaxRegistrySlots}) — discarded as garbage");
+            }
+
+            return LinkHubParser.ParseLedRegistry(packet);
         }
     }
 
     /// <summary>
     /// Writes an EXPLICIT LED registry (diagnostics: registry-variant experiments). Channels
     /// absent from <paramref name="entries"/> get an empty slot. Persists in hub flash until
-    /// rewritten — the control loop re-syncs it to the full chain on its next open.
+    /// rewritten.
     /// </summary>
     public void WriteLedRegistry(IReadOnlyDictionary<int, byte> entries)
+    {
+        WriteLedRegistryEntries(entries);
+        PulseLedPower();
+    }
+
+    /// <summary>The registry block alone — callers own the follow-up LED power pulse.</summary>
+    private void WriteLedRegistryEntries(IReadOnlyDictionary<int, byte> entries)
     {
         var maxChannel = Math.Max(
             _channels.Count == 0 ? 0 : _channels.Max(c => c.Channel),
@@ -632,8 +706,7 @@ public sealed class LinkHub : IDisposable
                 [0x1E],
                 LinkHubProtocol.DataTypes.LedRegistry,
                 LinkHubPackets.CreateLedRegistryData(maxChannel, entries));
-            Thread.Sleep(100);
-            SendCommand(LinkHubProtocol.Commands.ResetLedPower);
+            Thread.Sleep(100); // hub settle time before any follow-up command (reference behaviour)
         }
 
         _colorReady = false;
@@ -653,20 +726,20 @@ public sealed class LinkHub : IDisposable
         _colorReady = false; // the color endpoint must be rebuilt before the next write
     }
 
-    private byte[] ReadViaColorHandle(byte endpoint)
+    private byte[] ReadViaColorHandle(byte endpoint, ReadOnlySpan<byte> dataType)
     {
         try
         {
-            return ReadViaColorHandleCore(endpoint);
+            return ReadViaColorHandleCore(endpoint, dataType);
         }
         catch (LinkHubException ex) when (ex.IsIncorrectMode && _inSoftwareMode)
         {
             RecoverSoftwareMode();
-            return ReadViaColorHandleCore(endpoint);
+            return ReadViaColorHandleCore(endpoint, dataType);
         }
     }
 
-    private byte[] ReadViaColorHandleCore(byte endpoint)
+    private byte[] ReadViaColorHandleCore(byte endpoint, ReadOnlySpan<byte> dataType)
     {
         // this REPURPOSES the color handle (0) and closes it afterwards — the endpoint must
         // be re-attached before the next color write (this is why every 30 s registry check
@@ -686,7 +759,11 @@ public sealed class LinkHub : IDisposable
 
         try
         {
-            return SendCommand([0x08, 0x00]);
+            // the data-type wait both validates the response and consumes any stale queued
+            // packet: an unvalidated read here parsed foreign packets as the LED registry,
+            // and writing those parses back to flash destroyed the hub's own enrollment
+            // (all Corsair fans dark, 2026-08)
+            return SendCommand([0x08, 0x00], waitForDataType: dataType);
         }
         finally
         {
