@@ -41,6 +41,13 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   re-enroll from pulses alone — recovery is an explicit registry write of the catalog
   command codes: `link ledreg --hub <serial-prefix> --channels <list>` (never writes zero
   or invented codes, then paints per-channel test colors for visual confirmation).
+- **Color writes are ACKed with no readback of the painted state.** A chain device that
+  resets its own LED controller (observed live: XD6 pump after a link blip) silently reverts
+  to its firmware-default effect while the rest of the chain keeps its colors, and nothing in
+  the protocol reveals this. A static color therefore cannot be written once and trusted: the
+  control loop re-streams the current frame every 20 s (`ControlLoop.HubRgbRefreshMs`), which
+  repaints a reverted device within one cycle — the same self-heal pattern as the SL V3
+  firmware-effect refresh.
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
 - Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.

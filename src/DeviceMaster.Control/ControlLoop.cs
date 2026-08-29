@@ -652,6 +652,13 @@ public sealed class ControlLoop : IDisposable
 
     private readonly Dictionary<string, string> _appliedHubRgb = [];
     private readonly Dictionary<string, long> _hubRgbRetryAt = [];
+    private readonly Dictionary<string, long> _hubRgbRefreshDue = [];
+
+    // Hub color writes are ACKed with no readback of what's painted: a chain device that
+    // resets its own LED controller (XD6 pump after a link blip, 2026-08-29) reverts to its
+    // firmware-default effect and stays there for as long as we trust the one write that
+    // "took". Steady re-stream of the current frame repaints it within one cycle.
+    private const int HubRgbRefreshMs = 20_000;
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
     private string? _appliedChipRgb;
@@ -687,7 +694,8 @@ public sealed class ControlLoop : IDisposable
 
         foreach (var hub in _hubs.ToList())
         {
-            if (_appliedHubRgb.GetValueOrDefault(hub.SerialNumber) == key)
+            var isNewColor = _appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key;
+            if (!isNewColor && Environment.TickCount64 < _hubRgbRefreshDue.GetValueOrDefault(hub.SerialNumber))
             {
                 continue;
             }
@@ -703,11 +711,18 @@ public sealed class ControlLoop : IDisposable
                 hub.ApplyStaticColor(r, g, b);
                 _appliedHubRgb[hub.SerialNumber] = key;
                 _hubRgbRetryAt.Remove(hub.SerialNumber);
-                _log?.Invoke($"RGB applied on hub {hub.SerialNumber[..8]}…: {hub.TotalLeds} LEDs "
-                    + $"({string.Join(", ", hub.LedCounts.Select(kv => $"ch{kv.Key}={kv.Value}"))})");
+                _hubRgbRefreshDue[hub.SerialNumber] = Environment.TickCount64 + HubRgbRefreshMs;
+                if (isNewColor)
+                {
+                    _log?.Invoke($"RGB applied on hub {hub.SerialNumber[..8]}…: {hub.TotalLeds} LEDs "
+                        + $"({string.Join(", ", hub.LedCounts.Select(kv => $"ch{kv.Key}={kv.Value}"))})");
+                }
             }
             catch (Exception ex)
             {
+                // drop the applied key so a failed steady-state refresh recovers through the
+                // same retry path as a failed first apply (and warns until it heals)
+                _appliedHubRgb.Remove(hub.SerialNumber);
                 _hubRgbRetryAt[hub.SerialNumber] = Environment.TickCount64 + 10_000;
                 warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
 
