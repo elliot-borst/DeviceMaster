@@ -20,6 +20,27 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   values from OpenLinkHub's metadata), which is also what OpenLinkHub itself does (it reads
   `0x20` only to adjust Commander Duo counts). Mixed QX/RX chains additionally need a black
   reset frame + 40 ms wait before the first real color packet (OpenLinkHub `setDeviceColor`).
+- **LED registry (endpoint `0x1E`) — the hub's flash-persisted enrollment table.** Layout
+  (read via the color handle, data type `0x0D 0x00`): `[6]` = slot count (max channel + 1),
+  then per channel either `0x00` (no LED device) or `0x01` + the device's LED command code
+  (read back live: RX MAX RGB fan = `0x19`, XD6 pump = `0x11`). The color stream is consumed
+  strictly by registry slot in ascending channel order — **a channel missing from the
+  registry never lights**, regardless of what the color buffer carries, and entries with a
+  wrong/zeroed command code don't light either.
+- **Validate every read made through the color handle by its response data type**
+  (`0x1E` registry = `0x0D 0x00`, `0x1D` LED count table = `0x0C 0x00`). The hub can answer
+  with a foreign or stale packet, and its response buffers carry stale content after the
+  status region — never interpret trailing bytes. Responses echo the command byte at raw
+  offset 3, which is a usable desync check. An unvalidated registry read that got misparsed
+  and **written back to flash progressively erased the hub's own LED enrollment** until the
+  whole chain went dark (Aug 2026 incident) — so registry writes additionally require two
+  consecutive reads agreeing on the same change and are rate-limited (`LedRegistryPlanner`).
+- **LED power pulse (`0x15 0x01`)** makes the hub re-register its LED devices. On fw
+  3.10.636 it returns error `0x07` when sent standalone, yet the same command succeeds
+  immediately after an `0x1E` registry write. Channels erased from the registry do NOT
+  re-enroll from pulses alone — recovery is an explicit registry write of the catalog
+  command codes: `link ledreg --hub <serial-prefix> --channels <list>` (never writes zero
+  or invented codes, then paints per-channel test colors for visual confirmation).
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
 - Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.
