@@ -53,6 +53,11 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   therefore re-streams the current frame every 20 s (`ControlLoop.HubRgbRefreshMs`) for
   ordinary paint loss, and runs that deep-repaint sequence on pump-bearing hubs every 3 min
   (`ControlLoop.HubDeepRepaintMs`) — cost: ~40 ms of black on that hub's chain per pass.
+  Deliberately scoped to pump-bearing hubs: fan link blips manifest as tach loss, which the
+  loop already detects and heals (LED-power pulse + repaint when the tach returns), while a
+  pump's tach never wavers through its blip — so only pumps need the blind timer. Widen the
+  scope only if a fan is ever seen reverting with its tach alive; the reset frame's black
+  blink is not worth adding to chains that don't exhibit the failure.
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
 - Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.
