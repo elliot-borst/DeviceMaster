@@ -103,7 +103,7 @@ public sealed class LhmSensorSource : ISensorSource
             }
         }
 
-        var (vramSensor, vramGb) = gpu is null ? (null, (double?)null) : FindVram(gpu);
+        var (vramUsedGb, vramTotalGb) = gpu is null ? (null, (double?)null) : FindVram(gpu);
 
         return new SystemStats(
             CpuName: cpu?.Name ?? "CPU",
@@ -115,7 +115,8 @@ public sealed class LhmSensorSource : ISensorSource
             GpuLoadPercent: gpu is null ? null : Pick(gpu, SensorType.Load, n => n.Contains("GPU Core")) ?? Pick(gpu, SensorType.Load, n => n.Contains("Core")),
             GpuTempC: gpu is null ? null : Pick(gpu, SensorType.Temperature, n => n.Contains("GPU Core")) ?? Pick(gpu, SensorType.Temperature, n => n.Contains("Core")) ?? Max(gpu, SensorType.Temperature),
             GpuPowerW: gpu is null ? null : Pick(gpu, SensorType.Power, n => n.Contains("GPU Package") || n.Contains("Package") || n.Contains("Power")) ?? Max(gpu, SensorType.Power),
-            VramUsedGb: vramGb);
+            VramUsedGb: vramUsedGb,
+            VramTotalGb: vramTotalGb);
     }
 
     /// <summary>First sensor value of the given type whose name matches, or null.</summary>
@@ -147,31 +148,41 @@ public sealed class LhmSensorSource : ISensorSource
         return max;
     }
 
-    /// <summary>VRAM used in GB: "GPU Memory Used" is SmallData (MB) on NVIDIA, Data (GB) elsewhere.</summary>
-    private static (ISensor?, double?) FindVram(IHardware gpu)
+    /// <summary>VRAM used/total in GB: "GPU Memory Used/Total" are SmallData (MB) on NVIDIA, Data (GB) elsewhere.</summary>
+    private static (double? UsedGb, double? TotalGb) FindVram(IHardware gpu)
     {
-        ISensor? best = null;
+        ISensor? used = null, total = null;
         foreach (var s in gpu.Sensors)
         {
-            var isMem = (s.SensorType is SensorType.SmallData or SensorType.Data)
-                && s.Name.Contains("Memory Used", StringComparison.OrdinalIgnoreCase)
-                && !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase);
-            if (isMem && s.Value is { } v && !float.IsNaN(v))
+            if (s.SensorType is not (SensorType.SmallData or SensorType.Data)
+                || s.Value is not { } v || float.IsNaN(v)
+                || s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (s.Name.Contains("Memory Used", StringComparison.OrdinalIgnoreCase))
             {
                 // prefer the dedicated/"GPU Memory Used" reading over D3D per-process ones
-                if (best is null || s.Name.Equals("GPU Memory Used", StringComparison.OrdinalIgnoreCase))
+                if (used is null || s.Name.Equals("GPU Memory Used", StringComparison.OrdinalIgnoreCase))
                 {
-                    best = s;
+                    used = s;
+                }
+            }
+            else if (s.Name.Contains("Memory Total", StringComparison.OrdinalIgnoreCase))
+            {
+                if (total is null || s.Name.Equals("GPU Memory Total", StringComparison.OrdinalIgnoreCase))
+                {
+                    total = s;
                 }
             }
         }
 
-        if (best?.Value is not { } val)
-        {
-            return (null, null);
-        }
+        return (ToGb(used), ToGb(total));
 
-        return (best, best.SensorType == SensorType.Data ? val : val / 1024.0);
+        static double? ToGb(ISensor? sensor) => sensor?.Value is { } val
+            ? sensor.SensorType == SensorType.Data ? val : val / 1024.0
+            : null;
     }
 
     public void Dispose() => _computer.Close();

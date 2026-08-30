@@ -138,6 +138,24 @@ public sealed class ControlSettings
     /// <summary>Mount orientation: 0 = landscape, 180 = landscape flipped the other way up.</summary>
     public int TurzxRotation { get; set; }
 
+    // ---- NInfer: a local LLM inference server in WSL2, controlled via the user's ninfer.cmd ----
+
+    /// <summary>
+    /// Path to the ninfer control script (start/stop/restart/status/log). Null/empty = auto-detect
+    /// (%USERPROFILE%\bin\ninfer.cmd, then PATH). The NInfer tab only appears when a script is found,
+    /// so installs without one never see it.
+    /// </summary>
+    public string? NInferScript { get; set; }
+
+    /// <summary>WSL distro the ninfer systemd unit lives in (status checks and the journal stream).</summary>
+    public string NInferDistro { get; set; } = "Ubuntu-24.04";
+
+    /// <summary>Base URL of the ninfer HTTP API as reachable from Windows (/health is unauthenticated).</summary>
+    public string NInferBaseUrl { get; set; } = "http://127.0.0.1:8080";
+
+    /// <summary>Cached API key for /v1/models, read once from inside WSL while the server runs. Never logged.</summary>
+    public string? NInferApiKey { get; set; }
+
     /// <summary>Movie mode: one switch that blacks out every LED and screen; restores on toggle-off.</summary>
     public bool BlackoutActive { get; set; }
     public bool BlackoutPrevRgbEnabled { get; set; } = true;

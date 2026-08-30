@@ -93,6 +93,9 @@ public sealed class MainWindow : Window
     private readonly TextBlock _conflictSummary = new() { FontSize = 12, Foreground = Theme.Warn, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
     private Border _rescanButton = null!;
 
+    // NInfer tab (only on machines with the ninfer.cmd control script)
+    private NInferPage? _ninferPage;
+
     // tray
     private WinForms.NotifyIcon? _trayIcon;
     private bool _exitRequested;
@@ -137,6 +140,7 @@ public sealed class MainWindow : Window
         {
             UpdateControlStatus();
             MaybeRebuildScreenList();
+            _ninferPage?.Tick(_loop?.Status);
             if (_downloading)
             {
                 _checkLabel.Text = $"↻  Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
@@ -253,16 +257,30 @@ public sealed class MainWindow : Window
         side.Children.Add(bottom);
 
         // ---- nav ----
-        var nav = new StackPanel();
-        foreach (var (key, glyph, label) in new[]
+        // the NInfer tab only exists on machines that have the control script — everyone else
+        // never sees it (the repo stays generic; nothing NInfer-related runs without it)
+        if (NInferService.ResolveScript(_controlSettings) is { } ninferScript)
+        {
+            _ninferPage = new NInferPage(new NInferService(_controlSettings, TrySaveSettings, LogLine, ninferScript));
+        }
+
+        var navItems = new List<(string Key, string Glyph, string Label)>
         {
             ("dashboard", "⌂", "Dashboard"),
             ("cooling", "❄", "Cooling"),
             ("lighting", "◈", "Lighting"),
             ("screens", "▣", "Screens"),
             ("turzx", "▤", "Turzx"),
-            ("devices", "⚙", "Devices"),
-        })
+        };
+        if (_ninferPage is not null)
+        {
+            navItems.Add(("ninfer", "λ", "NInfer"));
+        }
+
+        navItems.Add(("devices", "⚙", "Devices"));
+
+        var nav = new StackPanel();
+        foreach (var (key, glyph, label) in navItems)
         {
             var button = NavButton(key, glyph, label);
             _navButtons[key] = button;
@@ -281,6 +299,11 @@ public sealed class MainWindow : Window
         _pages["lighting"] = WrapPage(BuildLightingPage());
         _pages["screens"] = WrapPage(BuildScreensPage());
         _pages["turzx"] = WrapPage(BuildTurzxPage());
+        if (_ninferPage is not null)
+        {
+            _pages["ninfer"] = WrapPage(_ninferPage.Build());
+        }
+
         _pages["devices"] = WrapPage(BuildDevicesPage());
         foreach (var (key, page) in _pages)
         {
@@ -415,7 +438,7 @@ public sealed class MainWindow : Window
         };
     }
 
-    private static TextBlock PageTitle(string title, string subtitle)
+    internal static TextBlock PageTitle(string title, string subtitle)
     {
         var block = new TextBlock { Margin = new Thickness(2, 0, 0, 18) };
         block.Inlines.Add(new System.Windows.Documents.Run(title) { FontSize = 24, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
@@ -1573,6 +1596,9 @@ public sealed class MainWindow : Window
 
         _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
         _loop = null;
+
+        _ninferPage?.Dispose(); // kills the wsl journal stream; the server itself is left alone
+        _ninferPage = null;
     }
 
     private void ExitApplication()

@@ -30,6 +30,12 @@ public sealed record ControlStatus
     public double? CpuTemperatureC { get; init; }
     public double? GpuTemperatureC { get; init; }
 
+    /// <summary>GPU load/power/VRAM figures, sampled with the dashboard temps (NInfer page tiles).</summary>
+    public double? GpuLoadPercent { get; init; }
+    public double? GpuPowerW { get; init; }
+    public double? VramUsedGb { get; init; }
+    public double? VramTotalGb { get; init; }
+
     public int TargetDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
 
@@ -376,6 +382,10 @@ public sealed class ControlLoop : IDisposable
             CoolantTemperatureC = coolant,
             CpuTemperatureC = _dashCpuTemp,
             GpuTemperatureC = _dashGpuTemp,
+            GpuLoadPercent = _dashGpuLoad,
+            GpuPowerW = _dashGpuPower,
+            VramUsedGb = _dashVramUsed,
+            VramTotalGb = _dashVramTotal,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
@@ -387,6 +397,7 @@ public sealed class ControlLoop : IDisposable
     // dashboard temperatures, sampled on a slow cadence so LHM isn't hit every tick
     private double? _dashCpuTemp;
     private double? _dashGpuTemp;
+    private double? _dashGpuLoad, _dashGpuPower, _dashVramUsed, _dashVramTotal;
     private long _dashTempsDue;
 
     private void SampleDashboardTemps()
@@ -402,6 +413,14 @@ public sealed class ControlLoop : IDisposable
             var readings = Lhm().Read(refresh: false);
             _dashCpuTemp = CanonicalTemp(readings, "cpu", CpuTempPreference);
             _dashGpuTemp = CanonicalTemp(readings, "gpu", GpuCorePreference);
+
+            // GPU load/power/VRAM for the NInfer tiles — same already-polled LHM tree, no
+            // second NVML reader; ReadSystemStats picks the same canonical sensors as Turzx
+            var stats = Lhm().ReadSystemStats(refresh: false);
+            _dashGpuLoad = stats.GpuLoadPercent;
+            _dashGpuPower = stats.GpuPowerW;
+            _dashVramUsed = stats.VramUsedGb;
+            _dashVramTotal = stats.VramTotalGb;
         }
         catch
         {
