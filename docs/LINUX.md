@@ -57,7 +57,9 @@ devicemaster rgb --hex 8000FF [--off] [--gpu]  # --gpu also drives the ENE chip
 devicemaster ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-10]
 devicemaster lcd <off|black|white|metrics> [--metric COOLANT|CPU_TEMP|GPU_TEMP|FAN_DUTY|PUMP_DUTY|PUMP_RPM]
     [--hold 10] [--brightness 80]
-devicemaster loop [--config /config/config.json]   # the daemon (the container's default CMD)
+devicemaster loop [--config /config/config.json]   # the daemon
+devicemaster web [--config /config/config.json] --port 27004
+    # control loop + built-in web dashboard (page at /, data at /status.json)
 ```
 
 Every one-shot command opens the hubs in software mode, does its thing, and **restores
@@ -70,12 +72,18 @@ process leaves.
 docker run -d --name devicemaster \
     --privileged \
     --restart unless-stopped \
+    -p 192.168.86.5:27004:27004 \
     -v /dev:/dev \
     -v /run/udev:/run/udev:ro \
     -v /host/appdata/devicemaster:/config \
     -v /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro \
-    devicemaster:headless
+    devicemaster:headless web --port 27004
 ```
+
+- The `web` mode runs the control loop plus a small dashboard (plain HTTP — reached over the
+  tailnet, which is encrypted end-to-end, or the trusted LAN). The page auto-refreshes
+  /status.json every 2 s: temps, curve/duty, failsafe banner, GPU load/power/VRAM, and the
+  per-channel RPM table. `loop` mode is unchanged for dashboard-less setups.
 
 - `--privileged` (or `--device /dev/hidraw*` + `--device /dev/i2c-*`) is required: hidraw
   for the hubs/LCD, i2c-dev for the GPU ENE chip.

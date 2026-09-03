@@ -44,5 +44,6 @@ ENV DEVICEMASTER_CONFIG=/config/config.json \
 VOLUME ["/config"]
 # SIGTERM is handled in-process (hubs are restored to hardware mode on stop) — the default
 # docker stop timeout (10 s) is plenty for the graceful path.
+# CMD is the bare loop; the deployment runs `web --port 27004` (control loop + dashboard).
 ENTRYPOINT ["/app/DeviceMaster.App.Headless"]
 CMD ["loop"]

@@ -55,6 +55,7 @@ internal static class Program
                 "ene" => RunEne(rest),
                 "lcd" => RunLcd(rest, trace),
                 "loop" => RunLoop(rest, trace),
+                "web" => RunWeb(rest, trace),
                 "help" or "--help" or "-h" => PrintUsageAnd(0),
                 _ => UnknownCommand(command),
             };
@@ -82,7 +83,8 @@ internal static class Program
               ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-N]
               lcd <off|black|white|metrics> [--metric COOLANT|CPU_TEMP|GPU_TEMP|FAN_DUTY|PUMP_DUTY|PUMP_RPM]
                   [--hold SECONDS] [--brightness PERCENT]
-              loop [--config PATH]              run the 1 Hz control loop (the container's main mode)
+              loop [--config PATH]              run the 1 Hz control loop
+              web [--config PATH] --port 27004  control loop + web dashboard (/, /status.json)
 
             Global: --trace (packet-level hub traffic)
             Config: DEVICEMASTER_CONFIG env var or --config (defaults to /config/config.json)
@@ -507,15 +509,9 @@ internal static class Program
         return 0;
     }
 
-    private static int RunLoop(List<string> args, bool trace)
+    /// <summary>Shared loop bootstrap (loop/web): env var, config load, defaults write, start.</summary>
+    private static HeadlessLoop StartLoop(string configPath, bool trace, Action<string> log)
     {
-        var configPath = GetOption(args, "--config") ?? HeadlessConfig.DefaultPath;
-        if (!args.All(string.IsNullOrWhiteSpace))
-        {
-            Console.WriteLine("loop: unexpected arguments: " + string.Join(' ', args));
-            return 1;
-        }
-
         // the loop reads DEVICEMASTER_CONFIG / its default path itself — point it at --config
         Environment.SetEnvironmentVariable("DEVICEMASTER_CONFIG", configPath);
         var config = HeadlessConfig.Load(configPath);
@@ -532,13 +528,72 @@ internal static class Program
         }
 
         config.Trace |= trace;
+        var loop = new HeadlessLoop(config, log);
+        loop.Start();
+        return loop;
+    }
+
+    private static int RunLoop(List<string> args, bool trace)
+    {
+        var configPath = GetOption(args, "--config") ?? HeadlessConfig.DefaultPath;
+        if (!args.All(string.IsNullOrWhiteSpace))
+        {
+            Console.WriteLine("loop: unexpected arguments: " + string.Join(' ', args));
+            return 1;
+        }
+
         var log = (Action<string>)(msg => Log.Information("{msg}", msg));
-        using var loop = new HeadlessLoop(config, log);
+        using var loop = StartLoop(configPath, trace, log);
 
         SignalWatcher.Install();
 
-        loop.Start();
         Log.Information("headless: running (config {path}, Ctrl-C or SIGTERM to stop)", configPath);
+        try
+        {
+            while (!SignalWatcher.StopRequested)
+            {
+                Thread.Sleep(500);
+            }
+
+            Log.Information("stop requested — restoring hubs to hardware mode");
+        }
+        finally
+        {
+            loop.Stop();
+        }
+
+        return 0;
+    }
+
+    /// <summary>Control loop + tiny web dashboard (the container's recommended mode).</summary>
+    private static int RunWeb(List<string> args, bool trace)
+    {
+        var configPath = GetOption(args, "--config") ?? HeadlessConfig.DefaultPath;
+        var portText = GetOption(args, "--port") ?? "27004";
+        if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
+        {
+            Console.WriteLine("web: --port must be a number in 1-65535");
+            return 1;
+        }
+
+        // --config and --port are the only flags
+        var leftover = args.Where(a => a != "--config" && a != configPath
+                                        && a != "--port" && a != portText
+                                        && !string.IsNullOrWhiteSpace(a)).ToList();
+        if (leftover.Count > 0)
+        {
+            Console.WriteLine("web: unexpected arguments: " + string.Join(' ', leftover));
+            return 1;
+        }
+
+        var log = (Action<string>)(msg => Log.Information("{msg}", msg));
+        using var loop = StartLoop(configPath, trace, log);
+        using var web = new HeadlessWebServer(loop, port, log);
+
+        SignalWatcher.Install();
+
+        web.Start();
+        Log.Information("headless: running with web dashboard (config {path}, Ctrl-C or SIGTERM to stop)", configPath);
         try
         {
             while (!SignalWatcher.StopRequested)
