@@ -30,6 +30,13 @@ public sealed class HeadlessLoop : IDisposable
     private const int LcdSolidKeepaliveMs = 30_000; // pump panel reasserts its own screen ~30 s
     private const int RgbPersistSettleMs = 10_000;
 
+    // v91 hub-color policy: color writes are ACKed with no readback, so colors re-stream on a
+    // steady cadence; pump-bearing hubs additionally get a periodic DEEP repaint (software-mode
+    // re-assert + full color-path rebuild) — the only proven heal for a link-blipped device
+    // that ACKs frames without painting them (2026-08-29).
+    private const int HubRgbRefreshMs = 20_000;
+    private const int HubDeepRepaintMs = 3 * 60_000;
+
     private readonly object _gate = new();
     private readonly Action<string> _log;
     private readonly HeadlessConfig _initial;
@@ -43,8 +50,11 @@ public sealed class HeadlessLoop : IDisposable
     private readonly List<LinkHub> _hubs = [];
     private readonly Dictionary<string, long> _hubOpenNotBefore = []; // serial -> cooldown (failed opens)
     private readonly HashSet<string> _hubOpenWarned = [];             // warned about this serial's failures
+    private readonly Dictionary<string, int> _hubReceivedDuty = [];   // serial -> last duty that reached it
+    private readonly Dictionary<string, long> _hubDeepRepaintDue = []; // serial -> next deep-repaint deadline
     private readonly Dictionary<string, string> _appliedHubRgb = [];
     private readonly Dictionary<string, long> _hubRgbRetryAt = [];
+    private readonly Dictionary<string, long> _hubRgbRefreshDue = []; // serial -> next steady re-stream
 
     private LinuxI2cSmBus? _gpuBus;
     private EneRgbDevice? _gpuRgb;
@@ -61,7 +71,6 @@ public sealed class HeadlessLoop : IDisposable
     private string _lcdShownKey = "";
     private int _appliedLcdBrightness = -1;
 
-    private int _lastDuty = -1;
     private int _ticksSinceWrite;
     private int _ticksSinceRescan;
     private long _statusFileDue;
@@ -181,7 +190,7 @@ public sealed class HeadlessLoop : IDisposable
             var reloaded = HeadlessConfig.Load(path);
             _log("headless: config reloaded from " + path);
             _config = reloaded;
-            _lastDuty = -1; // force a rewrite with the new settings
+            _hubReceivedDuty.Clear(); // the new settings' duty must reach every hub on the next tick
         }
         catch (Exception ex)
         {
@@ -253,38 +262,75 @@ public sealed class HeadlessLoop : IDisposable
 
         var pumpDuty = SafetyGuard.ClampPumpDuty(cfg.Control.PumpDutyPercent);
 
-        // ---- write duties (write-on-change + periodic refresh, per-hub error isolation) ----
-        var due = _lastDuty != duty || _ticksSinceWrite >= CorsairRefreshTicks;
-        if (due)
+        // ---- write duties (per-hub write-on-change + periodic refresh, per-hub error isolation) ----
+        // Per-hub tracking (not global) so a hub that just (re)opened gets its duty THIS tick —
+        // the v90 fix: a reopened hub must not wait for the next refresh window.
+        var refreshDue = _ticksSinceWrite >= CorsairRefreshTicks;
+        if (refreshDue)
         {
             _ticksSinceWrite = 0;
-            foreach (var hub in _hubs.ToList())
-            {
-                try
-                {
-                    var requested = new Dictionary<int, int>();
-                    foreach (var channel in hub.Channels)
-                    {
-                        if (!channel.IsPump && channel.Info is { Flags: var f } && f.HasFlag(LinkDeviceFlags.ControlsSpeed))
-                        {
-                            requested[channel.Channel] = duty;
-                        }
-                    }
-
-                    var written = hub.WriteFixedDuties(requested, pumpDuty);
-                    _lastDuty = duty;
-                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written} channels)"
-                        + (failsafe ? " (FAILSAFE)" : ""));
-                }
-                catch (Exception ex)
-                {
-                    DropHub(hub, $"speed write failed: {ex.Message}", warnings);
-                }
-            }
         }
         else
         {
             _ticksSinceWrite++;
+        }
+
+        foreach (var hub in _hubs.ToList())
+        {
+            // deep repaint (pump-bearing hubs): a link-blipped device ACKs re-streamed frames
+            // without painting them and gives no protocol-visible signal, so run the
+            // app-restart init sequence on a timer — the only proven heal
+            var deepRepaint = hub.Channels.Any(c => c.IsPump)
+                && Environment.TickCount64 >= _hubDeepRepaintDue.GetValueOrDefault(hub.SerialNumber);
+            if (deepRepaint)
+            {
+                _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
+                try
+                {
+                    hub.EnterSoftwareMode(); // re-assert even though already in software mode
+                    hub.InvalidateColorPath();
+                    _appliedHubRgb.Remove(hub.SerialNumber);
+                    _log($"hub {hub.SerialNumber[..8]}… deep repaint: software mode re-asserted, "
+                        + "color path invalidated — colors re-stream this tick");
+                }
+                catch (Exception ex)
+                {
+                    _log($"hub {hub.SerialNumber[..8]}… deep repaint failed: {ex.Message}");
+                }
+            }
+
+            var needsWrite = _hubReceivedDuty.GetValueOrDefault(hub.SerialNumber) != duty
+                || refreshDue
+                || deepRepaint; // re-assert duties right behind the mode re-entry
+            if (!needsWrite)
+            {
+                continue;
+            }
+
+            try
+            {
+                var requested = new Dictionary<int, int>();
+                foreach (var channel in hub.Channels)
+                {
+                    if (!channel.IsPump && channel.Info is { Flags: var f } && f.HasFlag(LinkDeviceFlags.ControlsSpeed))
+                    {
+                        requested[channel.Channel] = duty;
+                    }
+                }
+
+                var written = hub.WriteFixedDuties(requested, pumpDuty);
+                _hubReceivedDuty[hub.SerialNumber] = duty;
+                if (failsafe || deepRepaint || refreshDue)
+                {
+                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written} channels)"
+                        + (failsafe ? " (FAILSAFE)" : ""));
+                }
+            }
+            catch (Exception ex)
+            {
+                _hubReceivedDuty.Remove(hub.SerialNumber);
+                DropHub(hub, $"speed write failed: {ex.Message}", warnings);
+            }
         }
 
         // ---- rescan the chains (topology changes: a device moved/removed) ----
@@ -301,6 +347,21 @@ public sealed class HeadlessLoop : IDisposable
                     {
                         _log($"hub {hub.SerialNumber[..8]}… chain changed: [{hub.ChannelSignature()}]");
                         _appliedHubRgb.Remove(hub.SerialNumber); // slots rebuilt — re-apply color
+                        _hubReceivedDuty.Remove(hub.SerialNumber); // duties must reach the new map this tick
+                    }
+
+                    try
+                    {
+                        if (hub.SyncLedRegistry(_log))
+                        {
+                            _appliedHubRgb.Remove(hub.SerialNumber);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // registry maintenance is best-effort — it must never take down the
+                        // speed-control session (v21.0 did exactly that, every rescan)
+                        _log($"hub {hub.SerialNumber[..8]}… LED registry sync skipped: {ex.Message}");
                     }
                 }
                 catch (Exception ex)
@@ -406,6 +467,9 @@ public sealed class HeadlessLoop : IDisposable
 
                 _hubs.Add(hub);
                 _appliedHubRgb.Remove(hub.SerialNumber);
+                _hubRgbRefreshDue.Remove(hub.SerialNumber);
+                _hubReceivedDuty.Remove(hub.SerialNumber); // first duty write lands this tick
+                _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
                 _hubOpenNotBefore.Remove(hub.SerialNumber);
                 _log($"headless: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
 
@@ -457,6 +521,9 @@ public sealed class HeadlessLoop : IDisposable
 
         _hubs.Remove(hub);
         _appliedHubRgb.Remove(hub.SerialNumber);
+        _hubRgbRefreshDue.Remove(hub.SerialNumber);
+        _hubReceivedDuty.Remove(hub.SerialNumber);
+        _hubDeepRepaintDue.Remove(hub.SerialNumber);
         _hubOpenNotBefore[hub.SerialNumber] = Environment.TickCount64 + 5_000;
         warnings.Add($"hub {hub.SerialNumber[..8]}…: {reason}");
     }
@@ -546,7 +613,9 @@ public sealed class HeadlessLoop : IDisposable
 
         foreach (var hub in _hubs.ToList())
         {
-            if (_appliedHubRgb.GetValueOrDefault(hub.SerialNumber) == key)
+            // steady re-stream (every HubRgbRefreshMs): color writes are ACKed with no readback
+            var isNewColor = _appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key;
+            if (!isNewColor && Environment.TickCount64 < _hubRgbRefreshDue.GetValueOrDefault(hub.SerialNumber))
             {
                 continue;
             }
@@ -561,10 +630,17 @@ public sealed class HeadlessLoop : IDisposable
                 hub.ApplyStaticColor(r, g, b);
                 _appliedHubRgb[hub.SerialNumber] = key;
                 _hubRgbRetryAt.Remove(hub.SerialNumber);
-                _log($"RGB applied on hub {hub.SerialNumber[..8]}…: {hub.TotalLeds} LEDs");
+                _hubRgbRefreshDue[hub.SerialNumber] = Environment.TickCount64 + HubRgbRefreshMs;
+                if (isNewColor)
+                {
+                    _log($"RGB applied on hub {hub.SerialNumber[..8]}…: {hub.TotalLeds} LEDs");
+                }
             }
             catch (Exception ex)
             {
+                // drop the applied key so a failed steady-state refresh recovers through the
+                // same retry path as a failed first apply
+                _appliedHubRgb.Remove(hub.SerialNumber);
                 _hubRgbRetryAt[hub.SerialNumber] = Environment.TickCount64 + 10_000;
                 warnings.Add($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message} (retry in 10 s)");
                 _log($"RGB on hub {hub.SerialNumber[..8]}… failed: {ex.Message}");
@@ -870,6 +946,8 @@ public sealed class HeadlessLoop : IDisposable
         _gpuPersistedKey = null;
         _gpuRgbScanned = false;
 
-        _lastDuty = -1;
+        _hubReceivedDuty.Clear();
+        _hubDeepRepaintDue.Clear();
+        _hubRgbRefreshDue.Clear();
     }
 }
