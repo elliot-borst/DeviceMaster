@@ -29,7 +29,7 @@ public sealed class LinuxI2cSmBus : ISmBus, IDisposable
     public int ReadByte(byte address)
     {
         var buffer = new byte[1];
-        if (I2cDev.Run(_fd, [new I2cDev.Message((ushort)(address << 1), Write: false, buffer)]) < 0)
+        if (I2cDev.Run(_fd, [new I2cDev.Message((ushort)address, Write: false, buffer)]) < 0)
         {
             return -1;
         }
@@ -42,8 +42,8 @@ public sealed class LinuxI2cSmBus : ISmBus, IDisposable
         var buffer = new byte[1];
         if (I2cDev.Run(_fd,
         [
-            new I2cDev.Message((ushort)(address << 1), Write: true, [command]),
-            new I2cDev.Message((ushort)(address << 1), Write: false, buffer),
+            new I2cDev.Message((ushort)address, Write: true, [command]),
+            new I2cDev.Message((ushort)address, Write: false, buffer),
         ]) < 0)
         {
             return -1;
@@ -54,14 +54,14 @@ public sealed class LinuxI2cSmBus : ISmBus, IDisposable
 
     public int WriteByteData(byte address, byte command, byte value)
     {
-        return I2cDev.Run(_fd, [new I2cDev.Message((ushort)(address << 1), Write: true, [command, value])]);
+        return I2cDev.Run(_fd, [new I2cDev.Message((ushort)address, Write: true, [command, value])]);
     }
 
     public int WriteWordData(byte address, byte command, ushort value)
     {
         // SMBus word data is little-endian on the wire (low byte first)
         return I2cDev.Run(_fd,
-            [new I2cDev.Message((ushort)(address << 1), Write: true, [command, (byte)value, (byte)(value >> 8)])]);
+            [new I2cDev.Message((ushort)address, Write: true, [command, (byte)value, (byte)(value >> 8)])]);
     }
 
     public int WriteBlockData(byte address, byte command, byte[] data)
@@ -69,7 +69,7 @@ public sealed class LinuxI2cSmBus : ISmBus, IDisposable
         var payload = new byte[data.Length + 1];
         payload[0] = command;
         Buffer.BlockCopy(data, 0, payload, 1, data.Length);
-        return I2cDev.Run(_fd, [new I2cDev.Message((ushort)(address << 1), Write: true, payload)]);
+        return I2cDev.Run(_fd, [new I2cDev.Message((ushort)address, Write: true, payload)]);
     }
 
     public void Dispose() => I2cDev.CloseDevice(_fd);

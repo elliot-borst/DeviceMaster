@@ -16,12 +16,15 @@ public static class I2cDev
     private const uint I2cRdwrIoctl = 0x0706;
     private const int O_RDWR = 0x0002;
 
+    // mirrors struct i2c_msg (include/uapi/linux/i2c.h): __u16 addr, __u16 flags, __u16 len, __u8 *buf.
+    // flags/len MUST be u16: packing them as bytes shifts len into padding and the kernel
+    // sees garbage flags and len=0 — every transaction fails.
     [StructLayout(LayoutKind.Sequential)]
     private struct I2cMsg
     {
         public ushort Addr;
-        public byte Flags;
-        public byte Len;
+        public ushort Flags;
+        public ushort Len;
         public IntPtr Buf;
     }
 
@@ -89,8 +92,8 @@ public static class I2cDev
                 var msg = new I2cMsg
                 {
                     Addr = message.Address,
-                    Flags = (byte)(message.Write ? I2cMWrite : I2cMRead),
-                    Len = (byte)message.Data.Length,
+                    Flags = (ushort)(message.Write ? I2cMWrite : I2cMRead),
+                    Len = (ushort)message.Data.Length,
                     Buf = pointers[i],
                 };
 
