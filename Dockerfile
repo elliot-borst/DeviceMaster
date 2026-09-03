@@ -33,7 +33,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /publish/ ./
-ENV DEVICEMASTER_CONFIG=/config/config.json
+ENV DEVICEMASTER_CONFIG=/config/config.json \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 VOLUME ["/config"]
 # SIGTERM is handled in-process (hubs are restored to hardware mode on stop) — the default
 # docker stop timeout (10 s) is plenty for the graceful path.
