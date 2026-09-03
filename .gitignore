@@ -494,3 +494,6 @@ dist/
 
 local/
 
+
+# local machine notes (rig-specific; never commit)
+local/

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <IsPackable>false</IsPackable>
@@ -23,6 +23,8 @@
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.AsusAura\DeviceMaster.Devices.AsusAura.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
+    <ProjectReference Include="..\..\src\DeviceMaster.Platform.Linux\DeviceMaster.Platform.Linux.csproj" />
+    <ProjectReference Include="..\..\src\DeviceMaster.Sensors.Linux\DeviceMaster.Sensors.Linux.csproj" />
   </ItemGroup>
 
 </Project>
