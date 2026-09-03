@@ -31,6 +31,16 @@ public sealed class HeadlessConfig
 
     public string NvidiaSmiPath { get; set; } = "/usr/bin/nvidia-smi";
 
+    /// <summary>
+    /// Path to a file holding one nvidia-smi CSV row (same --query-gpu columns as
+    /// <see cref="NvidiaSmiPath"/>), refreshed by an external process (e.g. a host cron).
+    /// Used when nvidia-smi cannot run inside the container; rows older than
+    /// <see cref="GpuSensorFileStaleSeconds"/> are ignored. Falls back to NvidiaSmiPath.
+    /// </summary>
+    public string? GpuSensorFile { get; set; }
+
+    public int GpuSensorFileStaleSeconds { get; set; } = 120;
+
     /// <summary>Drive the GPU's ENE RGB chip (default on when the chip is found).</summary>
     public bool GpuRgbEnabled { get; set; } = true;
 

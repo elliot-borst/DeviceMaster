@@ -24,6 +24,9 @@ designed to run in a Docker container on a server.
   (thin wrapper + pure line parser), `LinuxSensorSource` (`ISensorSource`; throws when no
   temperature source is readable — the loop treats that as the failsafe trigger).
 - `src/DeviceMaster.App.Headless` — the CLI and `HeadlessLoop` (the 1 Hz daemon).
+- `src/DeviceMaster.Lcd.Skia` — LCD frame rendering with SkiaSharp (the same math as the
+  Windows `LcdMetricRenderer`/`LcdFrames`, but System.Drawing is Windows-only on .NET 9).
+  Referenced by the headless app only; the Windows app keeps its System.Drawing renderers.
 
 All of it reuses the shared device sessions (`LinkHub`, `CorsairLcdDevice`, `EneRgbDevice`)
 and safety code (`SafetyGuard`, `SensorValidity`, `KnownDeviceRegistry`) from the Windows
@@ -68,6 +71,7 @@ docker run -d --name devicemaster \
     --privileged \
     --restart unless-stopped \
     -v /dev:/dev \
+    -v /run/udev:/run/udev:ro \
     -v /host/appdata/devicemaster:/config \
     -v /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro \
     devicemaster:headless
@@ -75,6 +79,10 @@ docker run -d --name devicemaster \
 
 - `--privileged` (or `--device /dev/hidraw*` + `--device /dev/i2c-*`) is required: hidraw
   for the hubs/LCD, i2c-dev for the GPU ENE chip.
+- **`-v /run/udev:/run/udev:ro` is required on most hosts**: HidSharp enumerates HID
+  devices through libudev, which reads the udev database (`/run/udev/data`). A container
+  without its own udev sees the `/dev/hidraw*` nodes but enumerates **zero devices**
+  without this mount.
 - Config lives at `DEVICEMASTER_CONFIG` (default `/config/config.json`). On first run a
   defaults file is written; the loop **re-reads the file on change** — edit it live and the
   next tick picks it up (no restart for duty/RGB/LCD changes).
@@ -93,6 +101,8 @@ manual duty, pump duty, RGB, LCD), plus:
 | `GpuPciAddress` | PCI address of the GPU whose i2c bus has the ENE chip (e.g. `"01:00.0"`); null = first NVIDIA adapter |
 | `I2cDevice` | explicit `/dev/i2c-N` (wins over `GpuPciAddress`) |
 | `NvidiaSmiPath` | path to nvidia-smi (default `/usr/bin/nvidia-smi`) |
+| `GpuSensorFile` | file holding one nvidia-smi CSV row, refreshed externally (host cron) — used when nvidia-smi cannot run in the container; stale rows ignored |
+| `GpuSensorFileStaleSeconds` | sensor-file freshness window (default 120) |
 | `GpuRgbEnabled` | drive the ENE chip (default true when the chip is found) |
 | `StatusFile` / `StatusFileEverySeconds` | status snapshot for external dashboards |
 | `Trace` | packet-level hub traffic logging |
@@ -114,8 +124,24 @@ manual duty, pump duty, RGB, LCD), plus:
 - **Cold boot ≠ USB unplug for iCUE LINK hubs.** The hubs take PCIe power from the PSU; USB
   is data only. After a hub power event, restart the loop (it re-enumerates automatically
   within ~30 s, but a container restart is the clean path).
-- The ENE chip's RAM is **volatile** — the loop re-applies the color at container start and
+- The ENE chip's color state is **volatile in RAM** but the chip also keeps the last saved
+  effect in **non-volatile flash**. The loop re-applies the color at container start and
   persists to flash after the color has settled (flash endurance is respected: one write per
   settled change, not per tick).
-- `nvidia-smi` is not in the image. Without the mount, GPU source temperature is simply
-  unavailable (failsafe engages if you selected GPU as the curve source — use Coolant or CPU).
+- **GPU temperature in the container**: host driver libraries (`libnvidia-ml`) are not
+  guaranteed to load under a container's glibc — on Unraid (Slackware) builds, nvidia-smi
+  fails to load them in a Debian container. The supported pattern is `GpuSensorFile`: a host
+  cron writes one `nvidia-smi --query-gpu=... --format=csv,noheader,nounits` row into the
+  config volume every minute; the loop reads it (freshness-checked) and falls back to
+  `NvidiaSmiPath` if the file is missing/stale.
+- **The GPU's ENE i2c bus may be unusable at the driver level.** Some NVIDIA driver
+  builds (observed with 610.57.04) reject every transaction on their own i2c-dev adapter
+  with `EINVAL` — including trivial 1-byte writes, and OpenRGB fails identically. The loop
+  logs `no ENE controller at 0x67` and continues without GPU RGB; the chip's flash-persisted
+  color remains on the card. There is no software workaround on the host; it is a driver
+  limitation (a different driver build may expose the bus).
+- LCD frames render through SkiaSharp (`DeviceMaster.Lcd.Skia`); the image ships
+  `fonts-dejavu-core` because the base image has no fonts.
+- `nvidia-smi` is not in the image. Without a GPU temperature source, GPU source
+  temperature is simply unavailable (failsafe engages if you selected GPU as the curve
+  source — use Coolant or CPU).
