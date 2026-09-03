@@ -3,9 +3,13 @@
 #   docker build -t devicemaster:headless .
 #   docker run -d --name devicemaster --privileged --restart unless-stopped \
 #       -v /dev:/dev \
+#       -v /run/udev:/run/udev:ro \
 #       -v /mnt/user/appdata/devicemaster:/config \
 #       -e DEVICEMASTER_CONFIG=/config/config.json \
 #       devicemaster:headless
+#
+# /run/udev (the udev database) must be mounted read-only: HidSharp enumerates HID devices
+# through libudev, which reads /run/udev/data — without it the container sees zero devices.
 #
 # The image is self-contained (no .NET runtime needed on the host). nvidia-smi is NOT in the
 # image — mount the host binary if GPU temperature is wanted:
@@ -13,7 +17,8 @@
 #
 # NOTE: the headless app shares its device sessions and safety code with the Windows app but
 # is built for the linux-x64 RID. The shared projects target net9.0-windows (API-surface only —
-# the executable never calls Windows APIs).
+# the executable never calls Windows APIs). LCD frames render via SkiaSharp (System.Drawing
+# is Windows-only on .NET 9); the SkiaSharp native library ships in the published app.
 
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG TARGETARCH
@@ -27,9 +32,10 @@ RUN dotnet publish src/DeviceMaster.App.Headless/DeviceMaster.App.Headless.cspro
     -o /publish
 
 FROM debian:bookworm-slim
-# libfontconfig1/libfreetype6: System.Drawing (the LCD metric renderer) needs fontconfig.
+# libfontconfig1/libfreetype6/fonts-dejavu-core: SkiaSharp (the LCD frame renderer)
+# resolves fonts through fontconfig; the image has no fonts otherwise.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libfontconfig1 libfreetype6 \
+    && apt-get install -y --no-install-recommends libfontconfig1 libfreetype6 fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /publish/ ./

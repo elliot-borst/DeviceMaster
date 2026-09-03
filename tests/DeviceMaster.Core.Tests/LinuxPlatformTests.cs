@@ -161,4 +161,36 @@ public class LinuxPlatformTests : IDisposable
         Assert.False(GpuI2cLocator.SamePci("1:00.0", "1:01.0"));
         Assert.False(GpuI2cLocator.SamePci("garbage", "1:00.0"));
     }
+
+    // ---- Skia LCD renderer (headless Linux frame path) ----
+
+    [Fact]
+    public void SkiaLcd_Solid_ProducesJpeg()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return; // SkiaSharp native assets are exercised on the Linux test host
+        }
+
+        var jpeg = DeviceMaster.Lcd.Skia.SkiaLcdFrames.Solid(480, 480, 128, 0, 255);
+        Assert.True(jpeg.Length > 1000, "JPEG too small");
+        Assert.Equal(0xFF, jpeg[0]);
+        Assert.Equal(0xD8, jpeg[1]);
+    }
+
+    [Fact]
+    public void SkiaLcd_MetricRender_ProducesJpegAndCaches()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var a = DeviceMaster.Lcd.Skia.SkiaLcdMetricRenderer.Render(480, 480, "COOLANT", "42", "C", (128, 0, 255));
+        var b = DeviceMaster.Lcd.Skia.SkiaLcdMetricRenderer.Render(480, 480, "COOLANT", "42", "C", (128, 0, 255));
+        Assert.Same(a, b); // second call hits the cache
+        Assert.True(a.Length > 1000);
+        Assert.Equal(0xFF, a[0]);
+        Assert.Equal(0xD8, a[1]);
+    }
 }

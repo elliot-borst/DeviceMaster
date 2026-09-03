@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Platform.Linux\DeviceMaster.Platform.Linux.csproj" />
     <ProjectReference Include="..\..\src\DeviceMaster.Sensors.Linux\DeviceMaster.Sensors.Linux.csproj" />
+    <ProjectReference Include="..\..\src\DeviceMaster.Lcd.Skia\DeviceMaster.Lcd.Skia.csproj" />
   </ItemGroup>
 
 </Project>

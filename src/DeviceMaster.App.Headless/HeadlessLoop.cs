@@ -6,8 +6,14 @@ using DeviceMaster.Control;
 using DeviceMaster.Devices.CorsairLink;
 using DeviceMaster.Devices.CorsairLink.Protocol;
 using DeviceMaster.Devices.EneRgb;
+using DeviceMaster.Lcd.Skia;
 using DeviceMaster.Platform.Linux;
 using DeviceMaster.Sensors.Linux;
+
+// The Control project's LcdFrames/LcdMetricRenderer use System.Drawing, which is
+// Windows-only on .NET 9 — the headless loop renders through the SkiaSharp copies.
+using LcdFrames = DeviceMaster.Lcd.Skia.SkiaLcdFrames;
+using LcdMetricRenderer = DeviceMaster.Lcd.Skia.SkiaLcdMetricRenderer;
 
 namespace DeviceMaster.App.Headless;
 
@@ -390,7 +396,15 @@ public sealed class HeadlessLoop : IDisposable
         bool failsafe, List<DeviceReading> readings, List<string> warnings)
     {
         var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
-        var gpu = SafeRead(() => NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath)?.TemperatureC);
+        GpuReading? gpu;
+        try
+        {
+            gpu = ReadGpu(cfg);
+        }
+        catch
+        {
+            gpu = null;
+        }
 
         _status = new ControlStatus
         {
@@ -400,7 +414,11 @@ public sealed class HeadlessLoop : IDisposable
             SourceTemperatureC = sourceTemp,
             CoolantTemperatureC = coolant,
             CpuTemperatureC = cpu,
-            GpuTemperatureC = gpu,
+            GpuTemperatureC = gpu?.TemperatureC,
+            GpuLoadPercent = gpu?.UtilizationPercent,
+            GpuPowerW = gpu?.PowerW,
+            VramUsedGb = MbToGb(gpu?.MemoryUsedMb),
+            VramTotalGb = MbToGb(gpu?.MemoryTotalMb),
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             Devices = readings,
@@ -553,9 +571,37 @@ public sealed class HeadlessLoop : IDisposable
         {
             CurveSource.Coolant => TryReadCoolant(null),
             CurveSource.Cpu => Hwmon.CpuTemperatureC(),
-            CurveSource.Gpu => NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath)?.TemperatureC,
+            CurveSource.Gpu => ReadGpu(cfg)?.TemperatureC,
             _ => null,
         };
+    }
+
+    private static double? MbToGb(double? mb) => mb is null ? null : mb.Value / 1024.0;
+
+    /// <summary>GPU reading: external sensor file first (host-cron pattern), nvidia-smi as fallback.</summary>
+    private GpuReading? ReadGpu(HeadlessConfig cfg)
+    {
+        if (!string.IsNullOrWhiteSpace(cfg.GpuSensorFile))
+        {
+            try
+            {
+                var info = new FileInfo(cfg.GpuSensorFile);
+                if (info.Exists && DateTime.UtcNow - info.LastWriteTimeUtc < TimeSpan.FromSeconds(cfg.GpuSensorFileStaleSeconds))
+                {
+                    var line = File.ReadLines(cfg.GpuSensorFile).FirstOrDefault(l => l.Contains(","));
+                    if (line is not null)
+                    {
+                        return NvidiaSmi.ParseLine(line);
+                    }
+                }
+            }
+            catch
+            {
+                // fall through to nvidia-smi
+            }
+        }
+
+        return NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath);
     }
 
     /// <summary>Loop coolant temperature from the hub chain's pump channel (all hubs, first live reading).</summary>
@@ -875,7 +921,7 @@ public sealed class HeadlessLoop : IDisposable
         LcdMetric metric, double? coolant, double? sourceTemp, int duty, int pumpDuty, List<DeviceReading> readings)
     {
         var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
-        var gpu = SafeRead(() => NvidiaSmi.ReadFirst(_config.NvidiaSmiPath)?.TemperatureC);
+        var gpu = SafeRead(() => ReadGpu(_config)?.TemperatureC);
         var pumpRpm = readings.FirstOrDefault(d => d.IsPump)?.Rpm;
 
         return metric switch
