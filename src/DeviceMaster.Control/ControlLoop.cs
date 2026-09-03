@@ -13,7 +13,7 @@ namespace DeviceMaster.Control;
 
 public sealed record DeviceReading(
     string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump,
-    string? Id = null, string? HubSerial = null, int? Channel = null);
+    string? Id = null, string? HubSerial = null, int? Channel = null, bool IsScreen = false);
 
 /// <summary>Immutable snapshot of the loop's last tick, safe to read from any thread.</summary>
 public sealed record ControlStatus
@@ -37,6 +37,9 @@ public sealed record ControlStatus
     public double? VramTotalGb { get; init; }
 
     public int TargetDutyPercent { get; init; }
+
+    /// <summary>Pump duty actually written to the chain (null = hubs in hardware mode).</summary>
+    public int? PumpDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
 
     /// <summary>Turzx 8.8" screen connection state for the UI ("Connected · COM3", "Not detected", …); null = not managed.</summary>

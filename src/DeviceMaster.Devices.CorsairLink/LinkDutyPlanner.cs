@@ -11,6 +11,9 @@ public sealed record LinkChannel(int Channel, string Id, byte Model, byte Varian
     /// <summary>Unknown devices are treated as pumps — maximum caution.</summary>
     public bool IsPump => Info?.IsPump ?? true;
 
+    /// <summary>Screen modules (LCD) enumerate on the chain but have no speed to control.</summary>
+    public bool IsScreen => Info?.IsScreen ?? false;
+
     public string Name => Info?.Name ?? $"UNKNOWN (model=0x{Model:X2}, variant=0x{Variant:X2})";
 }
 

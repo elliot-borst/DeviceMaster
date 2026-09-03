@@ -56,6 +56,12 @@ public sealed record LinkDeviceInfo(LinkDeviceModel Model, byte Variant, string 
             or LinkDeviceModel.LiquidCoolerTitanSeries
             or LinkDeviceModel.PumpXd5Series
             or LinkDeviceModel.PumpXd6Series;
+
+    /// <summary>
+    /// Screen modules enumerate on the chain but have no speed to control — the
+    /// dashboard must not count them as fans.
+    /// </summary>
+    public bool IsScreen => Model is LinkDeviceModel.LcdXd5Elite;
 }
 
 /// <summary>Catalog of known iCUE LINK chain devices, ported from FanControl.CorsairLink.</summary>

@@ -588,7 +588,7 @@ internal static class Program
 
         var log = (Action<string>)(msg => Log.Information("{msg}", msg));
         using var loop = StartLoop(configPath, trace, log);
-        using var web = new HeadlessWebServer(loop, port, log);
+        using var web = new HeadlessWebServer(loop, port, log, configPath);
 
         SignalWatcher.Install();
 

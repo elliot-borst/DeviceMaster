@@ -242,7 +242,7 @@ public sealed class HeadlessLoop : IDisposable
             var sourceTempForStatus = cfg.Control.Source == CurveSource.Coolant
                 ? coolant
                 : ReadSourceTemperature(cfg);
-            Publish(cfg, sourceTempForStatus, coolant, 0, false, readings, warnings);
+            Publish(cfg, sourceTempForStatus, coolant, 0, null, false, readings, warnings);
             return;
         }
 
@@ -399,11 +399,11 @@ public sealed class HeadlessLoop : IDisposable
                 : $"GPU sensor file stale ({(DateTime.UtcNow - _gpuSensorLastWriteUtc).TotalMinutes:F0} min since last update) — GPU figures may be unavailable");
         }
 
-        Publish(cfg, sourceTemp, coolant, duty, failsafe, readings, warnings);
+        Publish(cfg, sourceTemp, coolant, duty, pumpDuty, failsafe, readings, warnings);
     }
 
     private void Publish(HeadlessConfig cfg, double? sourceTemp, double? coolant, int duty,
-        bool failsafe, List<DeviceReading> readings, List<string> warnings)
+        int? pumpDuty, bool failsafe, List<DeviceReading> readings, List<string> warnings)
     {
         var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
         GpuReading? gpu;
@@ -430,6 +430,7 @@ public sealed class HeadlessLoop : IDisposable
             VramUsedGb = MbToGb(gpu?.MemoryUsedMb),
             VramTotalGb = MbToGb(gpu?.MemoryTotalMb),
             TargetDutyPercent = duty,
+            PumpDutyPercent = pumpDuty,
             FailsafeActive = failsafe,
             Devices = readings,
             Warnings = warnings,
@@ -642,7 +643,8 @@ public sealed class HeadlessLoop : IDisposable
                         var temp = temps.FirstOrDefault(t => t.Channel == channel.Channel);
                         readings.Add(new DeviceReading(
                             "corsair-link", channel.Name, speed.IsAvailable ? speed.Rpm : null,
-                            0, channel.IsPump, HubSerial: hub.SerialNumber, Channel: channel.Channel));
+                            0, channel.IsPump,
+                            HubSerial: hub.SerialNumber, Channel: channel.Channel, IsScreen: channel.IsScreen));
                     }
                 }
 

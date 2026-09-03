@@ -83,4 +83,17 @@ public sealed class HeadlessConfig
     }
 
     public string Save() => JsonSerializer.Serialize(this, JsonOptions);
+
+    /// <summary>Deserializes config JSON (same options as <see cref="Save"/>).</summary>
+    public static HeadlessConfig? Deserialize(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<HeadlessConfig>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 }
