@@ -74,6 +74,7 @@ public sealed class HeadlessWebServer : IDisposable
         {
             case ("GET", "/") or ("GET", "/index.html"):
                 ctx.Response.StatusCode = 200;
+                ctx.Response.AddHeader("Cache-Control", "no-store");
                 Write(ctx, "text/html; charset=utf-8", DashboardHtml);
                 handled = true;
                 break;
@@ -412,7 +413,7 @@ td.dim { color:var(--dim); }
 const $ = id => document.getElementById(id);
 const MODES = ["Off","Manual","Curve"];
 const f = (n,d=1) => n == null ? "—" : (Math.round(n*Math.pow(10,d))/Math.pow(10,d)).toString();
-let cfg = null, lastApplied = 0;
+let cfg = null;
 
 /* ---- nav ---- */
 document.querySelectorAll(".navbtn").forEach(b => b.onclick = () => {
@@ -429,26 +430,62 @@ function toast(msg, err=false){
 }
 
 /* ---- config load / apply ---- */
+const hx = h => ("0"+h.toString(16)).slice(-2);
 function initControls(){
-  const c = cfg.Control;
-  $("mode").value = c.Mode;
-  $("fanDuty").value = c.ManualDutyPercent; $("fanDutyVal").textContent = c.ManualDutyPercent + " %";
-  $("pumpDuty").value = c.PumpDutyPercent;   $("pumpDutyVal").textContent = c.PumpDutyPercent + " %";
-  if ([0,2].includes(c.Source)) $("source").value = c.Source;
-  $("rgbOn").checked = c.RgbEnabled; $("rgbOnEcho").textContent = c.RgbEnabled ? "on" : "off";
-  const hx = h => ("0"+h.toString(16)).slice(-2);
-  $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
-  $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %";
-  $("lcdMode").value = c.LcdScreens; $("lcdMetric").value = c.PumpScreenMetric;
-  $("lcdBright").value = c.LcdBrightness; $("lcdBrightVal").textContent = c.LcdBrightness + " %";
-  updateRgbPreview(); refreshControlNotes(); renderCurve();
+  syncControls(); renderCurve();
 }
+/* Re-sync every control from the authoritative config (fetched on a timer), without
+   stomping anything the user is focused on / dragging. */
+function syncControls(){
+  if (!cfg) return;
+  const c = cfg.Control;
+  const busy = id => document.activeElement === $(id) || $(id)._drag;
+  if (!busy("fanDuty")) { $("fanDuty").value = c.ManualDutyPercent; $("fanDutyVal").textContent = c.ManualDutyPercent + " %"; }
+  if (!busy("pumpDuty")) { $("pumpDuty").value = c.PumpDutyPercent; $("pumpDutyVal").textContent = c.PumpDutyPercent + " %"; }
+  if (!busy("mode")) $("mode").value = c.Mode;
+  if (!busy("source") && [0,2].includes(c.Source)) $("source").value = c.Source;
+  if (!busy("rgbOn")) $("rgbOn").checked = c.RgbEnabled;
+  if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
+  if (!busy("rgbBright")) { $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %"; }
+  if (!busy("lcdMode")) $("lcdMode").value = c.LcdScreens;
+  if (!busy("lcdMetric")) $("lcdMetric").value = c.PumpScreenMetric;
+  if (!busy("lcdBright")) { $("lcdBright").value = c.LcdBrightness; $("lcdBrightVal").textContent = c.LcdBrightness + " %"; }
+  updateRgbPreview();
+  refreshControlNotes();
+}
+["fanDuty","pumpDuty","rgbBright","lcdBright"].forEach(id => {
+  const el = $(id);
+  el.addEventListener("pointerdown", () => el._drag = true);
+  window.addEventListener("pointerup", () => el._drag = false);
+});
 function apply(patch){
   if (!cfg) return;
-  const t = Date.now(); if (t - lastApplied < 300) return; lastApplied = t; // debounce slider spam
+  // one POST per user action (sliders fire on release, colours are a single batched patch) —
+  // no debounce: a dropped POST would leave the UI showing a value the server never got
   fetch("/config.json", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch) })
     .then(r => r.json()).then(j => {
       if (!j.ok) throw new Error(j.error || "rejected");
+      // re-sync the local copy from the server's CLAMPED values (pumpDuty=10 -> 50 etc.),
+      // so enable/disable state reacts immediately (e.g. mode -> Manual unlocks the slider)
+      const c = cfg.Control;
+      (j.applied||[]).forEach(a => {
+        const i = a.indexOf("="), k = a.slice(0, i), v = a.slice(i + 1);
+        switch (k) {
+          case "mode": c.Mode = +v; break;
+          case "fanDuty": c.ManualDutyPercent = +v; break;
+          case "pumpDuty": c.PumpDutyPercent = +v; break;
+          case "source": c.Source = +v; break;
+          case "rgbEnabled": c.RgbEnabled = v === "True"; break;
+          case "rgbR": c.RgbR = +v; break;
+          case "rgbG": c.RgbG = +v; break;
+          case "rgbB": c.RgbB = +v; break;
+          case "rgbBrightness": c.RgbBrightness = +v; break;
+          case "lcdScreens": c.LcdScreens = +v; break;
+          case "lcdBrightness": c.LcdBrightness = +v; break;
+          case "pumpScreenMetric": c.PumpScreenMetric = +v; break;
+        }
+      });
+      syncControls();
       const parts = (j.applied||[]).map(a => a.replace("="," = "));
       toast(parts.length ? "Applied: " + parts.join(", ") : "No change");
     })
@@ -559,14 +596,11 @@ function tick(){
     $("devCount2").textContent = deviceCounts(s);
     $("devices").innerHTML = deviceRows(s, false);
     $("devices2").innerHTML = deviceRows(s, true);
-    if (cfg) {
-      // don't stomp the user while they're dragging — only sync values when not focused
-      if (document.activeElement !== $("fanDuty")) $("fanDuty").value = cfg.Control.ManualDutyPercent;
-      if (document.activeElement !== $("pumpDuty")) $("pumpDuty").value = cfg.Control.PumpDutyPercent;
-    }
   }).catch(() => { $("dot").className = "dot bad"; $("foot").textContent = "dashboard offline"; });
 }
 tick(); setInterval(tick, 2000);
+const pullConfig = () => fetch("/config.json").then(r => r.json()).then(c => { cfg = c; syncControls(); }).catch(() => {});
+pullConfig(); setInterval(pullConfig, 5000);
 fetch("/config.json").then(r => r.json()).then(c => { cfg = c; initControls(); }).catch(() => {});
 </script>
 </body>
