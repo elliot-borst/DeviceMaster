@@ -68,6 +68,8 @@ public sealed class HeadlessLoop : IDisposable
     private string? _appliedGpuRgb;
     private string? _gpuPersistedKey;
     private long _gpuRgbRetryAt;
+    private bool _gpuSensorStale;
+    private DateTime _gpuSensorLastWriteUtc = DateTime.MinValue;
     private long _gpuPersistDue;
 
     private CorsairLcdDevice? _lcd;
@@ -389,6 +391,13 @@ public sealed class HeadlessLoop : IDisposable
         ApplyLcd(cfg, coolant, sourceTemp, duty, pumpDuty, readings, warnings);
 
         // ---- telemetry into readings (RPMs) + publish ----
+        if (_gpuSensorStale)
+        {
+            warnings.Add(_gpuSensorLastWriteUtc == DateTime.MinValue
+                ? "GPU sensor file missing — GPU figures unavailable"
+                : $"GPU sensor file stale ({(DateTime.UtcNow - _gpuSensorLastWriteUtc).TotalMinutes:F0} min since last update) — GPU figures may be unavailable");
+        }
+
         Publish(cfg, sourceTemp, coolant, duty, failsafe, readings, warnings);
     }
 
@@ -591,13 +600,22 @@ public sealed class HeadlessLoop : IDisposable
                     var line = File.ReadLines(cfg.GpuSensorFile).FirstOrDefault(l => l.Contains(","));
                     if (line is not null)
                     {
+                        _gpuSensorStale = false;
                         return NvidiaSmi.ParseLine(line);
                     }
+
+                    _gpuSensorStale = true;
+                    _gpuSensorLastWriteUtc = info.LastWriteTimeUtc;
+                }
+                else
+                {
+                    _gpuSensorStale = true;
+                    _gpuSensorLastWriteUtc = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue;
                 }
             }
             catch
             {
-                // fall through to nvidia-smi
+                _gpuSensorStale = true;
             }
         }
 
