@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Control\DeviceMaster.Control.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.CorsairLink\DeviceMaster.Devices.CorsairLink.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Platform.Linux\DeviceMaster.Platform.Linux.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Sensors.Linux\DeviceMaster.Sensors.Linux.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+</Project>
