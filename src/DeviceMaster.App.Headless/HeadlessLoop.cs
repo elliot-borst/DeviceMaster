@@ -33,7 +33,7 @@ public sealed class HeadlessLoop : IDisposable
     private const int TickMs = 1000;
     private const int CorsairRefreshTicks = 10;   // rewrite unchanged duties every N ticks
     private const int CorsairRescanTicks = 30;    // re-enumerate the chains every N ticks
-    private const int LcdSolidKeepaliveMs = 30_000; // pump panel reasserts its own screen ~30 s
+    private const int LcdKeepaliveMs = 10_000; // matches the Windows loop (PumpLcdKeepaliveMs): the panel reasserts its own screen when frames stop
     private const int RgbPersistSettleMs = 10_000;
 
     // v91 hub-color policy: color writes are ACKed with no readback, so colors re-stream on a
@@ -75,7 +75,8 @@ public sealed class HeadlessLoop : IDisposable
     private CorsairLcdDevice? _lcd;
     private long _lcdRetryAt;
     private long _lcdFrameDue;
-    private long _lcdSolidKeepaliveDue;
+    private long _lcdKeepaliveDue;
+    private bool _lcdKeepaliveLogged;
     private string _lcdShownKey = "";
     private int _appliedLcdBrightness = -1;
 
@@ -889,11 +890,11 @@ public sealed class HeadlessLoop : IDisposable
                     // the panel reasserts its own liquid-temp screen when frames stop — keep the
                     // solid background alive (same keepalive as the Windows loop)
                     if (_lcdShownKey != cfg.Control.LcdScreens.ToString()
-                        || Environment.TickCount64 >= _lcdSolidKeepaliveDue)
+                        || Environment.TickCount64 >= _lcdKeepaliveDue)
                     {
                         lcd.SendJpegFrame(solid);
                         _lcdShownKey = cfg.Control.LcdScreens.ToString();
-                        _lcdSolidKeepaliveDue = Environment.TickCount64 + LcdSolidKeepaliveMs;
+                        _lcdKeepaliveDue = Environment.TickCount64 + LcdKeepaliveMs;
                     }
 
                     break;
@@ -906,12 +907,21 @@ public sealed class HeadlessLoop : IDisposable
 
                     var (label, value, unit) = MetricValue(cfg.Control.PumpScreenMetric, coolant, sourceTemp, duty, pumpDuty, readings);
                     var key = $"{label}|{value}|{unit}";
-                    if (key != _lcdShownKey)
+                    // Windows streams the metrics frame on content change AND re-sends it on a
+                    // keepalive cadence — without that the panel reverts to its own screen once
+                    // the values settle.
+                    if (key != _lcdShownKey || Environment.TickCount64 >= _lcdKeepaliveDue)
                     {
                         var frame = LcdMetricRenderer.Render(480, 480, label, value, unit, accent);
                         lcd.SendJpegFrame(frame);
+                        if (key == _lcdShownKey && !_lcdKeepaliveLogged)
+                        {
+                            _lcdKeepaliveLogged = true;
+                            _log("headless: pump LCD metrics keepalive active (stable values, frames re-sent)");
+                        }
                         _lcdShownKey = key;
                         _lcdFrameDue = Environment.TickCount64 + 2_000; // ~0.5 fps content churn
+                        _lcdKeepaliveDue = Environment.TickCount64 + LcdKeepaliveMs;
                     }
 
                     break;
