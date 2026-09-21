@@ -96,6 +96,9 @@ public sealed class MainWindow : Window
     // NInfer tab (only on machines with the ninfer.cmd control script)
     private NInferPage? _ninferPage;
 
+    // Button Art tab
+    private readonly ButtonArtPage _buttonArtPage = new();
+
     // tray
     private WinForms.NotifyIcon? _trayIcon;
     private bool _exitRequested;
@@ -271,6 +274,7 @@ public sealed class MainWindow : Window
             ("lighting", "◈", "Lighting"),
             ("screens", "▣", "Screens"),
             ("turzx", "▤", "Turzx"),
+            ("buttonart", "⛶", "Button Art"),
         };
         if (_ninferPage is not null)
         {
@@ -299,6 +303,7 @@ public sealed class MainWindow : Window
         _pages["lighting"] = WrapPage(BuildLightingPage());
         _pages["screens"] = WrapPage(BuildScreensPage());
         _pages["turzx"] = WrapPage(BuildTurzxPage());
+        _pages["buttonart"] = WrapPage(_buttonArtPage.Build());
         if (_ninferPage is not null)
         {
             _pages["ninfer"] = WrapPage(_ninferPage.Build());

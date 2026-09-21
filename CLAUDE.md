@@ -16,6 +16,11 @@ HID/WinUSB/serial to the hardware. C#/.NET (`net9.0-windows`), Serilog, HidSharp
 Work proceeds in stages 0–6 (docs/PLAN.md). A stage must build, pass tests, and be exercised
 on the real hardware before the next begins. Stage 0 complete 2026-07-06.
 
+## Workflow
+
+Every piece of work gets a GitHub issue (`gh issue create`) before or alongside the work
+itself — features, fixes, chores, all of it. Reference the issue number in the commit(s).
+
 ## Layout
 
 - `src/DeviceMaster.Core` — abstractions, discovery, safety, device registry. No protocol code.
