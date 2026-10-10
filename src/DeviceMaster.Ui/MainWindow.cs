@@ -7,6 +7,8 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using DeviceMaster.AiPause;
+using DeviceMaster.AiPause.Providers;
 using DeviceMaster.Control;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
@@ -96,6 +98,10 @@ public sealed class MainWindow : Window
     // NInfer tab (only on machines with the ninfer.cmd control script)
     private NInferPage? _ninferPage;
 
+    // AI Pause tab: frees GPU memory from local AI (Ollama, LM Studio, NInfer, …) while gaming
+    private AiPausePage? _aiPausePage;
+    private AiPauseService? _aiPause;
+
     // tray
     private WinForms.NotifyIcon? _trayIcon;
     private bool _exitRequested;
@@ -141,6 +147,7 @@ public sealed class MainWindow : Window
             UpdateControlStatus();
             MaybeRebuildScreenList();
             _ninferPage?.Tick(_loop?.Status);
+            _aiPausePage?.Tick();
             if (_downloading)
             {
                 _checkLabel.Text = $"↻  Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
@@ -259,9 +266,34 @@ public sealed class MainWindow : Window
         // ---- nav ----
         // the NInfer tab only exists on machines that have the control script — everyone else
         // never sees it (the repo stays generic; nothing NInfer-related runs without it)
+        NInferService? ninferService = null;
         if (NInferService.ResolveScript(_controlSettings) is { } ninferScript)
         {
-            _ninferPage = new NInferPage(new NInferService(_controlSettings, TrySaveSettings, LogLine, ninferScript));
+            ninferService = new NInferService(_controlSettings, TrySaveSettings, LogLine, ninferScript);
+            _ninferPage = new NInferPage(ninferService);
+        }
+
+        try
+        {
+            var providers = new List<IAiProvider>();
+            if (ninferService is not null)
+            {
+                providers.Add(new NInferAiProvider(ninferService));
+            }
+
+            var aiSettingsDir = System.IO.Path.GetDirectoryName(ControlSettings.ConfigPath)!;
+            var aiSettings = AiPauseSettings.Load(System.IO.Path.Combine(aiSettingsDir, "ai-pause.json"));
+            providers.Add(new OllamaProvider(aiSettings));
+            providers.Add(new LmStudioProvider(aiSettings));
+            providers.Add(new ProcessAppProvider(aiSettings));
+            _aiPause = new AiPauseService(aiSettingsDir, aiSettings, providers, LogLine);
+            _aiPause.Notify += (title, text) => Dispatcher.BeginInvoke(() =>
+                _trayIcon?.ShowBalloonTip(4000, title, text, WinForms.ToolTipIcon.Info));
+            _aiPausePage = new AiPausePage(_aiPause, ninferService is not null);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"ai-pause: failed to start: {ex}"); // the rest of the app runs without it
         }
 
         var navItems = new List<(string Key, string Glyph, string Label)>
@@ -275,6 +307,11 @@ public sealed class MainWindow : Window
         if (_ninferPage is not null)
         {
             navItems.Add(("ninfer", "λ", "NInfer"));
+        }
+
+        if (_aiPausePage is not null)
+        {
+            navItems.Add(("aipause", "⏸", "AI Pause"));
         }
 
         navItems.Add(("devices", "⚙", "Devices"));
@@ -302,6 +339,11 @@ public sealed class MainWindow : Window
         if (_ninferPage is not null)
         {
             _pages["ninfer"] = WrapPage(_ninferPage.Build());
+        }
+
+        if (_aiPausePage is not null)
+        {
+            _pages["aipause"] = WrapPage(_aiPausePage.Build());
         }
 
         _pages["devices"] = WrapPage(BuildDevicesPage());
@@ -1551,6 +1593,41 @@ public sealed class MainWindow : Window
         var open = menu.Items.Add("Open DeviceMaster", null, (_, _) => ShowFromTray());
         open.Font = new System.Drawing.Font(open.Font, System.Drawing.FontStyle.Bold);
         menu.Items.Add(new WinForms.ToolStripSeparator());
+        if (_aiPause is { } aiPause)
+        {
+            // AI Pause quick controls: state line, pause/resume, automation switch
+            var aiState = new WinForms.ToolStripMenuItem { Enabled = false };
+            var aiPauseItem = new WinForms.ToolStripMenuItem("Pause AI", null, (_, _) => aiPause.PauseNow());
+            var aiResumeItem = new WinForms.ToolStripMenuItem("Resume AI", null, (_, _) =>
+            {
+                if (aiPause.Snapshot.RunningGames.Any(g => g.Rule != GameRule.Off) && aiPause.Snapshot.Holding)
+                {
+                    ShowFromTray(); // resuming mid-game needs the confirmation on the AI Pause page
+                    SelectPage("aipause");
+                    return;
+                }
+
+                aiPause.ResumeNow();
+            });
+            var aiAuto = new WinForms.ToolStripMenuItem("Pause AI automatically for games", null, (_, _) =>
+                aiPause.SetAutomation(!aiPause.Settings.AutomationEnabled));
+            menu.Items.AddRange([aiState, aiPauseItem, aiResumeItem, aiAuto, new WinForms.ToolStripSeparator()]);
+            menu.Opening += (_, _) =>
+            {
+                var snap = aiPause.Snapshot;
+                aiState.Text = $"{snap.Headline} — {snap.Hint}";
+                if (aiState.Text.Length > 90)
+                {
+                    aiState.Text = aiState.Text[..87] + "…";
+                }
+
+                var busy = snap.State == AiPauseState.Busy;
+                aiPauseItem.Enabled = !busy && !snap.Holding && !snap.ManualHold;
+                aiResumeItem.Enabled = !busy && (snap.Holding || snap.ManualHold);
+                aiAuto.Checked = aiPause.Settings.AutomationEnabled;
+            };
+        }
+
         menu.Items.Add("Exit", null, (_, _) => ExitApplication());
         _trayIcon.ContextMenuStrip = menu;
     }
@@ -1596,6 +1673,10 @@ public sealed class MainWindow : Window
 
         _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
         _loop = null;
+
+        _aiPausePage?.Dispose(); // stops the watcher; a pending restore stays in its journal for next start
+        _aiPausePage = null;
+        _aiPause = null;
 
         _ninferPage?.Dispose(); // kills the wsl journal stream; the server itself is left alone
         _ninferPage = null;

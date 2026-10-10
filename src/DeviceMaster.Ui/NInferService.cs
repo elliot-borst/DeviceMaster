@@ -53,7 +53,8 @@ public sealed record NInferSnapshot
 ///    encodes invariants (stop = service + <c>wsl --terminate</c> so RAM and VRAM come back;
 ///    start/restart respawn the keep-alive that stops WSL idle-killing the distro).
 ///
-/// NInfer is never auto-started: the only paths that run "start" are the explicit UI buttons.
+/// NInfer is only ever started by the explicit UI buttons, or by AI Pause bringing back a server
+/// that was running when a game paused it (<see cref="NInferAiProvider"/>).
 /// </summary>
 public sealed class NInferService : IDisposable
 {
