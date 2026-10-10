@@ -90,3 +90,15 @@ ports and we were driving the wrong one (see docs/SUPPORTED-DEVICES.md).
 - **LibreHardwareMonitorLib** — CPU/GPU/motherboard sensors (elevation required for CPU),
   and `Control` sensors for SuperIO fan headers + NVIDIA coolers (SetSoftware/SetDefault).
   Requires the separately installed PawnIO driver (pawnio.eu) since 0.9.6.
+
+## AI Pause (game detection + local-AI pause/restore)
+
+- **Vkuparin/gamepause-for-local-ai** (Rust, MIT) — the behaviour `DeviceMaster.AiPause` ports:
+  launcher library adapters (`src/discovery/launchers.rs`: Steam `libraryfolders.vdf` +
+  `appmanifest_*.acf` StateFlags bit 4, Epic `.item` manifests, GOG/EA/Ubisoft registry keys,
+  Battle.net `--uid=` uninstall entries, Xbox `.GamingRoot`), the helper/anti-cheat exclusion
+  list (`src/processes.rs`), the session rules (shared snapshot, restore countdown cancelled by
+  a new game, Ask rule per running instance, unknown detection never restores) and Ollama's
+  frozen keep-alive on reload (`src/ollama_expiry.rs`). Rewritten in C#, not copied; LM Studio
+  uses the public `lms` CLI instead of GamePause's internal-protocol snapshot.
+

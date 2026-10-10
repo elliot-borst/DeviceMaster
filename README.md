@@ -15,6 +15,16 @@ no vendor software or services at runtime.
 Details and protocol notes: [docs/SUPPORTED-DEVICES.md](docs/SUPPORTED-DEVICES.md) ·
 Roadmap: [docs/PLAN.md](docs/PLAN.md) · Protocol sources: [docs/REFERENCES.md](docs/REFERENCES.md)
 
+## AI Pause — give games the VRAM, get local AI back afterwards
+
+The **AI Pause** tab watches for games and frees GPU memory from local AI while you play:
+Ollama models are unloaded, LM Studio models unloaded via its `lms` CLI, other AI servers
+(llama-server, KoboldCpp, …) stopped, and the NInfer WSL server stopped when its control
+script exists. 30 s after the last game exits everything comes back. Games are found
+automatically in Steam, Epic, GOG, EA, Ubisoft Connect, Battle.net and Xbox libraries; each
+game can be set to **On**, **Ask** or **Off**. Pause/Resume also live in the tray menu. Details:
+[docs/AI-PAUSE.md](docs/AI-PAUSE.md).
+
 ## Install
 
 Download **DeviceMaster-Setup.exe** from the

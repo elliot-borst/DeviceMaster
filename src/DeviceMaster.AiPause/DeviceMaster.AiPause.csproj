@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- Win32_Process.CommandLine: how another AI app was started, so it can be relaunched -->
+    <PackageReference Include="System.Management" Version="9.0.0" />
+    <!-- DPAPI: saved command lines can carry API keys, so the journal stores them encrypted -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeviceMaster.Core.Tests" />
+  </ItemGroup>
+</Project>
