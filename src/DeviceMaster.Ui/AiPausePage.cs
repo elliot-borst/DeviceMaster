@@ -13,8 +13,6 @@ namespace DeviceMaster.Ui;
 /// </summary>
 public sealed class AiPausePage : IDisposable
 {
-    private static readonly Brush Orange = Theme.B("#ffa24d");
-
     private readonly AiPauseService _service;
     private readonly bool _ninferPresent;
 
@@ -272,10 +270,10 @@ public sealed class AiPausePage : IDisposable
         var snap = _service.Snapshot;
         var color = snap.State switch
         {
-            AiPauseState.Paused => Orange,
+            AiPauseState.Paused => Theme.Accent,
             AiPauseState.Busy => Theme.Warn,
             AiPauseState.Attention => Theme.Danger,
-            _ => Theme.Accent,
+            _ => Theme.Cool,
         };
         _headline.Text = snap.Headline;
         _headline.Foreground = color;

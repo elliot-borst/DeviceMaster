@@ -171,7 +171,7 @@ public sealed class ButtonArtPage
 
         _cropSquare = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(40, 0xa9, 0xc8, 0xff)),
+            Background = new SolidColorBrush(Color.FromArgb(40, 0xff, 0xb0, 0x8f)),
             BorderBrush = Theme.Accent,
             BorderThickness = new Thickness(2),
             Cursor = Cursors.SizeAll,

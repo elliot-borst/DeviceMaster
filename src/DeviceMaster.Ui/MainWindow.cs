@@ -25,7 +25,7 @@ public sealed class MainWindow : Window
     public static string AppVersion { get; } =
         (Assembly.GetExecutingAssembly().GetName().Version?.Major ?? 0).ToString();
 
-    public const string VersionDate = "2026-10-10";
+    public const string VersionDate = "2026-10-15";
 
     private readonly ControlSettings _controlSettings = ControlSettings.Load();
     private ControlLoop? _loop;

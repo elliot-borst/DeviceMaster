@@ -18,27 +18,39 @@ public static class Theme
         return brush;
     }
 
-    public static readonly Brush Bg = B("#0b0e16");
-    public static readonly Brush Card = B("#141a2b");
-    public static readonly Brush Card2 = B("#171d33");
-    public static readonly Brush Line = B("#232a45");
-    public static readonly Brush Line2 = B("#323c5e");
-    public static readonly Brush Text = B("#e6ecfb");
-    public static readonly Brush Dim = B("#94a0c2");
-    public static readonly Brush Faint = B("#646f93");
-    public static readonly Brush Accent = B("#79b0ff");
-    public static readonly Brush Accent2 = B("#a9c8ff");
-    public static readonly Brush Good = B("#5fe0c0");
-    public static readonly Brush Warn = B("#ffd34d");
-    public static readonly Brush Danger = B("#ff5d5d");
-    public static readonly Brush Ink = B("#0a1228");
-    public static readonly Brush Inset = B("#0f1322");
-    public static readonly Brush TileBg = B("#16203a");
+    // "Thermal" palette: cool steel neutrals, signal-orange accent, and a cold-blue -> hot-orange
+    // gradient that matches the app icon (make_icon.py) and the headless web dashboard.
+    public static readonly Brush Bg = B("#0f1115");
+    public static readonly Brush Card = B("#171a20");
+    public static readonly Brush Card2 = B("#1d2129");
+    public static readonly Brush Line = B("#2a2f39");
+    public static readonly Brush Line2 = B("#3c4351");
+    public static readonly Brush Text = B("#eceef2");
+    public static readonly Brush Dim = B("#a0a6b3");
+    public static readonly Brush Faint = B("#6b7180");
+    public static readonly Brush Accent = B("#ff7a45");
+    public static readonly Brush Accent2 = B("#ffb08f");
+
+    /// <summary>The gradient's cold end — for "running normally / idle" states next to the hot accent.</summary>
+    public static readonly Brush Cool = B("#4f8cff");
+    public static readonly Brush Good = B("#34d399");
+    public static readonly Brush Warn = B("#fbbf24");
+    public static readonly Brush Danger = B("#ef4444");
+    public static readonly Brush Ink = B("#2a0e02");
+    public static readonly Brush Inset = B("#0c0e12");
+    public static readonly Brush TileBg = B("#1a1e26");
     public static readonly FontFamily Mono = new("Consolas");
 
     public static LinearGradientBrush AccentGrad()
     {
-        var gradient = new LinearGradientBrush(Color.FromRgb(0x22, 0xd3, 0xee), Color.FromRgb(0xa8, 0x55, 0xf7), 0);
+        // cold -> hot, through magenta so the middle doesn't go grey (same stops as the icon)
+        var stops = new GradientStopCollection
+        {
+            new GradientStop(Color.FromRgb(0x4f, 0x8c, 0xff), 0),
+            new GradientStop(Color.FromRgb(0xd0, 0x6c, 0xd8), 0.5),
+            new GradientStop(Color.FromRgb(0xff, 0x7a, 0x45), 1),
+        };
+        var gradient = new LinearGradientBrush(stops, 0);
         gradient.Freeze();
         return gradient;
     }

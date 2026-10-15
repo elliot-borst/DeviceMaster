@@ -188,12 +188,13 @@ public sealed class HeadlessWebServer : IDisposable
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeviceMaster</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='15' x2='48' y1='0' y2='0' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%234f8cff'/%3E%3Cstop offset='.5' stop-color='%23d06cd8'/%3E%3Cstop offset='1' stop-color='%23ff7a45'/%3E%3C/linearGradient%3E%3CclipPath id='d'%3E%3Cpath d='M15 12H32A16 16 0 0 1 32 44H15Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect x='2' y='2' width='60' height='60' rx='14' fill='%23171a20'/%3E%3Cg clip-path='url(%23d)' fill='url(%23g)'%3E%3Crect x='15' y='12' width='4.3' height='32' rx='1.5'/%3E%3Crect x='21.6' y='12' width='4.3' height='32' rx='1.5'/%3E%3Crect x='28.2' y='12' width='4.3' height='32' rx='1.5'/%3E%3Crect x='34.8' y='12' width='4.3' height='32' rx='1.5'/%3E%3Crect x='41.4' y='12' width='4.3' height='32' rx='1.5'/%3E%3C/g%3E%3Crect x='13' y='47' width='37' height='4.5' rx='2.25' fill='%23a0a6b3'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg:#0b0e16; --card:#141a2b; --card2:#171d33; --line:#232a45; --line2:#323c5e;
-  --text:#e6ecfb; --dim:#94a0c2; --faint:#646f93; --accent:#79b0ff; --accent2:#a9c8ff;
-  --good:#5fe0c0; --warn:#ffd34d; --danger:#ff5d5d; --ink:#0a1228; --inset:#0f1322; --tile:#16203a;
-  --grad:linear-gradient(90deg,#22d3ee,#a855f7);
+  --bg:#0f1115; --card:#171a20; --card2:#1d2129; --line:#2a2f39; --line2:#3c4351;
+  --text:#eceef2; --dim:#a0a6b3; --faint:#6b7180; --accent:#ff7a45; --accent2:#ffb08f; --cool:#4f8cff;
+  --good:#34d399; --warn:#fbbf24; --danger:#ef4444; --ink:#2a0e02; --inset:#0c0e12; --tile:#1a1e26;
+  --grad:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45);
 }
 * { box-sizing:border-box; margin:0; }
 html,body { height:100%; }
@@ -232,8 +233,8 @@ h1 { font-size:17px; font-weight:600; margin-bottom:4px; }
 .v.good { color:var(--good); } .v.warn { color:var(--warn); } .v.bad { color:var(--danger); }
 /* banner */
 .banner { display:none; border-radius:12px; padding:13px 16px; margin-bottom:16px; font-size:13.5px; border:1px solid; }
-.banner.bad { display:block; background:rgba(255,93,93,.1); border-color:var(--danger); color:var(--danger); }
-.banner.warn { display:block; background:rgba(255,211,77,.08); border-color:var(--warn); color:var(--warn); }
+.banner.bad { display:block; background:rgba(239,68,68,.1); border-color:var(--danger); color:var(--danger); }
+.banner.warn { display:block; background:rgba(251,191,36,.08); border-color:var(--warn); color:var(--warn); }
 /* controls */
 .row { display:flex; align-items:center; gap:14px; margin:11px 0; flex-wrap:wrap; }
 .row label { min-width:118px; font-size:13px; color:var(--dim); }
@@ -245,7 +246,7 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .toggle input { opacity:0; width:0; height:0; }
 .toggle .tk { position:absolute; inset:0; background:var(--card2); border:1px solid var(--line2); border-radius:12px; cursor:pointer; transition:.15s; }
 .toggle .tk:before { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:var(--dim); left:3px; top:3px; transition:.15s; }
-.toggle input:checked + .tk { background:rgba(121,176,255,.25); border-color:var(--accent); }
+.toggle input:checked + .tk { background:rgba(255,122,69,.25); border-color:var(--accent); }
 .toggle input:checked + .tk:before { transform:translateX(18px); background:var(--accent); }
 .btn { background:var(--card2); border:1px solid var(--line2); color:var(--text); border-radius:10px; padding:8px 14px; font-size:12.5px; cursor:pointer; }
 .btn:hover { opacity:.85; }
@@ -263,9 +264,9 @@ td { padding:8px 10px; border-bottom:1px solid var(--line); color:var(--text); }
 tr:last-child td { border-bottom:0; }
 td.dim { color:var(--dim); }
 .pill { display:inline-block; padding:2px 9px; border-radius:9px; font-size:11px; border:1px solid var(--line2); color:var(--dim); }
-.pill.fan { color:var(--accent); border-color:rgba(121,176,255,.4); }
-.pill.pump { color:var(--good); border-color:rgba(95,224,192,.4); }
-.pill.screen { color:#d9a6ff; border-color:rgba(217,166,255,.45); }
+.pill.fan { color:var(--accent); border-color:rgba(255,122,69,.4); }
+.pill.pump { color:var(--good); border-color:rgba(52,211,153,.4); }
+.pill.screen { color:var(--cool); border-color:rgba(79,140,255,.45); }
 /* toast */
 #toast { position:fixed; right:22px; bottom:22px; background:var(--card2); border:1px solid var(--line2); border-radius:10px;
   padding:11px 16px; font-size:13px; color:var(--text); opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none; }
