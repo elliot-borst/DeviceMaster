@@ -1,56 +1,41 @@
 namespace DeviceMaster.Core.Curves;
 
 /// <summary>
-/// The rules every user-edited fan curve passes through before it is saved — one implementation
-/// for the desktop editor and the web API, so neither can store a curve the other would reject.
+/// The rules every fan curve passes through before it is used or saved — one implementation for
+/// the desktop editor, the web API and settings loading, so neither app can store a curve the
+/// other would reject. A curve is two points: flat at the first point's duty below it, a straight
+/// ramp between the two, flat at the second point's duty above it.
 /// </summary>
 public static class CurveRules
 {
-    public const int MinPoints = 2;
-    public const int MaxPoints = 8;
+    public const int Points = 2;
 
-    /// <summary>Temperature axis for a curve source: (min, max) in °C.</summary>
-    public static (double Min, double Max) RangeFor(bool coolant) => coolant ? (20, 70) : (30, 100);
+    /// <summary>The temperature axis shared by every source and both apps, in °C.</summary>
+    public const double MinTemperature = 20, MaxTemperature = 100;
 
     /// <summary>
-    /// Sorts, clamps and repairs a curve: temperatures inside the source's range, whole degrees,
-    /// at least 1 °C apart; duties 0–100 and never falling as temperature rises; the hottest
-    /// point always 100% (running hotter than the curve's end means full speed). Returns null
-    /// when there are too few or too many points to be a curve.
+    /// Sorts, clamps and repairs a curve: whole degrees inside the axis, the points at least
+    /// 1 °C apart, duties 0–100 and never falling as temperature rises. Older curves with more
+    /// points keep their first and last point. Null when there aren't two points to work with.
     /// </summary>
-    public static List<CurvePoint>? Normalize(IEnumerable<CurvePoint> points, bool coolant)
+    public static List<CurvePoint>? Normalize(IEnumerable<CurvePoint>? points)
     {
-        var (min, max) = RangeFor(coolant);
-        var list = points
-            .Where(p => double.IsFinite(p.TemperatureC))
-            .OrderBy(p => p.TemperatureC)
-            .ToList();
-        if (list.Count is < MinPoints or > MaxPoints)
+        var list = (points ?? []).Where(p => double.IsFinite(p.TemperatureC)).OrderBy(p => p.TemperatureC).ToList();
+        if (list.Count < Points)
         {
             return null;
         }
 
-        var result = new List<CurvePoint>(list.Count);
-        for (var i = 0; i < list.Count; i++)
-        {
-            // leave room for the points still to come, each at least 1 °C further on
-            var lowest = result.Count > 0 ? result[^1].TemperatureC + 1 : min;
-            var highest = max - (list.Count - 1 - i);
-            var temp = Math.Clamp(Math.Round(list[i].TemperatureC), lowest, highest);
-            var duty = Math.Clamp(list[i].DutyPercent, 0, 100);
-            if (result.Count > 0)
-            {
-                duty = Math.Max(duty, result[^1].DutyPercent);
-            }
-
-            result.Add(new CurvePoint(temp, duty));
-        }
-
-        result[^1] = result[^1] with { DutyPercent = 100 };
-        return result;
+        var low = list[0];
+        var high = list[^1];
+        var lowTemp = Math.Clamp(Math.Round(low.TemperatureC), MinTemperature, MaxTemperature - 1);
+        var highTemp = Math.Clamp(Math.Round(high.TemperatureC), lowTemp + 1, MaxTemperature);
+        var lowDuty = Math.Clamp(low.DutyPercent, 0, 100);
+        var highDuty = Math.Clamp(Math.Max(high.DutyPercent, lowDuty), 0, 100);
+        return [new CurvePoint(lowTemp, lowDuty), new CurvePoint(highTemp, highDuty)];
     }
 
     /// <summary>The factory curve for a source.</summary>
     public static IReadOnlyList<CurvePoint> DefaultFor(bool coolant) =>
-        (coolant ? FanCurve.DefaultCoolant : FanCurve.DefaultCpuGpu).Points;
+        coolant ? [new(25, 30), new(38, 100)] : [new(40, 30), new(85, 100)];
 }

@@ -2,8 +2,8 @@
 
 The "Thermal tile" mark (option E4): a rounded tile filled with the thermal gradient, cold
 blue bottom-left to hot orange top-right, with a D sliced into four heatsink fins cut out of
-it in dark steel. Each size is drawn at 8x and downsampled; sizes <= 24 px fill the whole
-square so the tile stays as large as possible in the tray.
+it in dark steel. Each size is drawn at 8x and downsampled; sizes <= 24 px keep a 1 px
+transparent border so the tile doesn't look cut off where Windows draws it flush to an edge.
 
     pip install pillow
     python make_icon.py            # writes the .ico and dist/icon-preview.png
@@ -50,7 +50,9 @@ def draw(size: int) -> Image.Image:
             px[x, y] = thermal((x + (127 - y)) / 254) + (255,)
     tile = small.resize((s, s), Image.BICUBIC)
     mask = Image.new("L", (s, s), 0)
-    inset = 0 if size <= 24 else 2 * u
+    # small sizes keep a 1 px transparent border: the title bar and tray draw the icon flush
+    # against an edge, and a full-bleed tile looks cut off there
+    inset = SS if size <= 24 else 2 * u
     ImageDraw.Draw(mask).rounded_rectangle([inset, inset, s - 1 - inset, s - 1 - inset], radius=14 * u, fill=255)
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     img.paste(tile, (0, 0), mask)

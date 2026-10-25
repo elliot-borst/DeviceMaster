@@ -273,7 +273,7 @@ input.gslider::-moz-range-thumb { width:22px; height:22px; border-radius:50%; ba
 .devrow { display:flex; justify-content:space-between; gap:10px; background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:12.5px; }
 .devrow .id { font-family:Consolas,monospace; color:var(--faint); font-size:11px; margin-left:auto; margin-right:12px; }
 .devrow .r { color:var(--accent2); font-weight:600; white-space:nowrap; }
-#curveSvg { width:100%; height:260px; display:block; touch-action:none; user-select:none; }
+#curveSvg { width:100%; height:340px; display:block; touch-action:none; user-select:none; }
 #curveSvg .h { cursor:move; }
 #curveCard.idle #curveSvg { opacity:.6; }
 /* "Fans right now": same pills as the desktop dashboard */
@@ -335,7 +335,7 @@ td.dim { color:var(--dim); }
 </head>
 <body>
 <aside>
-  <div class="brandrow"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient><clipPath id="ld"><path d="M11.5 12H32.5A20 20 0 0 1 32.5 52H11.5Z"/></clipPath></defs><rect x="2" y="2" width="60" height="60" rx="14" fill="url(#lg)"/><g clip-path="url(#ld)" fill="#0f1115"><rect x="11.5" y="12" width="8.25" height="40" rx="2.48"/><rect x="22.75" y="12" width="8.25" height="40" rx="2.48"/><rect x="34" y="12" width="8.25" height="40" rx="2.48"/><rect x="45.25" y="12" width="8.25" height="40" rx="2.48"/></g></svg><div><div class="brand">DeviceMaster</div><div class="brandsub">fan · RGB · LCD</div></div></div>
+  <div class="brandrow"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient><clipPath id="ld"><path d="M11.5 12H32.5A20 20 0 0 1 32.5 52H11.5Z"/></clipPath></defs><rect x="2" y="2" width="60" height="60" rx="14" fill="url(#lg)"/><g clip-path="url(#ld)" fill="#0f1115"><rect x="11.5" y="12" width="8.25" height="40" rx="2.48"/><rect x="22.75" y="12" width="8.25" height="40" rx="2.48"/><rect x="34" y="12" width="8.25" height="40" rx="2.48"/><rect x="45.25" y="12" width="8.25" height="40" rx="2.48"/></g></svg><div><div class="brand">DeviceMaster</div><div class="brandsub">FAN · RGB · LCD</div></div></div>
   <button class="navbtn active" data-page="dashboard"><span class="glyph">⌂</span><span class="lbl">Dashboard</span></button>
   <button class="navbtn" data-page="cooling"><span class="glyph">❄</span><span class="lbl">Cooling</span></button>
   <button class="navbtn" data-page="lighting"><span class="glyph">◈</span><span class="lbl">Lighting</span></button>
@@ -404,7 +404,7 @@ td.dim { color:var(--dim); }
       <div class="cardhead"><div class="tile">〜</div><div><div class="cardtitle">Fan curve</div><div class="cardsub" id="curveSub"></div></div>
         <button class="btn" id="curveReset" style="margin-left:auto;align-self:flex-start">↺&nbsp; Reset</button></div>
       <svg id="curveSvg" aria-label="Fan curve: temperature to fan duty"></svg>
-      <div class="note">Hotter than the last point always means 100%. If the temperature can't be read, every fan and the pump go to 100%.</div>
+      <div class="note">Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan and the pump go to 100%.</div>
     </div>
   </section>
 
@@ -642,20 +642,32 @@ function renderFanMode(){
 }
 
 /* ---- fan curve editor: same graph and rules as the desktop CurveEditor ---- */
-const CURVE_DEFAULTS = { true: [[25,30],[30,45],[34,70],[38,100]], false: [[40,30],[60,50],[75,75],[85,100]] };
+/* two points on one 20–100 °C axis for every source — same as Core CurveRules */
+const CURVE_DEFAULTS = { true: [[25,30],[38,100]], false: [[40,30],[85,100]] };
 const defaultCurve = coolant => CURVE_DEFAULTS[coolant];
-const curveRange = coolant => coolant ? [20,70] : [30,100];
+const CURVE_MIN = 20, CURVE_MAX = 100;
+/* an older config may still hold 4–5 points: like CurveRules, keep the first and last */
+const twoPoints = c => { const p = (c.CurvePoints||[]).map(x => [x.TemperatureC, x.DutyPercent]); return p.length > 2 ? [p[0], p[p.length-1]] : p; };
+function curveDuty(pts, t){ // FanCurve.EvaluateDuty: flat outside the points, straight line between
+  if (!pts.length) return null;
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) {
+    const [t0, d0] = pts[i-1], [t1, d1] = pts[i];
+    return t1 <= t0 ? d1 : Math.round(d0 + (t - t0) / (t1 - t0) * (d1 - d0));
+  }
+  return pts[pts.length-1][1];
+}
 let curveDrag = null, curvePts = null, liveCurve = null;
 function drawCurve(){
   if (!cfg) return;
-  const svg = $("curveSvg"), W = svg.clientWidth || 900, H = 260, L = 44, R = 16, T = 14, B = 28;
-  const coolant = cfg.Control.Source === 0, [lo, hi] = curveRange(coolant);
-  if (!curveDrag) curvePts = (cfg.Control.CurvePoints||[]).map(p => [p.TemperatureC, p.DutyPercent]);
+  const svg = $("curveSvg"), W = svg.clientWidth || 900, H = 340, L = 44, R = 24, T = 14, B = 28;
+  const lo = CURVE_MIN, hi = CURVE_MAX;
+  if (!curveDrag) curvePts = twoPoints(cfg.Control);
   const pw = W - L - R, ph = H - T - B, X = t => L + (t - lo) / (hi - lo) * pw, Y = d => T + (1 - d / 100) * ph;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   let g = `<defs><linearGradient id="cg" x1="0" x2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient></defs>`;
-  for (const d of [0,25,50,75,100]) g += `<line x1="${L}" x2="${L+pw}" y1="${Y(d)}" y2="${Y(d)}" stroke="var(--line)"/><text x="${L-6}" y="${Y(d)+4}" fill="var(--faint)" font-size="11" text-anchor="end">${d}%</text>`;
-  const step = hi - lo > 40 ? 10 : 5;
+  for (let d = 0; d <= 100; d += 10) g += `<line x1="${L}" x2="${L+pw}" y1="${Y(d)}" y2="${Y(d)}" stroke="var(--line)" opacity="${d % 50 ? .55 : 1}"/><text x="${L-6}" y="${Y(d)+4}" fill="var(--faint)" font-size="11" text-anchor="end">${d}%</text>`;
+  const step = 10;
   for (let t = Math.ceil(lo/step)*step; t <= hi; t += step) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${T+ph}" stroke="var(--line)" opacity=".6"/><text x="${X(t)}" y="${T+ph+18}" fill="var(--faint)" font-size="11" text-anchor="middle">${t}°</text>`;
   if (curvePts.length) {
     const line = [[L, Y(curvePts[0][1])], ...curvePts.map(p => [X(p[0]), Y(p[1])]), [L+pw, Y(curvePts[curvePts.length-1][1])]];
@@ -741,7 +753,11 @@ function tick(){
     $("fanLine").textContent = `${reporting}/${fans.length} fan devices reporting`;
     $("fanLine").className = "fanline" + (reporting === fans.length ? " ok" : "");
     $("curveReadout").textContent = s.Mode === 2 && s.SourceTemperatureC != null ? `${s.SourceTemperatureC.toFixed(1)} °C → ${s.TargetDutyPercent}%` : "";
-    liveCurve = s.Mode === 2 && !s.FailsafeActive && s.SourceTemperatureC != null ? [s.SourceTemperatureC, s.TargetDutyPercent] : null;
+    // the "now" marker shows in Fixed mode too: where the curve would put the fans right now
+    const srcTemp = cfg ? [s.CoolantTemperatureC, s.CpuTemperatureC, s.GpuTemperatureC][cfg.Control.Source] : null;
+    const srcDuty = s.Mode === 2 ? s.TargetDutyPercent
+      : srcTemp != null && cfg ? curveDuty(twoPoints(cfg.Control), srcTemp) : null;
+    liveCurve = !s.FailsafeActive && srcTemp != null && srcDuty != null ? [srcTemp, srcDuty] : null;
     if (!curveDrag && $("page-cooling").classList.contains("active")) drawCurve();
     $("pumpCoolant").textContent = s.CoolantTemperatureC != null ? `Coolant ${s.CoolantTemperatureC.toFixed(1)} °C` : "Coolant temperature unavailable";
     $("pumpRows").innerHTML = devs.filter(d => d.IsPump).map(d => `<div class="devrow"><span>Corsair · ${d.Name} (ch${d.Channel} · hub ${(d.HubSerial||"").slice(0,4)})</span>`

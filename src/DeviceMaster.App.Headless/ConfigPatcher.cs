@@ -142,7 +142,7 @@ public static class ConfigPatcher
     private static bool TryCurve(JsonElement value, out List<CurvePoint> points)
     {
         points = [];
-        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > CurveRules.MaxPoints)
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > 8)
         {
             return false;
         }

@@ -217,7 +217,7 @@ public sealed class MainWindow : Window
         brand.Children.Add(BuildLogoGlyph()); // the icon is its own rounded tile — no frame around it
         var brandText = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         brandText.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 17, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
-        brandText.Children.Add(new TextBlock { Text = "fan · RGB · LCD", FontSize = 10.5, Foreground = Theme.Faint });
+        brandText.Children.Add(new TextBlock { Text = "FAN · RGB · LCD", FontSize = 10.5, Foreground = Theme.Faint });
         brand.Children.Add(brandText);
         DockPanel.SetDock(brand, Dock.Top);
         side.Children.Add(brand);
@@ -860,7 +860,7 @@ public sealed class MainWindow : Window
         _fanSubtitle.Text = curve ? $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system" : "one fixed duty · every fan in the system";
         _curveSubtitle.Text = $"{sourceLabel} temperature → fan duty · drag a point to change it"
             + (curve ? "" : " · used when Mode is Curve");
-        _curveEditor.SetCurve(_controlSettings.CurvePoints, _controlSettings.Source == CurveSource.Coolant);
+        _curveEditor.SetCurve(_controlSettings.CurvePoints);
         _curveEditor.Opacity = curve ? 1.0 : 0.6;
     }
 
@@ -888,7 +888,7 @@ public sealed class MainWindow : Window
         body.Children.Add(_curveEditor);
         body.Children.Add(new TextBlock
         {
-            Text = "Hotter than the last point always means 100%. If the temperature can't be read, every fan and the pump go to 100%.",
+            Text = "Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan and the pump go to 100%.",
             FontSize = 11.5,
             Foreground = Theme.Faint,
             Margin = new Thickness(0, 8, 0, 0),
@@ -2339,8 +2339,17 @@ public sealed class MainWindow : Window
             _controlStatus.Foreground = Theme.Text;
         }
 
-        _curveEditor.SetLive(status.Mode == ControlMode.Curve && !status.FailsafeActive ? status.SourceTemperatureC : null,
-            status.Mode == ControlMode.Curve ? status.TargetDutyPercent : null);
+        // the "now" marker shows in Fixed mode too: where the curve would put the fans right now
+        var curveTemp = _controlSettings.Source switch
+        {
+            CurveSource.Cpu => status.CpuTemperatureC,
+            CurveSource.Gpu => status.GpuTemperatureC,
+            _ => status.CoolantTemperatureC,
+        };
+        var curveDuty = status.Mode == ControlMode.Curve
+            ? status.TargetDutyPercent
+            : curveTemp is { } ct2 ? _controlSettings.Curve.EvaluateDuty(ct2) : (int?)null;
+        _curveEditor.SetLive(status.FailsafeActive ? null : curveTemp, curveDuty);
 
         var fans = status.Devices.Where(d => !d.IsPump).ToList();
         var presentIds = fans.Select(f => f.Id ?? f.Name).Distinct().ToList();

@@ -7,20 +7,25 @@ namespace DeviceMaster.Core.Tests;
 public class CurveRulesTests
 {
     [Fact]
-    public void Normalize_SortsKeepsDutyRisingAndEndsAtFullSpeed()
+    public void Normalize_TwoPointsSortedWithDutyNeverFalling()
     {
-        var curve = CurveRules.Normalize([new(40, 60), new(30, 50), new(35, 20)], coolant: true)!;
-        Assert.Equal([30.0, 35.0, 40.0], curve.Select(p => p.TemperatureC));
-        Assert.Equal([50, 50, 100], curve.Select(p => p.DutyPercent)); // 20 lifted to 50; hottest forced to 100
+        var curve = CurveRules.Normalize([new(60, 40), new(30, 70)])!;
+        Assert.Equal([new CurvePoint(30, 70), new CurvePoint(60, 70)], curve); // second duty lifted to the first
     }
 
     [Fact]
-    public void Normalize_ClampsToTheSourceRangeAndSeparatesPoints()
+    public void Normalize_OlderCurvesKeepFirstAndLastPoint()
     {
-        var curve = CurveRules.Normalize([new(5, 30), new(5.2, 40), new(300, 80)], coolant: true)!;
-        Assert.Equal([20.0, 21.0, 70.0], curve.Select(p => p.TemperatureC));
-        Assert.Null(CurveRules.Normalize([new(30, 50)], coolant: true));                  // one point is not a curve
-        Assert.Null(CurveRules.Normalize(Enumerable.Range(0, 9).Select(i => new CurvePoint(30 + i, 50)), coolant: false));
+        var curve = CurveRules.Normalize([new(35, 40), new(45, 55), new(55, 70), new(65, 85), new(70, 100)])!;
+        Assert.Equal([new CurvePoint(35, 40), new CurvePoint(70, 100)], curve);
+    }
+
+    [Fact]
+    public void Normalize_ClampsToTheSharedAxisAndSeparatesPoints()
+    {
+        Assert.Equal([new CurvePoint(20, 30), new CurvePoint(21, 40)], CurveRules.Normalize([new(5, 30), new(5.2, 40)]));
+        Assert.Equal([new CurvePoint(99, 30), new CurvePoint(100, 80)], CurveRules.Normalize([new(300, 30), new(400, 80)]));
+        Assert.Null(CurveRules.Normalize([new(30, 50)])); // one point is not a curve
     }
 
     [Fact]
@@ -29,8 +34,16 @@ public class CurveRulesTests
         foreach (var coolant in new[] { true, false })
         {
             var defaults = CurveRules.DefaultFor(coolant);
-            Assert.Equal(defaults, CurveRules.Normalize(defaults, coolant));
+            Assert.Equal(defaults, CurveRules.Normalize(defaults));
         }
+    }
+
+    [Fact]
+    public void Settings_RepairAnOlderCurveOnLoad()
+    {
+        var settings = System.Text.Json.JsonSerializer.Deserialize<ControlSettings>(
+            """{"CurvePoints":[{"TemperatureC":35,"DutyPercent":40},{"TemperatureC":55,"DutyPercent":70},{"TemperatureC":70,"DutyPercent":100}]}""")!;
+        Assert.Equal([new CurvePoint(35, 40), new CurvePoint(70, 100)], settings.CurvePoints);
     }
 
     [Fact]
@@ -51,7 +64,7 @@ public class CurveRulesTests
         cfg.Control.Source = CurveSource.Coolant;
         var applied = ConfigPatcher.ApplyPatch(cfg, """{"curvePoints":[[30,40],[45,30],[60,90]]}""", out var invalid);
         Assert.False(invalid);
-        Assert.Equal(["curvePoints=30:40;45:40;60:100"], applied);
+        Assert.Equal(["curvePoints=30:40;60:90"], applied); // middle point dropped: first and last kept
 
         Assert.Empty(ConfigPatcher.ApplyPatch(cfg, """{"curvePoints":[[30,"x"]]}""", out _)); // malformed: ignored
     }

@@ -15,11 +15,10 @@ namespace DeviceMaster.Ui;
 /// </summary>
 public sealed class CurveEditor : Canvas
 {
-    private const double PadLeft = 44, PadRight = 16, PadTop = 14, PadBottom = 28;
+    private const double PadLeft = 44, PadRight = 24, PadTop = 14, PadBottom = 28;
 
     private List<CurvePoint> _points = [];
-    private (double Min, double Max) _range = (20, 70);
-    private bool _coolant = true;
+    private readonly (double Min, double Max) _range = (CurveRules.MinTemperature, CurveRules.MaxTemperature);
     private double? _liveTemp;
     private int? _liveDuty;
     private int _dragIndex = -1;
@@ -29,7 +28,7 @@ public sealed class CurveEditor : Canvas
 
     public CurveEditor()
     {
-        Height = 240;
+        Height = 340;
         Background = Brushes.Transparent; // hit-test the whole area while dragging
         ClipToBounds = true;
         SizeChanged += (_, _) => Redraw();
@@ -38,20 +37,19 @@ public sealed class CurveEditor : Canvas
         LostMouseCapture += (_, _) => EndDrag();
     }
 
-    public void SetCurve(IReadOnlyList<CurvePoint> points, bool coolant)
+    public void SetCurve(IReadOnlyList<CurvePoint> points)
     {
         if (_dragIndex >= 0)
         {
             return; // never yank a point out from under the cursor
         }
 
-        _coolant = coolant;
-        _range = CurveRules.RangeFor(coolant);
         _points = points.ToList();
         Redraw();
     }
 
-    /// <summary>Current source temperature and the duty it maps to; null hides the marker.</summary>
+    /// <summary>Current source temperature and the duty the curve gives for it (shown in Fixed
+    /// mode too, for information); null hides the marker.</summary>
     public void SetLive(double? temperatureC, int? duty)
     {
         if (_liveTemp == temperatureC && _liveDuty == duty)
@@ -87,14 +85,14 @@ public sealed class CurveEditor : Canvas
             return;
         }
 
-        // grid: duty every 25%, temperature every 5 or 10 °C
-        foreach (var duty in new[] { 0, 25, 50, 75, 100 })
+        // grid: duty every 10%, temperature every 10 °C (the web dashboard draws the same grid)
+        for (var duty = 0; duty <= 100; duty += 10)
         {
-            Add(new Line { X1 = PadLeft, X2 = PadLeft + PlotWidth, Y1 = Y(duty), Y2 = Y(duty), Stroke = Theme.Line, StrokeThickness = 1 });
+            Add(new Line { X1 = PadLeft, X2 = PadLeft + PlotWidth, Y1 = Y(duty), Y2 = Y(duty), Stroke = Theme.Line, StrokeThickness = 1, Opacity = duty % 50 == 0 ? 1 : 0.55 });
             AddText($"{duty}%", 0, Y(duty) - 8, 38, TextAlignment.Right);
         }
 
-        var step = _range.Max - _range.Min > 40 ? 10 : 5;
+        const int step = 10;
         for (var t = Math.Ceiling(_range.Min / step) * step; t <= _range.Max; t += step)
         {
             Add(new Line { X1 = X(t), X2 = X(t), Y1 = PadTop, Y2 = PadTop + PlotHeight, Stroke = Theme.Line, StrokeThickness = 1, Opacity = 0.6 });
@@ -177,7 +175,7 @@ public sealed class CurveEditor : Canvas
 
         _dragIndex = -1;
         ReleaseMouseCapture();
-        if (CurveRules.Normalize(_points, _coolant) is { } repaired)
+        if (CurveRules.Normalize(_points) is { } repaired)
         {
             _points = repaired;
             CurveEdited?.Invoke(repaired.ToList());

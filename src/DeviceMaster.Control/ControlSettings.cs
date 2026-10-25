@@ -84,7 +84,15 @@ public sealed class ControlSettings
     public int PumpDutyPercent { get; set; } = 100;
 
     public CurveSource Source { get; set; } = CurveSource.Coolant;
-    public List<CurvePoint> CurvePoints { get; set; } = FanCurve.DefaultCoolant.Points.ToList();
+    /// <summary>The active curve — always repaired to the shared two-point rules, including when a
+    /// settings file written by an older build (4–5 points) is loaded.</summary>
+    public List<CurvePoint> CurvePoints
+    {
+        get => _curvePoints;
+        set => _curvePoints = CurveRules.Normalize(value) ?? CurveRules.DefaultFor(coolant: true).ToList();
+    }
+
+    private List<CurvePoint> _curvePoints = CurveRules.DefaultFor(coolant: true).ToList();
 
     /// <summary>
     /// Curves remembered for the sources that aren't active (key = source name). A coolant curve
@@ -102,8 +110,8 @@ public sealed class ControlSettings
 
         SourceCurves[Source.ToString()] = CurvePoints.ToList();
         Source = source;
-        CurvePoints = SourceCurves.TryGetValue(source.ToString(), out var saved) && saved.Count >= CurveRules.MinPoints
-            ? saved.ToList()
+        CurvePoints = SourceCurves.TryGetValue(source.ToString(), out var saved) && CurveRules.Normalize(saved) is { } repaired
+            ? repaired
             : CurveRules.DefaultFor(source == CurveSource.Coolant).ToList();
         return true;
     }
@@ -111,7 +119,7 @@ public sealed class ControlSettings
     /// <summary>Validates and stores an edited curve for the active source. False = not a usable curve.</summary>
     public bool SetCurve(IEnumerable<CurvePoint> points)
     {
-        if (CurveRules.Normalize(points, Source == CurveSource.Coolant) is not { } curve)
+        if (CurveRules.Normalize(points) is not { } curve)
         {
             return false;
         }
@@ -252,7 +260,7 @@ public sealed class ControlSettings
     public List<string> SeenDeviceIds { get; set; } = [];
 
     [JsonIgnore]
-    public FanCurve Curve => new(CurvePoints.Count > 0 ? CurvePoints : FanCurve.DefaultCoolant.Points);
+    public FanCurve Curve => new(CurvePoints);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
