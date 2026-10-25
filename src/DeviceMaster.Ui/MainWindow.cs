@@ -216,7 +216,7 @@ public sealed class MainWindow : Window
         brand.Children.Add(BuildLogoGlyph()); // the icon is its own rounded tile — no frame around it
         var brandText = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         brandText.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 17, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
-        brandText.Children.Add(new TextBlock { Text = "cooling · RGB · screens", FontSize = 10.5, Foreground = Theme.Faint });
+        brandText.Children.Add(new TextBlock { Text = "fan · RGB · LCD", FontSize = 10.5, Foreground = Theme.Faint });
         brand.Children.Add(brandText);
         DockPanel.SetDock(brand, Dock.Top);
         side.Children.Add(brand);
@@ -313,14 +313,9 @@ public sealed class MainWindow : Window
             ("turzx", "▤", "Turzx"),
             ("buttonart", "⛶", "Button Art"),
         };
-        if (_ninferPage is not null)
+        if (_ninferPage is not null || _aiPausePage is not null)
         {
-            navItems.Add(("ninfer", "λ", "NInfer"));
-        }
-
-        if (_aiPausePage is not null)
-        {
-            navItems.Add(("aipause", "⏸", "AI Pause"));
+            navItems.Add(("llm", "λ", "Local LLM")); // NInfer server + pause-for-games, one tab
         }
 
         navItems.Add(("devices", "⚙", "Devices"));
@@ -346,14 +341,9 @@ public sealed class MainWindow : Window
         _pages["screens"] = WrapPage(BuildScreensPage());
         _pages["turzx"] = WrapPage(BuildTurzxPage());
         _pages["buttonart"] = WrapPage(_buttonArtPage.Build());
-        if (_ninferPage is not null)
+        if (_ninferPage is not null || _aiPausePage is not null)
         {
-            _pages["ninfer"] = WrapPage(_ninferPage.Build());
-        }
-
-        if (_aiPausePage is not null)
-        {
-            _pages["aipause"] = WrapPage(_aiPausePage.Build());
+            _pages["llm"] = WrapPage(LocalLlmPage.Build(_ninferPage, _aiPausePage));
         }
 
         _pages["devices"] = WrapPage(BuildDevicesPage());
@@ -374,10 +364,24 @@ public sealed class MainWindow : Window
         };
     }
 
+    private static readonly FontFamily NavGlyphFont = new("Segoe UI Symbol, Segoe UI Emoji, Segoe UI");
+
     private Border NavButton(string key, string glyph, string label)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(new TextBlock { Text = glyph, FontSize = 15, Width = 26, Foreground = Theme.Dim, VerticalAlignment = VerticalAlignment.Center });
+        // glyphs come from different symbol fonts with different widths: centre each in a fixed
+        // box (same metrics as the web dashboard) so the icon column lines up
+        row.Children.Add(new TextBlock
+        {
+            Text = glyph,
+            FontSize = 16,
+            Width = 24,
+            Margin = new Thickness(0, 0, 8, 0),
+            TextAlignment = TextAlignment.Center,
+            FontFamily = NavGlyphFont,
+            Foreground = Theme.Dim,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         row.Children.Add(new TextBlock { Text = label, FontSize = 13.5, Foreground = Theme.Dim, VerticalAlignment = VerticalAlignment.Center });
         var button = new Border
         {
@@ -436,7 +440,7 @@ public sealed class MainWindow : Window
 
     private UIElement BuildDashboardPage()
     {
-        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
+        var page = new StackPanel(); // full width — the dashboard fills the window
         page.Children.Add(PageTitle("Dashboard", "the whole loop at a glance"));
         page.Children.Add(_dashStatus);
 
@@ -492,15 +496,15 @@ public sealed class MainWindow : Window
     private static Border MiniStat(string label, out TextBlock value, out TextBlock sub)
     {
         var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
-        value = new TextBlock { Text = "—", FontSize = 24, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
+        stack.Children.Add(new TextBlock { Text = label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
+        value = new TextBlock { Text = "—", FontSize = 30, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
         stack.Children.Add(value);
-        sub = new TextBlock { Text = "", FontSize = 10.5, Foreground = Theme.Faint };
+        sub = new TextBlock { Text = "", FontSize = 11.5, Foreground = Theme.Faint };
         stack.Children.Add(sub);
         return new Border
         {
-            Margin = new Thickness(0, 0, 8, 0),
-            Padding = new Thickness(14, 11, 14, 11),
+            Margin = new Thickness(0, 0, 10, 0),
+            Padding = new Thickness(16, 13, 16, 13),
             CornerRadius = new CornerRadius(11),
             Background = Theme.Inset,
             BorderBrush = Theme.Line,
@@ -512,32 +516,30 @@ public sealed class MainWindow : Window
     /// <summary>Compact name → rpm pill for the dashboard fan grid.</summary>
     private static Border FanPill(string name, string value, Brush valueBrush)
     {
-        var row = new DockPanel { LastChildFill = false };
-        var title = new TextBlock
-        {
-            Text = name,
-            Foreground = Theme.Text,
-            FontSize = 11.5,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 190,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        DockPanel.SetDock(title, Dock.Left);
-        row.Children.Add(title);
+        var row = new DockPanel { LastChildFill = true };
         var val = new TextBlock
         {
             Text = value,
             Foreground = valueBrush,
-            FontSize = 11.5,
+            FontSize = 13,
             FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(10, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         DockPanel.SetDock(val, Dock.Right);
         row.Children.Add(val);
+        row.Children.Add(new TextBlock
+        {
+            Text = name,
+            Foreground = Theme.Text,
+            FontSize = 13,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         return new Border
         {
-            Margin = new Thickness(0, 0, 6, 6),
-            Padding = new Thickness(10, 7, 10, 7),
+            Margin = new Thickness(0, 0, 8, 8),
+            Padding = new Thickness(14, 10, 14, 10),
             CornerRadius = new CornerRadius(9),
             Background = Theme.Inset,
             BorderBrush = Theme.Line,
@@ -558,14 +560,14 @@ public sealed class MainWindow : Window
     {
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
-        value = new TextBlock { Text = "—", FontSize = 30, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
+        value = new TextBlock { Text = "—", FontSize = 36, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
         stack.Children.Add(value);
-        sub = new TextBlock { Text = "", FontSize = 10.5, Foreground = Theme.Faint };
+        sub = new TextBlock { Text = "", FontSize = 11.5, Foreground = Theme.Faint };
         stack.Children.Add(sub);
         return new Border
         {
             Margin = new Thickness(0, 0, 12, 12),
-            Padding = new Thickness(18, 14, 18, 14),
+            Padding = new Thickness(20, 16, 20, 16),
             CornerRadius = new CornerRadius(14),
             Background = Theme.Card,
             BorderBrush = Theme.Line,
@@ -1682,8 +1684,8 @@ public sealed class MainWindow : Window
             {
                 if (aiPause.Snapshot.RunningGames.Any(g => g.Rule != GameRule.Off) && aiPause.Snapshot.Holding)
                 {
-                    ShowFromTray(); // resuming mid-game needs the confirmation on the AI Pause page
-                    SelectPage("aipause");
+                    ShowFromTray(); // resuming mid-game needs the confirmation on the Local LLM page
+                    SelectPage("llm");
                     return;
                 }
 
@@ -2091,31 +2093,11 @@ public sealed class MainWindow : Window
     /// </summary>
     private void SetBlackout(bool on)
     {
-        if (on == _controlSettings.BlackoutActive)
+        if (!_controlSettings.SetBlackout(on))
         {
             return;
         }
 
-        if (on)
-        {
-            _controlSettings.BlackoutPrevRgbEnabled = _controlSettings.RgbEnabled;
-            _controlSettings.BlackoutPrevRgbOff = _controlSettings.RgbOff;
-            _controlSettings.BlackoutPrevLcd = _controlSettings.LcdScreens;
-            _controlSettings.BlackoutPrevTurzx = _controlSettings.TurzxScreen;
-            _controlSettings.RgbEnabled = true; // paint black, don't just stop controlling
-            _controlSettings.RgbOff = true;
-            _controlSettings.LcdScreens = LcdMode.Off;
-            _controlSettings.TurzxScreen = LcdMode.Off;
-        }
-        else
-        {
-            _controlSettings.RgbEnabled = _controlSettings.BlackoutPrevRgbEnabled;
-            _controlSettings.RgbOff = _controlSettings.BlackoutPrevRgbOff;
-            _controlSettings.LcdScreens = _controlSettings.BlackoutPrevLcd;
-            _controlSettings.TurzxScreen = _controlSettings.BlackoutPrevTurzx;
-        }
-
-        _controlSettings.BlackoutActive = on;
         TrySaveSettings();
         RebuildSwatches();
         RebuildLcdButtons();

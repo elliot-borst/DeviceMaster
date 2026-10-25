@@ -105,6 +105,14 @@ public static class ConfigPatcher
                         applied.Add($"pumpScreenMetric={(int)cfg.Control.PumpScreenMetric}");
                     }
                     break;
+                case "blackout":
+                    // movie mode: same remember/black-out/restore as the desktop toggle
+                    if (prop.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                        && cfg.Control.SetBlackout(prop.Value.GetBoolean()))
+                    {
+                        applied.Add($"blackout={cfg.Control.BlackoutActive}");
+                    }
+                    break;
                 default:
                     // unknown fields are ignored, never fatal
                     break;

@@ -52,7 +52,6 @@ public sealed class NInferPage : IDisposable
     private TextBlock _tileRequests = null!, _tileRequestsSub = null!;
     private TextBlock _tileVram = null!, _tileVramSub = null!;
     private TextBlock _tileGpuLoad = null!, _tileGpuLoadSub = null!;
-    private TextBlock _tileGpuTemp = null!, _tileGpuTempSub = null!;
     private Polyline _decodeSpark = null!, _prefillSpark = null!;
 
     private readonly StackPanel _requestRows = new();
@@ -60,10 +59,9 @@ public sealed class NInferPage : IDisposable
 
     public NInferPage(NInferService service) => _service = service;
 
-    public UIElement Build()
+    /// <summary>The server card, the throughput tiles and the recent-requests card, for the Local LLM tab.</summary>
+    public (UIElement Server, UIElement Tiles, UIElement Requests) BuildSections()
     {
-        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
-        page.Children.Add(MainWindow.PageTitle("NInfer", "local LLM inference server · WSL2"));
 
         // ---- header: state badge, model/uptime, start/stop/restart ----
         var card = Theme.CardShell("λ", "NInfer server", "systemd unit in WSL2 — Stop frees the VRAM for gaming",
@@ -101,17 +99,14 @@ public sealed class NInferPage : IDisposable
         body.Children.Add(_logPanel);
 
         card.Margin = new Thickness(0, 0, 12, 16);
-        page.Children.Add(card);
 
         // ---- tiles: inference throughput (journal) + GPU (control loop telemetry) ----
-        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 6 };
+        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 5 };
         tiles.Children.Add(SparkTile("DECODE", out _tileDecode, out _tileDecodeSub, out _decodeSpark));
         tiles.Children.Add(SparkTile("PREFILL", out _tilePrefill, out _tilePrefillSub, out _prefillSpark));
         tiles.Children.Add(Tile("REQUESTS", out _tileRequests, out _tileRequestsSub));
         tiles.Children.Add(Tile("VRAM", out _tileVram, out _tileVramSub));
         tiles.Children.Add(Tile("GPU LOAD", out _tileGpuLoad, out _tileGpuLoadSub));
-        tiles.Children.Add(Tile("GPU TEMP", out _tileGpuTemp, out _tileGpuTempSub));
-        page.Children.Add(tiles);
 
         // ---- recent requests ----
         var requests = Theme.CardShell("≡", "Recent requests", "per-request summaries from the server journal",
@@ -119,10 +114,9 @@ public sealed class NInferPage : IDisposable
         requests.Margin = new Thickness(0, 4, 12, 0);
         requestsBody.Children.Add(RequestTableHeader());
         requestsBody.Children.Add(_requestRows);
-        page.Children.Add(requests);
 
         Tick(null);
-        return page;
+        return (card, tiles, requests);
     }
 
     // ---------- per-second refresh (driven by MainWindow's UI timer) ----------
@@ -175,8 +169,6 @@ public sealed class NInferPage : IDisposable
         _tileVramSub.Text = status?.VramTotalGb is { } total ? $"of {total:F1} GB" : "GB used";
         _tileGpuLoad.Text = status?.GpuLoadPercent is { } load ? $"{load:F0}%" : "—";
         _tileGpuLoadSub.Text = status?.GpuPowerW is { } power ? $"{power:F0} W" : "utilization";
-        _tileGpuTemp.Text = status?.GpuTemperatureC is { } temp ? $"{temp:F0}°" : "—";
-        _tileGpuTempSub.Text = "core";
 
         RefreshRequests(snap);
     }

@@ -46,22 +46,14 @@ public sealed class AiPausePage : IDisposable
         _ninferPresent = ninferPresent;
     }
 
-    public UIElement Build()
+    /// <summary>The pause-for-games sections, in page order, for the Local LLM tab.</summary>
+    public (UIElement State, UIElement Ask, UIElement Suggest, UIElement Games, UIElement Apps, UIElement Settings, UIElement Activity) BuildSections()
     {
-        var page = new StackPanel { MaxWidth = 1460, HorizontalAlignment = HorizontalAlignment.Left };
-        page.Children.Add(MainWindow.PageTitle("AI Pause", "frees GPU memory from local AI while you game"));
-
-        page.Children.Add(BuildStateCard());
-        page.Children.Add(BuildAskCard());
-        page.Children.Add(BuildSuggestCard());
-        page.Children.Add(BuildGamesCard());
-        page.Children.Add(BuildAppsCard());
-        page.Children.Add(BuildSettingsCard());
-        page.Children.Add(BuildActivityCard());
-
+        var sections = (BuildStateCard(), BuildAskCard(), BuildSuggestCard(), BuildGamesCard(), BuildAppsCard(),
+            BuildSettingsCard(), BuildActivityCard());
         _search.TextChanged += (_, _) => Tick();
         Tick();
-        return page;
+        return sections;
     }
 
     // ---------- cards ----------
@@ -257,7 +249,7 @@ public sealed class AiPausePage : IDisposable
 
     private UIElement BuildActivityCard()
     {
-        var card = Theme.CardShell("≡", "Activity", "what AI Pause saw and did (newest first)", out var body, out _);
+        var card = Theme.CardShell("≡", "Activity", "games seen and AI paused or restored (newest first)", out var body, out _);
         body.Children.Add(_activityRows);
         card.Margin = new Thickness(0, 0, 12, 0);
         return card;
@@ -291,7 +283,7 @@ public sealed class AiPausePage : IDisposable
         _gameLine.Text = gameText;
 
         _providerRows.Children.Clear();
-        foreach (var line in snap.Providers)
+        foreach (var line in snap.Providers.Where(ShowProviderLine))
         {
             var text = new TextBlock { FontSize = 12.5, TextWrapping = TextWrapping.Wrap };
             text.Inlines.Add(new System.Windows.Documents.Run($"{line.Name}:  ") { FontWeight = FontWeights.SemiBold, Foreground = Theme.Text });
@@ -299,7 +291,7 @@ public sealed class AiPausePage : IDisposable
             _providerRows.Children.Add(Theme.InsetRow(text));
         }
 
-        if (snap.Providers.Count == 0)
+        if (!snap.Providers.Any(ShowProviderLine))
         {
             _providerRows.Children.Add(new TextBlock
             {
@@ -562,6 +554,12 @@ public sealed class AiPausePage : IDisposable
     }
 
     // ---------- helpers ----------
+
+    /// <summary>NInfer's idle status repeats the server card's badge on the same tab — show it only
+    /// when it says something new (paused, restoring, an error).</summary>
+    private bool ShowProviderLine(ProviderLine line) =>
+        !(_ninferPresent && line.Name == "NInfer" && !line.Error
+          && line.Text is "Ready" or "Not running" or "Starting" or "Unhealthy");
 
     private static DockPanel SettingRow(string label, UIElement control)
     {

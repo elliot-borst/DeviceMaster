@@ -163,6 +163,41 @@ public sealed class ControlSettings
     public LcdMode BlackoutPrevLcd { get; set; } = LcdMode.Metrics;
     public LcdMode BlackoutPrevTurzx { get; set; } = LcdMode.Unmanaged;
 
+    /// <summary>
+    /// Movie mode on/off: on remembers the current lighting/screen state and blacks out every LED
+    /// and screen (LEDs are actively painted black, not just released); off restores it.
+    /// Returns false when already in that state. Shared by the desktop toggle and the web API.
+    /// </summary>
+    public bool SetBlackout(bool on)
+    {
+        if (on == BlackoutActive)
+        {
+            return false;
+        }
+
+        if (on)
+        {
+            BlackoutPrevRgbEnabled = RgbEnabled;
+            BlackoutPrevRgbOff = RgbOff;
+            BlackoutPrevLcd = LcdScreens;
+            BlackoutPrevTurzx = TurzxScreen;
+            RgbEnabled = true; // paint black, don't just stop controlling
+            RgbOff = true;
+            LcdScreens = LcdMode.Off;
+            TurzxScreen = LcdMode.Off;
+        }
+        else
+        {
+            RgbEnabled = BlackoutPrevRgbEnabled;
+            RgbOff = BlackoutPrevRgbOff;
+            LcdScreens = BlackoutPrevLcd;
+            TurzxScreen = BlackoutPrevTurzx;
+        }
+
+        BlackoutActive = on;
+        return true;
+    }
+
     /// <summary>Finds (or creates, unsaved) the config for a screen id.</summary>
     public LcdScreenConfig ScreenConfig(string id, bool isPump)
     {

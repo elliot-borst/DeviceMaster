@@ -97,4 +97,25 @@ public class ConfigPatcherTests
         Assert.Equal("/dev/i2c-10", reloaded.I2cDevice);
         Assert.Equal(80, reloaded.Control.PumpDutyPercent);
     }
+
+    [Fact]
+    public void BlackoutRemembersAndRestoresLightingAndScreens()
+    {
+        var cfg = NewConfig();
+        cfg.Control.RgbEnabled = true;
+        cfg.Control.RgbOff = false;
+        cfg.Control.LcdScreens = LcdMode.Metrics;
+
+        var applied = ConfigPatcher.ApplyPatch(cfg, """{"blackout":true}""", out _);
+        Assert.Equal(["blackout=True"], applied);
+        Assert.True(cfg.Control.RgbOff);
+        Assert.Equal(LcdMode.Off, cfg.Control.LcdScreens);
+
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg, """{"blackout":true}""", out _)); // already on: no change
+
+        ConfigPatcher.ApplyPatch(cfg, """{"blackout":false}""", out _);
+        Assert.False(cfg.Control.BlackoutActive);
+        Assert.False(cfg.Control.RgbOff);
+        Assert.Equal(LcdMode.Metrics, cfg.Control.LcdScreens);
+    }
 }

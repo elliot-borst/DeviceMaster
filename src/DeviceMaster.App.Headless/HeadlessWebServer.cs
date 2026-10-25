@@ -208,16 +208,19 @@ aside { width:218px; flex:none; background:var(--card); border-right:1px solid v
 .brandsub { font-size:10.5px; color:var(--faint); }
 .navbtn { display:flex; align-items:center; gap:10px; width:100%; background:transparent; border:0; color:var(--dim);
   font:13.5px "Segoe UI",sans-serif; padding:10px 12px; margin:2px 0; border-radius:10px; cursor:pointer; text-align:left; }
-.navbtn .glyph { width:26px; font-size:15px; color:var(--dim); }
+.navbtn .glyph { width:24px; margin-right:-2px; flex:none; text-align:center; font-size:16px; line-height:1;
+  font-family:"Segoe UI Symbol","Segoe UI Emoji","Segoe UI",sans-serif; color:var(--dim); }
 .navbtn:hover { background:var(--card2); }
 .navbtn.active { background:var(--card2); color:var(--text); font-weight:600; }
 .navbtn.active .glyph { color:var(--accent2); }
-.aside-foot { margin-top:auto; padding:12px 4px 0; font-size:10.5px; color:var(--faint); display:flex; align-items:center; gap:8px; }
+.aside-bottom { margin-top:auto; }
+.aside-foot { padding:0 4px 4px; font-size:11px; color:var(--dim); display:flex; align-items:center; gap:8px; }
+.aside-build { padding:6px 4px 0; font-size:10.5px; color:var(--faint); }
 .dot { width:8px; height:8px; border-radius:50%; background:var(--faint); flex:none; }
 .dot.ok { background:var(--good); } .dot.bad { background:var(--danger); }
 /* ---- main ---- */
 main { flex:1; padding:22px 26px 16px; min-width:0; }
-.page { display:none; max-width:1460px; } .page.active { display:block; }
+.page { display:none; } .page.active { display:block; }
 h1 { font-size:24px; font-weight:700; margin:0 0 18px 2px; }
 h1 .sub { font-size:12.5px; font-weight:400; color:var(--faint); margin-left:12px; }
 .dashstatus { font-size:14px; font-weight:600; margin:0 0 14px 2px; }
@@ -235,19 +238,19 @@ h1 .sub { font-size:12.5px; font-weight:400; color:var(--faint); margin-left:12p
 .procs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:4px; }
 @media (max-width:1100px){ .procs { grid-template-columns:minmax(0,1fr); } }
 .minis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); }
-.mini { background:var(--inset); border:1px solid var(--line); border-radius:11px; padding:11px 14px; margin-right:8px; min-width:0; }
-.mini .k { font-size:10.5px; font-weight:600; color:var(--faint); }
-.mini .v { font-size:24px; font-weight:700; margin:4px 0 2px; line-height:1.15; white-space:nowrap; }
-.mini .sub { font-size:10.5px; color:var(--faint); min-height:14px; }
-.stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 18px; margin:0 12px 12px 0; min-width:0; }
+.mini { background:var(--inset); border:1px solid var(--line); border-radius:11px; padding:13px 16px; margin-right:10px; min-width:0; }
+.mini .k { font-size:11px; font-weight:600; color:var(--faint); }
+.mini .v { font-size:30px; font-weight:700; margin:4px 0 2px; line-height:1.15; white-space:nowrap; }
+.mini .sub { font-size:11.5px; color:var(--faint); min-height:15px; }
+.stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 20px; margin:0 12px 12px 0; min-width:0; }
 .stat .k { font-size:10.5px; font-weight:600; text-transform:uppercase; color:var(--faint); }
-.stat .v { font-size:30px; font-weight:700; margin:4px 0 2px; line-height:1.15; white-space:nowrap; }
-.stat .sub { font-size:10.5px; color:var(--faint); min-height:14px; }
+.stat .v { font-size:36px; font-weight:700; margin:4px 0 2px; line-height:1.15; white-space:nowrap; }
+.stat .sub { font-size:11.5px; color:var(--faint); min-height:15px; }
 /* "Fans right now": same pills as the desktop dashboard */
-.fangrid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0 7px; }
+.fangrid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0 8px; }
 @media (max-width:1100px){ .fangrid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-.fanpill { display:flex; justify-content:space-between; gap:10px; background:var(--inset); border:1px solid var(--line); border-radius:10px;
-  padding:8px 12px; margin-bottom:7px; font-size:11.5px; min-width:0; }
+.fanpill { display:flex; justify-content:space-between; gap:10px; background:var(--inset); border:1px solid var(--line); border-radius:9px;
+  padding:10px 14px; margin-bottom:8px; font-size:13px; min-width:0; }
 .fanpill .n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .fanpill .r { color:var(--accent2); font-weight:600; white-space:nowrap; }
 .fanpill .r.none { color:var(--faint); font-weight:400; }
@@ -264,12 +267,15 @@ h1 .sub { font-size:12.5px; font-weight:400; color:var(--faint); margin-left:12p
 select, input[type=color] { background:var(--card2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 10px; font-size:13px; }
 input[type=range] { flex:1; max-width:340px; accent-color:var(--accent); height:22px; }
 input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
-.toggle { position:relative; width:42px; height:24px; flex:none; }
-.toggle input { opacity:0; width:0; height:0; }
-.toggle .tk { position:absolute; inset:0; background:var(--card2); border:1px solid var(--line2); border-radius:12px; cursor:pointer; transition:.15s; }
-.toggle .tk:before { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:var(--dim); left:3px; top:3px; transition:.15s; }
-.toggle input:checked + .tk { background:rgba(255,122,69,.25); border-color:var(--accent); }
-.toggle input:checked + .tk:before { transform:translateX(18px); background:var(--accent); }
+.toggle { position:relative; width:40px; height:22px; flex:none; }
+.toggle input { opacity:0; width:0; height:0; position:absolute; }
+.toggle .tk { position:absolute; inset:0; background:var(--line2); border-radius:11px; cursor:pointer; transition:.15s; }
+.toggle .tk:before { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:var(--text); left:3px; top:3px; transition:.15s; }
+.toggle input:checked + .tk { background:var(--grad); }
+.toggle input:checked + .tk:before { transform:translateX(18px); }
+.toggle input:focus-visible + .tk { outline:2px solid var(--accent2); outline-offset:2px; }
+/* sidebar bottom: the desktop's toggle rows, then status + build line */
+.togglerow { display:flex; align-items:center; justify-content:space-between; padding:0 0 14px 4px; font-size:12.5px; font-weight:600; }
 .btn { background:var(--card2); border:1px solid var(--line2); color:var(--text); border-radius:10px; padding:8px 14px; font-size:12.5px; cursor:pointer; }
 .btn:hover { opacity:.85; }
 .btn.primary { background:var(--grad); color:var(--ink); font-weight:600; border:0; }
@@ -294,18 +300,23 @@ td.dim { color:var(--dim); }
   padding:11px 16px; font-size:13px; color:var(--text); opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none; }
 #toast.show { opacity:1; transform:none; }
 #toast.err { border-color:var(--danger); color:var(--danger); }
-@media (max-width:760px){ aside{width:64px} .brandrow div,.navbtn .lbl,.aside-foot span{display:none} .brandrow svg{width:36px;height:36px} .navbtn{justify-content:center} .tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .fangrid{grid-template-columns:minmax(0,1fr)} }
+@media (max-width:760px){ aside{width:64px} .brandrow div,.navbtn .lbl,.aside-foot span,.togglerow span:first-child,.aside-build{display:none} .brandrow svg{width:36px;height:36px} .navbtn{justify-content:center} .tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .fangrid{grid-template-columns:minmax(0,1fr)} }
 </style>
 </head>
 <body>
 <aside>
-  <div class="brandrow"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient><clipPath id="ld"><path d="M11.5 12H32.5A20 20 0 0 1 32.5 52H11.5Z"/></clipPath></defs><rect x="2" y="2" width="60" height="60" rx="14" fill="url(#lg)"/><g clip-path="url(#ld)" fill="#0f1115"><rect x="11.5" y="12" width="8.25" height="40" rx="2.48"/><rect x="22.75" y="12" width="8.25" height="40" rx="2.48"/><rect x="34" y="12" width="8.25" height="40" rx="2.48"/><rect x="45.25" y="12" width="8.25" height="40" rx="2.48"/></g></svg><div><div class="brand">DeviceMaster</div><div class="brandsub">cooling · RGB · screens</div></div></div>
+  <div class="brandrow"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient><clipPath id="ld"><path d="M11.5 12H32.5A20 20 0 0 1 32.5 52H11.5Z"/></clipPath></defs><rect x="2" y="2" width="60" height="60" rx="14" fill="url(#lg)"/><g clip-path="url(#ld)" fill="#0f1115"><rect x="11.5" y="12" width="8.25" height="40" rx="2.48"/><rect x="22.75" y="12" width="8.25" height="40" rx="2.48"/><rect x="34" y="12" width="8.25" height="40" rx="2.48"/><rect x="45.25" y="12" width="8.25" height="40" rx="2.48"/></g></svg><div><div class="brand">DeviceMaster</div><div class="brandsub">fan · RGB · LCD</div></div></div>
   <button class="navbtn active" data-page="dashboard"><span class="glyph">⌂</span><span class="lbl">Dashboard</span></button>
   <button class="navbtn" data-page="cooling"><span class="glyph">❄</span><span class="lbl">Cooling</span></button>
   <button class="navbtn" data-page="lighting"><span class="glyph">◈</span><span class="lbl">Lighting</span></button>
   <button class="navbtn" data-page="screens"><span class="glyph">▣</span><span class="lbl">Screens</span></button>
   <button class="navbtn" data-page="devices"><span class="glyph">⚙</span><span class="lbl">Devices</span></button>
-  <div class="aside-foot"><div class="dot" id="dot"></div><span id="foot">connecting…</span><span style="margin-left:auto">headless · unraid</span></div>
+  <div class="aside-bottom">
+    <label class="togglerow" for="blackout"><span>🌙&nbsp; Blackout Mode</span>
+      <span class="toggle"><input type="checkbox" id="blackout"><span class="tk"></span></span></label>
+    <div class="aside-foot"><div class="dot" id="dot"></div><span id="foot">connecting…</span></div>
+    <div class="aside-build">headless · unraid</div>
+  </div>
 </aside>
 <main>
 
@@ -462,6 +473,7 @@ function syncControls(){
   if (!busy("mode")) $("mode").value = c.Mode;
   if (!busy("source") && [0,2].includes(c.Source)) $("source").value = c.Source;
   if (!busy("rgbOn")) $("rgbOn").checked = c.RgbEnabled;
+  if (!busy("blackout")) $("blackout").checked = !!c.BlackoutActive;
   if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
   if (!busy("rgbBright")) { $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %"; }
   if (!busy("lcdMode")) $("lcdMode").value = c.LcdScreens;
@@ -493,6 +505,7 @@ function apply(patch){
           case "pumpDuty": c.PumpDutyPercent = +v; break;
           case "source": c.Source = +v; break;
           case "rgbEnabled": c.RgbEnabled = v === "True"; break;
+          case "blackout": pullConfig(); break; // blackout rewrites several fields — take them all from the server
           case "rgbR": c.RgbR = +v; break;
           case "rgbG": c.RgbG = +v; break;
           case "rgbB": c.RgbB = +v; break;
@@ -517,6 +530,7 @@ $("pumpDuty").onchange = e => apply({pumpDuty: +e.target.value});
 $("pumpDuty").oninput  = e => $("pumpDutyVal").textContent = e.target.value + " %";
 $("source").onchange = e => apply({source: +e.target.value});
 $("rgbOn").onchange = e => apply({rgbEnabled: e.target.checked});
+$("blackout").onchange = e => apply({blackout: e.target.checked});
 $("rgbColor").onchange = e => { const v = e.target.value;
   apply({rgbR: parseInt(v.slice(1,3),16), rgbG: parseInt(v.slice(3,5),16), rgbB: parseInt(v.slice(5,7),16)}); };
 $("rgbBright").onchange = e => apply({rgbBrightness: +e.target.value});

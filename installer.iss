@@ -46,7 +46,9 @@ RestartApplications=no
 Source: "dist\ui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
-Name: "{group}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"
+; IconFilename named explicitly: a shortcut whose icon is only implied ("",0) keeps Windows'
+; cached copy of an old icon after an in-place update, and the taskbar shows it
+Name: "{group}\DeviceMaster"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\{#MyAppExe}"; IconIndex: 0
 Name: "{group}\Uninstall DeviceMaster"; Filename: "{uninstallexe}"
 
 [Run]
