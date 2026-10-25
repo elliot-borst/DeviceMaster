@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using DeviceMaster.AiPause;
 using DeviceMaster.AiPause.Providers;
 using DeviceMaster.Control;
+using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
@@ -580,7 +581,7 @@ public sealed class MainWindow : Window
     {
         // two equal halves, equal heights (both cards stretch to the taller one)
         var page = new StackPanel();
-        page.Children.Add(PageTitle("Cooling", "fixed fan duty and the pump"));
+        page.Children.Add(PageTitle("Cooling", "fan duty or curve, and the pump"));
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -593,6 +594,11 @@ public sealed class MainWindow : Window
         Grid.SetColumn(pump, 1);
         grid.Children.Add(pump);
         page.Children.Add(grid);
+
+        var curve = BuildCurveCard();
+        curve.Margin = new Thickness(0, 16, 0, 0);
+        page.Children.Add(curve);
+        RefreshFanModeUi();
         return page;
     }
 
@@ -799,9 +805,102 @@ public sealed class MainWindow : Window
         }
     }
 
+    // fan mode (Fixed / Curve) and the curve editor — the web dashboard's Cooling page mirrors these
+    private TextBlock _fanSubtitle = null!;
+    private StackPanel _dutyRow = null!, _sourceRow = null!;
+    private readonly StackPanel _modeChips = new() { Orientation = Orientation.Horizontal };
+    private readonly StackPanel _sourceChips = new() { Orientation = Orientation.Horizontal };
+    private readonly TextBlock _curveReadout = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Accent2, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+    private readonly CurveEditor _curveEditor = new();
+    private TextBlock _curveSubtitle = null!;
+
+    private static readonly (CurveSource Source, string Label)[] CurveSources =
+        [(CurveSource.Coolant, "Coolant"), (CurveSource.Cpu, "CPU"), (CurveSource.Gpu, "GPU")];
+
+    /// <summary>A row of pill buttons, the selected one filled (same look as the web's segmented control).</summary>
+    private static void FillChips(StackPanel host, IReadOnlyList<string> labels, int selected, Action<int> onPick)
+    {
+        host.Children.Clear();
+        for (var i = 0; i < labels.Count; i++)
+        {
+            var index = i;
+            var chip = Theme.Btn(labels[i], primary: i == selected, () => onPick(index));
+            chip.Margin = new Thickness(0, 0, 6, 0);
+            chip.Padding = new Thickness(14, 6, 14, 6);
+            host.Children.Add(chip);
+        }
+    }
+
+    /// <summary>"Cpu" → "CPU" etc. for display (status carries the enum name).</summary>
+    private static string SourceLabel(string sourceName) =>
+        CurveSources.FirstOrDefault(s => s.Source.ToString() == sourceName).Label ?? sourceName;
+
+        private void RefreshFanModeUi()
+    {
+        var curve = _controlSettings.Mode == ControlMode.Curve;
+        FillChips(_modeChips, ["Fixed", "Curve"], curve ? 1 : 0, i =>
+        {
+            _controlSettings.Mode = i == 1 ? ControlMode.Curve : ControlMode.Manual;
+            RefreshFanModeUi();
+            OnControlSettingChanged();
+        });
+        FillChips(_sourceChips, CurveSources.Select(s => s.Label).ToList(),
+            Array.FindIndex(CurveSources, s => s.Source == _controlSettings.Source), i =>
+            {
+                if (_controlSettings.SetSource(CurveSources[i].Source))
+                {
+                    RefreshFanModeUi();
+                    OnControlSettingChanged();
+                }
+            });
+
+        _dutyRow.Visibility = curve ? Visibility.Collapsed : Visibility.Visible;
+        _sourceRow.Visibility = curve ? Visibility.Visible : Visibility.Collapsed;
+        var sourceLabel = CurveSources.First(s => s.Source == _controlSettings.Source).Label;
+        _fanSubtitle.Text = curve ? $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system" : "one fixed duty · every fan in the system";
+        _curveSubtitle.Text = $"{sourceLabel} temperature → fan duty · drag a point to change it"
+            + (curve ? "" : " · used when Mode is Curve");
+        _curveEditor.SetCurve(_controlSettings.CurvePoints, _controlSettings.Source == CurveSource.Coolant);
+        _curveEditor.Opacity = curve ? 1.0 : 0.6;
+    }
+
+    private Border BuildCurveCard()
+    {
+        var card = Theme.CardShell("〜", "Fan curve", "", out var body, out var head);
+        _curveSubtitle = CardSubtitle(head);
+        var reset = Theme.Btn("↺  Reset", primary: false, () =>
+        {
+            _controlSettings.SetCurve(CurveRules.DefaultFor(_controlSettings.Source == CurveSource.Coolant));
+            RefreshFanModeUi();
+            OnControlSettingChanged();
+        });
+        reset.VerticalAlignment = VerticalAlignment.Top;
+        DockPanel.SetDock(reset, Dock.Right);
+        head.Children.Add(reset);
+
+        _curveEditor.CurveEdited += points =>
+        {
+            if (_controlSettings.SetCurve(points))
+            {
+                OnControlSettingChanged();
+            }
+        };
+        body.Children.Add(_curveEditor);
+        body.Children.Add(new TextBlock
+        {
+            Text = "Hotter than the last point always means 100%. If the temperature can't be read, every fan and the pump go to 100%.",
+            FontSize = 11.5,
+            Foreground = Theme.Faint,
+            Margin = new Thickness(0, 8, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        });
+        return card;
+    }
+
     private Border BuildFanCard()
     {
-        var card = Theme.CardShell("✻", "Fan Control", "one fixed duty · every fan in the system", out var body, out var head);
+        var card = Theme.CardShell("✻", "Fan Control", "every fan in the system", out var body, out var head);
+        _fanSubtitle = CardSubtitle(head);
         var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
         badge.VerticalAlignment = VerticalAlignment.Top;
         DockPanel.SetDock(badge, Dock.Right);
@@ -815,7 +914,19 @@ public sealed class MainWindow : Window
         var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         dutyRow.Children.Add(_dutySlider);
         dutyRow.Children.Add(_dutyLabel);
-        controls.Children.Add(LabelledInline("Fan duty", dutyRow));
+        _dutyRow = LabelledInline("Fan duty", dutyRow);
+
+        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+        modeRow.Children.Add(Theme.SmallLabel("Mode"));
+        modeRow.Children.Add(_modeChips);
+        body.Children.Add(modeRow);
+
+        controls.Children.Add(_dutyRow);
+        _sourceRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 20, 8) };
+        _sourceRow.Children.Add(Theme.SmallLabel("Follows"));
+        _sourceRow.Children.Add(_sourceChips);
+        _sourceRow.Children.Add(_curveReadout);
+        controls.Children.Add(_sourceRow);
 
         body.Children.Add(controls);
         body.Children.Add(_controlStatus);
@@ -2113,9 +2224,9 @@ public sealed class MainWindow : Window
 
     private void ApplyControlState()
     {
-        // fan control is always on at a fixed duty — curve/off modes were removed from the
-        // UI (the enum survives in settings for config compatibility)
-        if (_controlSettings.Mode != ControlMode.Manual)
+        // fan control is always on: Fixed (Manual) or Curve. Off stays retired from the UI
+        // (the enum survives in settings for config compatibility) and maps to Fixed.
+        if (_controlSettings.Mode == ControlMode.Off)
         {
             _controlSettings.Mode = ControlMode.Manual;
             TrySaveSettings();
@@ -2217,11 +2328,19 @@ public sealed class MainWindow : Window
         else
         {
             SetBadge("Running", Theme.Good);
+            if (status.Mode == ControlMode.Curve)
+            {
+                _curveReadout.Text = $"{temp} → {status.TargetDutyPercent}%";
+            }
+
             _controlStatus.Text =
                 $"CPU {(status.CpuTemperatureC is { } ct ? $"{ct:F0} °C" : "—")}"
                 + $"   ·   GPU {(status.GpuTemperatureC is { } gt ? $"{gt:F0} °C" : "—")}";
             _controlStatus.Foreground = Theme.Text;
         }
+
+        _curveEditor.SetLive(status.Mode == ControlMode.Curve && !status.FailsafeActive ? status.SourceTemperatureC : null,
+            status.Mode == ControlMode.Curve ? status.TargetDutyPercent : null);
 
         var fans = status.Devices.Where(d => !d.IsPump).ToList();
         var presentIds = fans.Select(f => f.Id ?? f.Name).Distinct().ToList();
@@ -2331,8 +2450,8 @@ public sealed class MainWindow : Window
         _dashStatus.Text = status.FailsafeActive
             ? $"{status.SourceName} unavailable — FAILSAFE, all fans at 100%"
             : status.Mode == ControlMode.Manual
-                ? $"Manual — all fans at {status.TargetDutyPercent}%"
-                : $"Curve on {status.SourceName} → fans {status.TargetDutyPercent}%";
+                ? $"Fixed — all fans at {status.TargetDutyPercent}%"
+                : $"Curve on {SourceLabel(status.SourceName)} → fans {status.TargetDutyPercent}%";
         _dashStatus.Foreground = status.FailsafeActive ? Theme.Warn : Theme.Text;
 
         _tileCoolant.Text = status.CoolantTemperatureC is { } cool ? $"{cool:F1}°" : "—";
@@ -2349,7 +2468,7 @@ public sealed class MainWindow : Window
         _tileFansSub.Text = silent > 0 ? $"{silent} without rpm" : "all reporting";
 
         _tileDuty.Text = $"{status.TargetDutyPercent}%";
-        _tileDutySub.Text = status.Mode == ControlMode.Manual ? "manual" : "from curve";
+        _tileDutySub.Text = status.Mode == ControlMode.Manual ? "fixed" : "from curve";
 
         _dashFanGrid.Children.Clear();
         foreach (var fan in fans)

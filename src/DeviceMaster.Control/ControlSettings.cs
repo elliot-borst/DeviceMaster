@@ -86,6 +86,40 @@ public sealed class ControlSettings
     public CurveSource Source { get; set; } = CurveSource.Coolant;
     public List<CurvePoint> CurvePoints { get; set; } = FanCurve.DefaultCoolant.Points.ToList();
 
+    /// <summary>
+    /// Curves remembered for the sources that aren't active (key = source name). A coolant curve
+    /// (25–38 °C) would pin a CPU at 100%, so each source keeps its own; <see cref="SetSource"/> swaps them.
+    /// </summary>
+    public Dictionary<string, List<CurvePoint>> SourceCurves { get; set; } = [];
+
+    /// <summary>Switches the curve source, saving the current curve and loading the new source's (or its default).</summary>
+    public bool SetSource(CurveSource source)
+    {
+        if (source == Source)
+        {
+            return false;
+        }
+
+        SourceCurves[Source.ToString()] = CurvePoints.ToList();
+        Source = source;
+        CurvePoints = SourceCurves.TryGetValue(source.ToString(), out var saved) && saved.Count >= CurveRules.MinPoints
+            ? saved.ToList()
+            : CurveRules.DefaultFor(source == CurveSource.Coolant).ToList();
+        return true;
+    }
+
+    /// <summary>Validates and stores an edited curve for the active source. False = not a usable curve.</summary>
+    public bool SetCurve(IEnumerable<CurvePoint> points)
+    {
+        if (CurveRules.Normalize(points, Source == CurveSource.Coolant) is not { } curve)
+        {
+            return false;
+        }
+
+        CurvePoints = curve;
+        return true;
+    }
+
     /// <summary>When enabled, DeviceMaster drives all lighting with one static color.</summary>
     public bool RgbEnabled { get; set; }
 

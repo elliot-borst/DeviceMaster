@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Safety;
 using DeviceMaster.Control;
 
@@ -63,10 +64,18 @@ public static class ConfigPatcher
                     }
                     break;
                 case "source":
-                    if (TryEnum(prop.Value, out var source) && Enum.IsDefined(typeof(CurveSource), source))
+                    // each source keeps its own curve: switching swaps the active curve too
+                    if (TryEnum(prop.Value, out var source) && Enum.IsDefined(typeof(CurveSource), source)
+                        && cfg.Control.SetSource((CurveSource)source))
                     {
-                        cfg.Control.Source = (CurveSource)source;
                         applied.Add($"source={(int)cfg.Control.Source}");
+                    }
+                    break;
+                case "curvePoints":
+                    // [[tempC, duty], …] — repaired by the same rules as the desktop editor
+                    if (TryCurve(prop.Value, out var points) && cfg.Control.SetCurve(points))
+                    {
+                        applied.Add("curvePoints=" + string.Join(";", cfg.Control.CurvePoints.Select(p => $"{p.TemperatureC:0}:{p.DutyPercent}")));
                     }
                     break;
                 case "rgbEnabled":
@@ -130,7 +139,31 @@ public static class ConfigPatcher
             && (result = Math.Clamp(n, min, max)) switch { _ => true };
     }
 
-    private static bool TryEnum(JsonElement value, out int result)
+    private static bool TryCurve(JsonElement value, out List<CurvePoint> points)
+    {
+        points = [];
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > CurveRules.MaxPoints)
+        {
+            return false;
+        }
+
+        foreach (var pair in value.EnumerateArray())
+        {
+            // TryGet* throw on non-numbers, so check the kind first — a malformed patch is ignored, never fatal
+            if (pair.ValueKind != JsonValueKind.Array || pair.GetArrayLength() != 2
+                || pair[0].ValueKind != JsonValueKind.Number || pair[1].ValueKind != JsonValueKind.Number
+                || !pair[0].TryGetDouble(out var temp) || !pair[1].TryGetInt32(out var duty))
+            {
+                return false;
+            }
+
+            points.Add(new CurvePoint(temp, duty));
+        }
+
+        return true;
+    }
+
+        private static bool TryEnum(JsonElement value, out int result)
     {
         result = -1;
         return value.ValueKind == JsonValueKind.Number

@@ -246,6 +246,36 @@ h1 .sub { font-size:12.5px; font-weight:400; color:var(--faint); margin-left:12p
 .stat .k { font-size:10.5px; font-weight:600; text-transform:uppercase; color:var(--faint); }
 .stat .v { font-size:36px; font-weight:700; margin:4px 0 2px; line-height:1.15; white-space:nowrap; }
 .stat .sub { font-size:11.5px; color:var(--faint); min-height:15px; }
+/* Cooling page: same cards as the desktop (Fan Control | Pump Control, then Fan curve) */
+.cool2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 16px; }
+#page-cooling .card { margin-right:0; }
+@media (max-width:1100px){ .cool2 { grid-template-columns:minmax(0,1fr); } }
+.cardhead .badge { margin-left:auto; align-self:flex-start; font-size:12px; font-weight:600; display:flex; align-items:center; gap:7px; color:var(--faint); }
+.cardhead .badge i { width:9px; height:9px; border-radius:50%; background:currentColor; }
+.cardhead .badge.ok { color:var(--good); } .cardhead .badge.bad { color:var(--danger); }
+.ctl { display:flex; align-items:center; gap:10px; margin:0 0 12px; flex-wrap:wrap; }
+.ctl > label { font-size:12px; color:var(--dim); min-width:58px; }
+.chips { display:flex; gap:6px; }
+.chip { background:var(--card2); border:1px solid var(--line2); color:var(--text); border-radius:10px; padding:6px 14px; font:12.5px "Segoe UI",sans-serif; cursor:pointer; }
+.chip.on { background:var(--grad); color:var(--ink); border-color:transparent; font-weight:600; }
+.chip:focus-visible { outline:2px solid var(--accent2); outline-offset:2px; }
+.readout { font-size:13px; font-weight:600; color:var(--accent2); margin-left:6px; }
+/* gradient slider, like the desktop DmSlider */
+input.gslider { -webkit-appearance:none; appearance:none; flex:1; max-width:460px; height:10px; border-radius:5px; border:1px solid var(--line);
+  background:var(--grad) 0/var(--pct,0%) 100% no-repeat, var(--inset); cursor:pointer; }
+input.gslider::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; border-radius:50%; background:var(--text); border:0; box-shadow:0 1px 4px rgba(0,0,0,.5); }
+input.gslider::-moz-range-thumb { width:22px; height:22px; border-radius:50%; background:var(--text); border:0; }
+.pct { font-size:13px; font-weight:600; color:var(--accent2); min-width:40px; }
+.coolline { font-size:13px; font-weight:600; margin:14px 0 10px; }
+.coolline.warn { color:var(--warn); }
+.fanline { font-size:12.5px; color:var(--warn); font-weight:600; }
+.fanline.ok { color:var(--dim); font-weight:400; }
+.devrow { display:flex; justify-content:space-between; gap:10px; background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:12.5px; }
+.devrow .id { font-family:Consolas,monospace; color:var(--faint); font-size:11px; margin-left:auto; margin-right:12px; }
+.devrow .r { color:var(--accent2); font-weight:600; white-space:nowrap; }
+#curveSvg { width:100%; height:260px; display:block; touch-action:none; user-select:none; }
+#curveSvg .h { cursor:move; }
+#curveCard.idle #curveSvg { opacity:.6; }
 /* "Fans right now": same pills as the desktop dashboard */
 .fangrid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0 8px; }
 @media (max-width:1100px){ .fangrid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -349,28 +379,32 @@ td.dim { color:var(--dim); }
 
   <!-- ============ COOLING ============ -->
   <section class="page" id="page-cooling">
-    <h1>Cooling<span class="sub">Fan and pump control. Changes apply within ~1 s (config hot-reload).</span></h1>
-    <div class="card">
-      <div class="cardhead"><div class="tile">❄</div><div><div class="cardtitle">Fans</div><div class="cardsub" id="curveSrcLine"></div></div></div>
-      <div class="row"><label for="mode">Mode</label>
-        <select id="mode"><option value="0">Off (firmware rules)</option><option value="1">Manual</option><option value="2">Curve</option></select>
-        <span class="val" id="modeEcho"></span></div>
-      <div class="row"><label for="fanDuty">Fan duty</label>
-        <input type="range" id="fanDuty" min="0" max="100" step="5"><span class="val" id="fanDutyVal">—</span></div>
-      <div class="row"><label for="source">Curve source</label>
-        <select id="source"><option value="0">Coolant (loop temp)</option><option value="2">GPU</option></select></div>
-      <div class="note" id="fanNote"></div>
+    <h1>Cooling<span class="sub">fan duty or curve, and the pump</span></h1>
+    <div class="cool2">
+      <div class="card">
+        <div class="cardhead"><div class="tile">✻</div><div><div class="cardtitle">Fan Control</div><div class="cardsub" id="fanSub">every fan in the system</div></div>
+          <div class="badge" id="fanBadge"><i></i><span>…</span></div></div>
+        <div class="ctl"><label>Mode</label><div class="chips" id="modeChips"></div></div>
+        <div class="ctl" id="dutyRow"><label for="fanDuty">Fan duty</label>
+          <input type="range" class="gslider" id="fanDuty" min="0" max="100" step="5"><span class="pct" id="fanDutyVal">—</span></div>
+        <div class="ctl" id="sourceRow"><label>Follows</label><div class="chips" id="sourceChips"></div><span class="readout" id="curveReadout"></span></div>
+        <div class="coolline" id="coolTemps">—</div>
+        <div class="fanline" id="fanLine"></div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><div class="tile">≋</div><div><div class="cardtitle">Pump Control</div><div class="cardsub">independent duty · never below 50%</div></div>
+          <div class="badge" id="pumpBadge"><i></i><span>…</span></div></div>
+        <div class="ctl"><label for="pumpDuty">Pump duty</label>
+          <input type="range" class="gslider" id="pumpDuty" min="50" max="100" step="5"><span class="pct" id="pumpDutyVal">—</span></div>
+        <div class="coolline" id="pumpCoolant">—</div>
+        <div id="pumpRows"></div>
+      </div>
     </div>
-    <div class="card">
-      <div class="cardhead"><div class="tile">◉</div><div><div class="cardtitle">Pump</div><div class="cardsub">XD6 ELITE — duty floor 50 % (hardware safety)</div></div></div>
-      <div class="row"><label for="pumpDuty">Pump duty</label>
-        <input type="range" id="pumpDuty" min="50" max="100" step="5"><span class="val" id="pumpDutyVal">—</span></div>
-      <div class="row"><label>RPM</label><span class="val" id="pumpRpm">—</span></div>
-      <div class="note">Duty below 50 % is refused — low pump speed can starve the loop. Any sensor error drives pump and fans to 100 % (failsafe).</div>
-    </div>
-    <div class="card">
-      <div class="cardhead"><div class="tile">〜</div><div><div class="cardtitle">Fan curve</div><div class="cardsub">temperature → duty (read-only; edit config.json to change)</div></div></div>
-      <table><thead><tr><th>Temp</th><th>Duty</th></tr></thead><tbody id="curvePts"></tbody></table>
+    <div class="card" id="curveCard">
+      <div class="cardhead"><div class="tile">〜</div><div><div class="cardtitle">Fan curve</div><div class="cardsub" id="curveSub"></div></div>
+        <button class="btn" id="curveReset" style="margin-left:auto;align-self:flex-start">↺&nbsp; Reset</button></div>
+      <svg id="curveSvg" aria-label="Fan curve: temperature to fan duty"></svg>
+      <div class="note">Hotter than the last point always means 100%. If the temperature can't be read, every fan and the pump go to 100%.</div>
     </div>
   </section>
 
@@ -449,6 +483,7 @@ document.querySelectorAll(".navbtn").forEach(b => b.onclick = () => {
   document.querySelectorAll(".page").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   $("page-" + b.dataset.page).classList.add("active");
+  if (b.dataset.page === "cooling") drawCurve();
 });
 
 /* ---- toast ---- */
@@ -458,9 +493,18 @@ function toast(msg, err=false){
 }
 
 /* ---- config load / apply ---- */
+/* config.json stores enums by name ("Curve"); the controls work in numbers */
+const ENUMS = { Mode:["Off","Manual","Curve"], Source:["Coolant","Cpu","Gpu"], LcdScreens:["Unmanaged","Off","Black","White","Metrics"],
+  PumpScreenMetric:["Coolant","CpuTemp","GpuTemp","CpuLoad","GpuLoad","Clock","RamLoad","PumpRpm","FanDuty","Date","VramLoad","FanRpm","PumpDuty","GpuPower","CpuPower","GpuClock","VramTemp"] };
+function normalize(c){
+  for (const [k, names] of Object.entries(ENUMS)) if (typeof c.Control[k] === "string") c.Control[k] = Math.max(0, names.indexOf(c.Control[k]));
+  return c;
+}
+const SOURCES = [["Coolant",0],["CPU",1],["GPU",2]];
+const sourceLabel = n => ({Coolant:"Coolant",Cpu:"CPU",Gpu:"GPU"})[n] || n;
 const hx = h => ("0"+h.toString(16)).slice(-2);
 function initControls(){
-  syncControls(); renderCurve();
+  syncControls();
 }
 /* Re-sync every control from the authoritative config (fetched on a timer), without
    stomping anything the user is focused on / dragging. */
@@ -468,10 +512,9 @@ function syncControls(){
   if (!cfg) return;
   const c = cfg.Control;
   const busy = id => document.activeElement === $(id) || $(id)._drag;
-  if (!busy("fanDuty")) { $("fanDuty").value = c.ManualDutyPercent; $("fanDutyVal").textContent = c.ManualDutyPercent + " %"; }
-  if (!busy("pumpDuty")) { $("pumpDuty").value = c.PumpDutyPercent; $("pumpDutyVal").textContent = c.PumpDutyPercent + " %"; }
-  if (!busy("mode")) $("mode").value = c.Mode;
-  if (!busy("source") && [0,2].includes(c.Source)) $("source").value = c.Source;
+  if (!busy("fanDuty")) { $("fanDuty").value = c.ManualDutyPercent; $("fanDutyVal").textContent = c.ManualDutyPercent + "%"; paintSlider($("fanDuty")); }
+  if (!busy("pumpDuty")) { $("pumpDuty").value = c.PumpDutyPercent; $("pumpDutyVal").textContent = c.PumpDutyPercent + "%"; paintSlider($("pumpDuty")); }
+  renderFanMode();
   if (!busy("rgbOn")) $("rgbOn").checked = c.RgbEnabled;
   if (!busy("blackout")) $("blackout").checked = !!c.BlackoutActive;
   if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
@@ -480,7 +523,7 @@ function syncControls(){
   if (!busy("lcdMetric")) $("lcdMetric").value = c.PumpScreenMetric;
   if (!busy("lcdBright")) { $("lcdBright").value = c.LcdBrightness; $("lcdBrightVal").textContent = c.LcdBrightness + " %"; }
   updateRgbPreview();
-  refreshControlNotes();
+
 }
 ["fanDuty","pumpDuty","rgbBright","lcdBright"].forEach(id => {
   const el = $(id);
@@ -501,9 +544,10 @@ function apply(patch){
         const i = a.indexOf("="), k = a.slice(0, i), v = a.slice(i + 1);
         switch (k) {
           case "mode": c.Mode = +v; break;
+          case "curvePoints": pullConfig(); break;
           case "fanDuty": c.ManualDutyPercent = +v; break;
           case "pumpDuty": c.PumpDutyPercent = +v; break;
-          case "source": c.Source = +v; break;
+          case "source": pullConfig(); break; // switching source swaps the curve too
           case "rgbEnabled": c.RgbEnabled = v === "True"; break;
           case "blackout": pullConfig(); break; // blackout rewrites several fields — take them all from the server
           case "rgbR": c.RgbR = +v; break;
@@ -523,12 +567,11 @@ function apply(patch){
 }
 
 /* ---- controls wiring (fires on release / selection, not on every drag tick) ---- */
-$("mode").onchange = e => apply({mode: +e.target.value});
 $("fanDuty").onchange = e => apply({fanDuty: +e.target.value});
-$("fanDuty").oninput  = e => $("fanDutyVal").textContent = e.target.value + " %";
+$("fanDuty").oninput  = e => { $("fanDutyVal").textContent = e.target.value + "%"; paintSlider(e.target); };
 $("pumpDuty").onchange = e => apply({pumpDuty: +e.target.value});
-$("pumpDuty").oninput  = e => $("pumpDutyVal").textContent = e.target.value + " %";
-$("source").onchange = e => apply({source: +e.target.value});
+$("pumpDuty").oninput  = e => { $("pumpDutyVal").textContent = e.target.value + "%"; paintSlider(e.target); };
+$("curveReset").onclick = () => apply({curvePoints: defaultCurve(cfg.Control.Source === 0)});
 $("rgbOn").onchange = e => apply({rgbEnabled: e.target.checked});
 $("blackout").onchange = e => apply({blackout: e.target.checked});
 $("rgbColor").onchange = e => { const v = e.target.value;
@@ -579,24 +622,75 @@ function deviceCounts(s){
   const screens = ds.filter(d => d.IsScreen).length;
   return `${fans} fan${fans===1?"":"s"} · ${pumps} pump${pumps===1?"":"s"} · ${screens} screen${screens===1?"":"s"}`;
 }
-function renderCurve(){
-  if (!cfg) return;
-  const pts = (cfg.Control.CurvePoints||[]).map(p => `<tr><td>${f(p.TemperatureC,0)} °C</td><td>${p.DutyPercent} %</td></tr>`).join("");
-  $("curvePts").innerHTML = pts || "<tr><td class='dim'>no points</td><td></td></tr>";
+function paintSlider(el){ const min=+el.min, max=+el.max; el.style.setProperty("--pct", ((el.value-min)/(max-min)*100) + "%"); }
+function chips(host, labels, selected, onPick){
+  host.innerHTML = "";
+  labels.forEach((l, i) => { const b = document.createElement("button"); b.className = "chip" + (i === selected ? " on" : "");
+    b.textContent = l; b.onclick = () => onPick(i); host.appendChild(b); });
 }
-function refreshControlNotes(){
-  if (!cfg) return;
-  const m = cfg.Control.Mode;
-  $("fanDuty").disabled = m !== 1;
-  $("fanDuty").style.opacity = m === 1 ? 1 : .4;
-  $("source").disabled = m !== 2;
-  $("source").style.opacity = m === 2 ? 1 : .4;
-  $("modeEcho").textContent = MODES[m];
-  $("fanNote").textContent = m === 2 ? "Duty follows the curve from the selected source temperature."
-    : m === 1 ? "Fixed duty applied to all fan channels."
-    : "DeviceMaster leaves the hubs alone — their firmware rules apply.";
-  $("rgbOnEcho").textContent = cfg.Control.RgbEnabled ? "on" : "off";
+function renderFanMode(){
+  const c = cfg.Control, curve = c.Mode === 2, src = SOURCES.find(x => x[1] === c.Source) || SOURCES[0];
+  chips($("modeChips"), ["Fixed","Curve"], curve ? 1 : 0, i => apply({mode: i === 1 ? 2 : 1}));
+  chips($("sourceChips"), SOURCES.map(x => x[0]), SOURCES.indexOf(src), i => apply({source: SOURCES[i][1]}));
+  $("dutyRow").style.display = curve ? "none" : "";
+  $("sourceRow").style.display = curve ? "" : "none";
+  $("fanSub").textContent = curve ? `curve on ${src[0].toLowerCase()} · every fan in the system` : "one fixed duty · every fan in the system";
+  $("curveSub").textContent = `${src[0]} temperature → fan duty · drag a point to change it` + (curve ? "" : " · used when Mode is Curve");
+  $("curveCard").className = "card" + (curve ? "" : " idle");
+  $("rgbOnEcho").textContent = c.RgbEnabled ? "on" : "off";
+  if (!curveDrag) drawCurve();
 }
+
+/* ---- fan curve editor: same graph and rules as the desktop CurveEditor ---- */
+const CURVE_DEFAULTS = { true: [[25,30],[30,45],[34,70],[38,100]], false: [[40,30],[60,50],[75,75],[85,100]] };
+const defaultCurve = coolant => CURVE_DEFAULTS[coolant];
+const curveRange = coolant => coolant ? [20,70] : [30,100];
+let curveDrag = null, curvePts = null, liveCurve = null;
+function drawCurve(){
+  if (!cfg) return;
+  const svg = $("curveSvg"), W = svg.clientWidth || 900, H = 260, L = 44, R = 16, T = 14, B = 28;
+  const coolant = cfg.Control.Source === 0, [lo, hi] = curveRange(coolant);
+  if (!curveDrag) curvePts = (cfg.Control.CurvePoints||[]).map(p => [p.TemperatureC, p.DutyPercent]);
+  const pw = W - L - R, ph = H - T - B, X = t => L + (t - lo) / (hi - lo) * pw, Y = d => T + (1 - d / 100) * ph;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  let g = `<defs><linearGradient id="cg" x1="0" x2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient></defs>`;
+  for (const d of [0,25,50,75,100]) g += `<line x1="${L}" x2="${L+pw}" y1="${Y(d)}" y2="${Y(d)}" stroke="var(--line)"/><text x="${L-6}" y="${Y(d)+4}" fill="var(--faint)" font-size="11" text-anchor="end">${d}%</text>`;
+  const step = hi - lo > 40 ? 10 : 5;
+  for (let t = Math.ceil(lo/step)*step; t <= hi; t += step) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${T+ph}" stroke="var(--line)" opacity=".6"/><text x="${X(t)}" y="${T+ph+18}" fill="var(--faint)" font-size="11" text-anchor="middle">${t}°</text>`;
+  if (curvePts.length) {
+    const line = [[L, Y(curvePts[0][1])], ...curvePts.map(p => [X(p[0]), Y(p[1])]), [L+pw, Y(curvePts[curvePts.length-1][1])]];
+    const pts = line.map(p => p.join(",")).join(" ");
+    g += `<polygon points="${pts} ${L+pw},${Y(0)} ${L},${Y(0)}" fill="url(#cg)" opacity=".12"/><polyline points="${pts}" fill="none" stroke="url(#cg)" stroke-width="2.5" stroke-linejoin="round"/>`;
+  }
+  if (liveCurve && !curveDrag) {
+    const x = X(Math.min(hi, Math.max(lo, liveCurve[0])));
+    g += `<line x1="${x}" x2="${x}" y1="${T}" y2="${T+ph}" stroke="var(--accent2)" stroke-dasharray="3 3"/><circle cx="${x}" cy="${Y(liveCurve[1])}" r="5" fill="var(--accent2)"/>`
+       + `<text x="${Math.min(x+8, L+pw-120)}" y="${T+12}" fill="var(--accent2)" font-size="11">now ${liveCurve[0].toFixed(1)}° → ${liveCurve[1]}%</text>`;
+  }
+  curvePts.forEach((p, i) => {
+    g += `<circle class="h" data-i="${i}" cx="${X(p[0])}" cy="${Y(p[1])}" r="8" fill="var(--text)" stroke="var(--accent)" stroke-width="3"><title>${p[0]} °C → ${p[1]}%</title></circle>`;
+    if (curveDrag && curveDrag.i === i) g += `<text x="${X(p[0])}" y="${Y(p[1])-16}" fill="var(--text)" font-size="11" text-anchor="middle">${p[0]}° → ${p[1]}%</text>`;
+  });
+  svg.innerHTML = g;
+  svg._map = { X, Y, lo, hi, L, T, pw, ph };
+}
+$("curveSvg").addEventListener("pointerdown", e => {
+  const h = e.target.closest(".h"); if (!h) return;
+  curveDrag = { i: +h.dataset.i }; $("curveSvg").setPointerCapture(e.pointerId); e.preventDefault();
+});
+$("curveSvg").addEventListener("pointermove", e => {
+  if (!curveDrag) return;
+  const svg = $("curveSvg"), m = svg._map, r = svg.getBoundingClientRect(), sx = (svg.viewBox.baseVal.width || r.width) / r.width;
+  const x = (e.clientX - r.left) * sx, y = (e.clientY - r.top) * sx, i = curveDrag.i;
+  const minT = i > 0 ? curvePts[i-1][0] + 1 : m.lo, maxT = i < curvePts.length - 1 ? curvePts[i+1][0] - 1 : m.hi;
+  const t = Math.min(Math.max(minT, maxT), Math.max(minT, Math.round(m.lo + (x - m.L) / m.pw * (m.hi - m.lo))));
+  const d = Math.min(100, Math.max(0, Math.round((1 - (y - m.T) / m.ph) * 20) * 5));
+  curvePts[i] = [t, d]; drawCurve();
+});
+const endCurveDrag = () => { if (!curveDrag) return; curveDrag = null; apply({curvePoints: curvePts}); };
+$("curveSvg").addEventListener("pointerup", endCurveDrag);
+$("curveSvg").addEventListener("pointercancel", endCurveDrag);
+window.addEventListener("resize", () => { if (!curveDrag) drawCurve(); });
 function tick(){
   fetch("/status.json").then(r => r.json()).then(s => {
     $("dot").className = "dot " + (s.Running ? "ok" : "bad");
@@ -607,8 +701,8 @@ function tick(){
     const deg = (v, d) => v == null ? "—" : v.toFixed(d) + "°";
     if (!s.Running) { $("dashStatus").textContent = "Control off — devices follow their own hardware/firmware curves."; }
     else $("dashStatus").textContent = s.FailsafeActive ? `${s.SourceName} unavailable — FAILSAFE, all fans at 100%`
-      : s.Mode === 1 ? `Manual — all fans at ${s.TargetDutyPercent}%`
-      : s.Mode === 2 ? `Curve on ${s.SourceName} → fans ${s.TargetDutyPercent}%`
+      : s.Mode === 1 ? `Fixed — all fans at ${s.TargetDutyPercent}%`
+      : s.Mode === 2 ? `Curve on ${sourceLabel(s.SourceName)} → fans ${s.TargetDutyPercent}%`
       : "Control off — devices follow their own hardware/firmware curves.";
     $("dashStatus").className = "dashstatus" + (s.FailsafeActive ? " warn" : "");
     $("coolant").textContent = deg(s.CoolantTemperatureC, 1);
@@ -618,7 +712,7 @@ function tick(){
     const silent = fans.filter(x => x.Rpm == null).length;
     $("fansSub").textContent = silent ? `${silent} without rpm` : "all reporting";
     $("duty").textContent = s.TargetDutyPercent + "%";
-    $("dutySub").textContent = s.Mode === 1 ? "manual" : "from curve";
+    $("dutySub").textContent = s.Mode === 1 ? "fixed" : "from curve";
     $("fanGrid").innerHTML = fans.map(x => `<div class="fanpill"><span class="n">Corsair · ${x.Name||"fan"}</span>`
       + `<span class="r${x.Rpm == null ? " none" : ""}">${x.Rpm == null ? "no rpm" : x.Rpm + " rpm"}</span></div>`).join("");
     $("dashWarnings").innerHTML = (s.Warnings||[]).filter(w => !String(w).includes("LED registry"))
@@ -636,15 +730,30 @@ function tick(){
     $("gpuLoad").textContent = pct(s.GpuLoadPercent);     $("gpuLoadSub").textContent = "utilization";
     $("gpuPower").textContent = watts(s.GpuPowerW);       $("gpuPowerSub").textContent = "board";
     $("gpuVram").textContent = gb(s.VramUsedGb);          $("gpuVramSub").textContent = s.VramTotalGb != null ? `of ${Math.round(s.VramTotalGb)} GB` : "in use";
-    $("pumpRpm").textContent = pump && pump.Rpm != null ? pump.Rpm + " rpm" : "—";
+    // Cooling page: same lines as the desktop Fan Control / Pump Control cards
+    const badge = (id, text, cls) => { $(id).className = "badge " + cls; $(id).lastChild.textContent = text; };
+    const state = !s.Running ? ["Off",""] : s.FailsafeActive ? ["FAILSAFE","bad"] : ["Running","ok"];
+    badge("fanBadge", state[0], state[1]); badge("pumpBadge", state[0], state[1]);
+    $("coolTemps").textContent = s.FailsafeActive ? `${sourceLabel(s.SourceName)} unavailable — all fans at 100%`
+      : `CPU ${deg(s.CpuTemperatureC,0).replace("°"," °C")}   ·   GPU ${deg(s.GpuTemperatureC,0).replace("°"," °C")}`;
+    $("coolTemps").className = "coolline" + (s.FailsafeActive ? " warn" : "");
+    const reporting = fans.filter(x => x.Rpm != null).length;
+    $("fanLine").textContent = `${reporting}/${fans.length} fan devices reporting`;
+    $("fanLine").className = "fanline" + (reporting === fans.length ? " ok" : "");
+    $("curveReadout").textContent = s.Mode === 2 && s.SourceTemperatureC != null ? `${s.SourceTemperatureC.toFixed(1)} °C → ${s.TargetDutyPercent}%` : "";
+    liveCurve = s.Mode === 2 && !s.FailsafeActive && s.SourceTemperatureC != null ? [s.SourceTemperatureC, s.TargetDutyPercent] : null;
+    if (!curveDrag && $("page-cooling").classList.contains("active")) drawCurve();
+    $("pumpCoolant").textContent = s.CoolantTemperatureC != null ? `Coolant ${s.CoolantTemperatureC.toFixed(1)} °C` : "Coolant temperature unavailable";
+    $("pumpRows").innerHTML = devs.filter(d => d.IsPump).map(d => `<div class="devrow"><span>Corsair · ${d.Name} (ch${d.Channel} · hub ${(d.HubSerial||"").slice(0,4)})</span>`
+      + `<span class="r">${d.Rpm == null ? "—" : d.Rpm + " rpm"} @ ${s.PumpDutyPercent}%</span></div>`).join("");
     $("devCount2").textContent = deviceCounts(s);
     $("devices2").innerHTML = deviceRows(s, true);
   }).catch(() => { $("dot").className = "dot bad"; $("foot").textContent = "dashboard offline"; });
 }
 tick(); setInterval(tick, 2000);
-const pullConfig = () => fetch("/config.json").then(r => r.json()).then(c => { cfg = c; syncControls(); }).catch(() => {});
+const pullConfig = () => fetch("/config.json").then(r => r.json()).then(c => { cfg = normalize(c); syncControls(); }).catch(() => {});
 pullConfig(); setInterval(pullConfig, 5000);
-fetch("/config.json").then(r => r.json()).then(c => { cfg = c; initControls(); }).catch(() => {});
+fetch("/config.json").then(r => r.json()).then(c => { cfg = normalize(c); initControls(); }).catch(() => {});
 </script>
 </body>
 </html>
