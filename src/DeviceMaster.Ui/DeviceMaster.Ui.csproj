@@ -14,7 +14,7 @@
          (GetName().Version.Major), so a pinned AssemblyVersion that lags <Version> makes the
          installed build under-report its version and auto-update in an infinite loop. Leaving
          them unset lets both derive from <Version>, keeping this the single source of truth. -->
-    <Version>93.0.0</Version>
+    <Version>94.0.0</Version>
     <!-- Embedded version info -> Task Manager shows the name (FileDescription/Product)
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>
@@ -33,6 +33,12 @@
     <!-- WinForms adds implicit global usings that collide with WPF types -->
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- the icon as a WPF resource too: the window and sidebar logo load it directly (sharp frames,
+         and no dependence on Windows' icon cache after an in-place update) -->
+    <Resource Include="DeviceMaster.ico" />
   </ItemGroup>
 
   <ItemGroup>

@@ -36,6 +36,14 @@ public sealed record ControlStatus
     public double? VramUsedGb { get; init; }
     public double? VramTotalGb { get; init; }
 
+    /// <summary>CPU/memory/GPU figures for the dashboard's CPU and GPU sections (null = unknown).</summary>
+    public string? CpuName { get; init; }
+    public double? CpuLoadPercent { get; init; }
+    public double? CpuPowerW { get; init; }
+    public double? RamUsedGb { get; init; }
+    public double? RamTotalGb { get; init; }
+    public string? GpuName { get; init; }
+
     public int TargetDutyPercent { get; init; }
 
     /// <summary>Pump duty actually written to the chain (null = hubs in hardware mode).</summary>
@@ -389,6 +397,12 @@ public sealed class ControlLoop : IDisposable
             GpuPowerW = _dashGpuPower,
             VramUsedGb = _dashVramUsed,
             VramTotalGb = _dashVramTotal,
+            CpuName = _dashCpuName,
+            CpuLoadPercent = _dashCpuLoad,
+            CpuPowerW = _dashCpuPower,
+            RamUsedGb = _dashRamUsed,
+            RamTotalGb = _dashRamTotal,
+            GpuName = _dashGpuName,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
@@ -401,6 +415,9 @@ public sealed class ControlLoop : IDisposable
     private double? _dashCpuTemp;
     private double? _dashGpuTemp;
     private double? _dashGpuLoad, _dashGpuPower, _dashVramUsed, _dashVramTotal;
+    private double? _dashCpuLoad, _dashCpuPower, _dashRamUsed;
+    private readonly double? _dashRamTotal = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes is > 0 and var bytes ? bytes / 1_073_741_824.0 : null;
+    private string? _dashCpuName, _dashGpuName;
     private long _dashTempsDue;
 
     private void SampleDashboardTemps()
@@ -424,6 +441,11 @@ public sealed class ControlLoop : IDisposable
             _dashGpuPower = stats.GpuPowerW;
             _dashVramUsed = stats.VramUsedGb;
             _dashVramTotal = stats.VramTotalGb;
+            _dashCpuLoad = stats.CpuLoadPercent;
+            _dashCpuPower = stats.CpuPowerW;
+            _dashRamUsed = stats.RamUsedGb;
+            _dashCpuName = string.IsNullOrWhiteSpace(stats.CpuName) ? null : stats.CpuName;
+            _dashGpuName = string.IsNullOrWhiteSpace(stats.GpuName) ? null : stats.GpuName;
         }
         catch
         {

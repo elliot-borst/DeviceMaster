@@ -119,6 +119,10 @@ public sealed class MainWindow : Window
         MinHeight = 720;
         WindowState = WindowState.Maximized; // full screen by default (owner preference)
         Background = Theme.Bg;
+        if (LoadAppIcon(256) is { } appIcon)
+        {
+            Icon = appIcon; // taskbar + title bar use this instead of Windows' cached copy of the exe icon
+        }
         // Snap element positions and text baselines to whole device pixels so borders and glyph
         // edges don't blur across half-pixel boundaries (inherits to every child control).
         UseLayoutRounding = true;
@@ -170,8 +174,18 @@ public sealed class MainWindow : Window
         SourceInitialized += (_, _) =>
         {
             // dark title bar to match the theme
+            var handle = new WindowInteropHelper(this).Handle;
             var dark = 1;
-            _ = DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, 20, ref dark, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, 20, ref dark, sizeof(int));
+
+            // Windows 11: title bar + border in the app's own colours instead of the system accent
+            // (COLORREF is 0x00BBGGRR). Earlier Windows ignores these attributes.
+            var caption = 0x00151110; // Theme.Bg #0f1115
+            var text = 0x00F2EEEC;    // Theme.Text #eceef2
+            var border = 0x00392F2A;  // Theme.Line #2a2f39
+            _ = DwmSetWindowAttribute(handle, 35, ref caption, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, 36, ref text, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, 34, ref border, sizeof(int));
         };
     }
 
@@ -199,16 +213,7 @@ public sealed class MainWindow : Window
         var side = new DockPanel { Margin = new Thickness(14, 18, 14, 16) };
 
         var brand = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 0, 0, 22) };
-        brand.Children.Add(new Border
-        {
-            Width = 40,
-            Height = 40,
-            CornerRadius = new CornerRadius(11),
-            Background = Theme.Card2,
-            BorderBrush = Theme.Line2,
-            BorderThickness = new Thickness(1),
-            Child = BuildLogoGlyph(),
-        });
+        brand.Children.Add(BuildLogoGlyph()); // the icon is its own rounded tile — no frame around it
         var brandText = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         brandText.Children.Add(new TextBlock { Text = "DeviceMaster", FontSize = 17, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
         brandText.Children.Add(new TextBlock { Text = "cooling · RGB · screens", FontSize = 10.5, Foreground = Theme.Faint });
@@ -415,11 +420,16 @@ public sealed class MainWindow : Window
 
     private readonly TextBlock _dashStatus = new() { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(2, 0, 0, 14) };
     private TextBlock _tileCoolant = null!, _tileCoolantSub = null!;
-    private TextBlock _tileCpu = null!, _tileCpuSub = null!;
-    private TextBlock _tileGpu = null!, _tileGpuSub = null!;
     private TextBlock _tilePump = null!, _tilePumpSub = null!;
     private TextBlock _tileFans = null!, _tileFansSub = null!;
     private TextBlock _tileDuty = null!, _tileDutySub = null!;
+
+    // CPU and GPU sections — the same four figures each as the headless web dashboard
+    private TextBlock _cpuName = null!, _gpuName = null!;
+    private TextBlock _cpuTemp = null!, _cpuTempSub = null!, _cpuLoad = null!, _cpuLoadSub = null!;
+    private TextBlock _cpuPower = null!, _cpuPowerSub = null!, _cpuRam = null!, _cpuRamSub = null!;
+    private TextBlock _gpuTemp = null!, _gpuTempSub = null!, _gpuLoad = null!, _gpuLoadSub = null!;
+    private TextBlock _gpuPower = null!, _gpuPowerSub = null!, _gpuVram = null!, _gpuVramSub = null!;
     private readonly StackPanel _dashWarnings = new() { Margin = new Thickness(2, 12, 0, 0) };
 
     private readonly System.Windows.Controls.Primitives.UniformGrid _dashFanGrid = new() { Columns = 4 };
@@ -430,14 +440,30 @@ public sealed class MainWindow : Window
         page.Children.Add(PageTitle("Dashboard", "the whole loop at a glance"));
         page.Children.Add(_dashStatus);
 
-        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 6 };
+        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 4 };
         tiles.Children.Add(StatTile("COOLANT", out _tileCoolant, out _tileCoolantSub));
-        tiles.Children.Add(StatTile("CPU", out _tileCpu, out _tileCpuSub));
-        tiles.Children.Add(StatTile("GPU", out _tileGpu, out _tileGpuSub));
         tiles.Children.Add(StatTile("PUMP", out _tilePump, out _tilePumpSub));
         tiles.Children.Add(StatTile("FANS", out _tileFans, out _tileFansSub));
         tiles.Children.Add(StatTile("DUTY", out _tileDuty, out _tileDutySub));
         page.Children.Add(tiles);
+
+        // CPU | GPU, side by side
+        var processors = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2, Margin = new Thickness(0, 4, 0, 0) };
+        var cpuCard = Theme.CardShell("▦", "CPU", "—", out var cpuBody, out var cpuHead);
+        _cpuName = CardSubtitle(cpuHead);
+        cpuBody.Children.Add(MiniStatRow(
+            MiniStat("TEMPERATURE", out _cpuTemp, out _cpuTempSub), MiniStat("LOAD", out _cpuLoad, out _cpuLoadSub),
+            MiniStat("POWER", out _cpuPower, out _cpuPowerSub), MiniStat("RAM", out _cpuRam, out _cpuRamSub)));
+        cpuCard.Margin = new Thickness(0, 0, 12, 16);
+        processors.Children.Add(cpuCard);
+        var gpuCard = Theme.CardShell("▤", "GPU", "—", out var gpuBody, out var gpuHead);
+        _gpuName = CardSubtitle(gpuHead);
+        gpuBody.Children.Add(MiniStatRow(
+            MiniStat("TEMPERATURE", out _gpuTemp, out _gpuTempSub), MiniStat("LOAD", out _gpuLoad, out _gpuLoadSub),
+            MiniStat("POWER", out _gpuPower, out _gpuPowerSub), MiniStat("VRAM", out _gpuVram, out _gpuVramSub)));
+        gpuCard.Margin = new Thickness(0, 0, 12, 16);
+        processors.Children.Add(gpuCard);
+        page.Children.Add(processors);
 
         var fanCard = Theme.CardShell("✻", "Fans right now", "every fan with its live speed", out var fanBody, out _);
         fanCard.Margin = new Thickness(0, 4, 12, 0);
@@ -446,6 +472,41 @@ public sealed class MainWindow : Window
 
         page.Children.Add(_dashWarnings);
         return page;
+    }
+
+    /// <summary>The subtitle line CardShell puts under the title (for live text such as the CPU name).</summary>
+    private static TextBlock CardSubtitle(DockPanel head) => (TextBlock)((StackPanel)head.Children[1]).Children[1];
+
+    private static System.Windows.Controls.Primitives.UniformGrid MiniStatRow(params Border[] stats)
+    {
+        var row = new System.Windows.Controls.Primitives.UniformGrid { Columns = stats.Length };
+        foreach (var stat in stats)
+        {
+            row.Children.Add(stat);
+        }
+
+        return row;
+    }
+
+    /// <summary>A stat inside a card: same type scale as StatTile, on the inset colour.</summary>
+    private static Border MiniStat(string label, out TextBlock value, out TextBlock sub)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
+        value = new TextBlock { Text = "—", FontSize = 24, FontWeight = FontWeights.Bold, Foreground = Theme.Text, Margin = new Thickness(0, 4, 0, 2) };
+        stack.Children.Add(value);
+        sub = new TextBlock { Text = "", FontSize = 10.5, Foreground = Theme.Faint };
+        stack.Children.Add(sub);
+        return new Border
+        {
+            Margin = new Thickness(0, 0, 8, 0),
+            Padding = new Thickness(14, 11, 14, 11),
+            CornerRadius = new CornerRadius(11),
+            Background = Theme.Inset,
+            BorderBrush = Theme.Line,
+            BorderThickness = new Thickness(1),
+            Child = stack,
+        };
     }
 
     /// <summary>Compact name → rpm pill for the dashboard fan grid.</summary>
@@ -702,24 +763,38 @@ public sealed class MainWindow : Window
         return page;
     }
 
+    private const double LogoSize = 44;
+
     private UIElement BuildLogoGlyph()
+    {
+        if (LoadAppIcon((int)Math.Ceiling(LogoSize * 2)) is { } frame) // 2x so it stays sharp on high-DPI screens
+        {
+            var image = new Image { Source = frame, Width = LogoSize, Height = LogoSize, VerticalAlignment = VerticalAlignment.Center };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            return image;
+        }
+
+        return new TextBlock { Text = "✻", FontSize = 30, Foreground = Theme.AccentGrad(), VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    /// <summary>
+    /// The smallest frame of the embedded DeviceMaster.ico that is at least <paramref name="minPixels"/>
+    /// wide (else the largest). Read from the app's own resources, not the shell — Windows' icon
+    /// cache keeps showing an old icon after an in-place update.
+    /// </summary>
+    internal static BitmapFrame? LoadAppIcon(int minPixels)
     {
         try
         {
-            using var icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-            if (icon is not null)
-            {
-                var source = Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty,
-                    BitmapSizeOptions.FromWidthAndHeight(30, 30));
-                return new Image { Source = source, Width = 30, Height = 30, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            }
+            var decoder = new IconBitmapDecoder(new Uri("pack://application:,,,/DeviceMaster.ico"),
+                BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            var frames = decoder.Frames.OrderBy(f => f.PixelWidth).ToList();
+            return frames.FirstOrDefault(f => f.PixelWidth >= minPixels) ?? frames.LastOrDefault();
         }
         catch
         {
-            // fall through to the glyph
+            return null; // fall back to the glyph / shell icon
         }
-
-        return new TextBlock { Text = "✻", FontSize = 22, Foreground = Theme.AccentGrad(), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     }
 
     private Border BuildFanCard()
@@ -2257,8 +2332,9 @@ public sealed class MainWindow : Window
             _dashStatus.Foreground = Theme.Dim;
             foreach (var (tile, sub) in new[]
             {
-                (_tileCoolant, _tileCoolantSub), (_tileCpu, _tileCpuSub), (_tileGpu, _tileGpuSub),
-                (_tilePump, _tilePumpSub), (_tileFans, _tileFansSub), (_tileDuty, _tileDutySub),
+                (_tileCoolant, _tileCoolantSub), (_tilePump, _tilePumpSub), (_tileFans, _tileFansSub), (_tileDuty, _tileDutySub),
+                (_cpuTemp, _cpuTempSub), (_cpuLoad, _cpuLoadSub), (_cpuPower, _cpuPowerSub), (_cpuRam, _cpuRamSub),
+                (_gpuTemp, _gpuTempSub), (_gpuLoad, _gpuLoadSub), (_gpuPower, _gpuPowerSub), (_gpuVram, _gpuVramSub),
             })
             {
                 tile.Text = "—";
@@ -2279,10 +2355,7 @@ public sealed class MainWindow : Window
 
         _tileCoolant.Text = status.CoolantTemperatureC is { } cool ? $"{cool:F1}°" : "—";
         _tileCoolantSub.Text = "loop water";
-        _tileCpu.Text = status.CpuTemperatureC is { } cpu ? $"{cpu:F0}°" : "—";
-        _tileCpuSub.Text = "package";
-        _tileGpu.Text = status.GpuTemperatureC is { } gpu ? $"{gpu:F0}°" : "—";
-        _tileGpuSub.Text = "core";
+        UpdateProcessorSections(status);
 
         var pump = status.Devices.FirstOrDefault(d => d.IsPump);
         _tilePump.Text = pump?.Rpm is { } rpm ? rpm.ToString() : "—";
@@ -2311,6 +2384,35 @@ public sealed class MainWindow : Window
         {
             _dashWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) });
         }
+    }
+
+    /// <summary>CPU and GPU sections; the headless web dashboard renders the same figures the same way.</summary>
+    private void UpdateProcessorSections(ControlStatus status)
+    {
+        static string Deg(double? v) => v is { } t ? $"{t:F0}°" : "—";
+        static string Pct(double? v) => v is { } p ? $"{p:F0}%" : "—";
+        static string Watts(double? v) => v is { } w ? $"{w:F0} W" : "—";
+        static string Gb(double? v) => v is { } g ? $"{g:F1} GB" : "—";
+
+        _cpuName.Text = status.CpuName ?? "processor";
+        _cpuTemp.Text = Deg(status.CpuTemperatureC);
+        _cpuTempSub.Text = "package";
+        _cpuLoad.Text = Pct(status.CpuLoadPercent);
+        _cpuLoadSub.Text = "all cores";
+        _cpuPower.Text = Watts(status.CpuPowerW);
+        _cpuPowerSub.Text = "package";
+        _cpuRam.Text = Gb(status.RamUsedGb);
+        _cpuRamSub.Text = status.RamTotalGb is { } ram ? $"of {ram:F0} GB" : "in use";
+
+        _gpuName.Text = status.GpuName ?? "graphics card";
+        _gpuTemp.Text = Deg(status.GpuTemperatureC);
+        _gpuTempSub.Text = "core";
+        _gpuLoad.Text = Pct(status.GpuLoadPercent);
+        _gpuLoadSub.Text = "utilization";
+        _gpuPower.Text = Watts(status.GpuPowerW);
+        _gpuPowerSub.Text = "board";
+        _gpuVram.Text = Gb(status.VramUsedGb);
+        _gpuVramSub.Text = status.VramTotalGb is { } vram ? $"of {vram:F0} GB" : "in use";
     }
 
     // ---------- updates ----------

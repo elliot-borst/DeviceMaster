@@ -406,6 +406,7 @@ public sealed class HeadlessLoop : IDisposable
         int? pumpDuty, bool failsafe, List<DeviceReading> readings, List<string> warnings)
     {
         var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
+        var cpuStats = _cpuStats.Sample();
         GpuReading? gpu;
         try
         {
@@ -429,6 +430,12 @@ public sealed class HeadlessLoop : IDisposable
             GpuPowerW = gpu?.PowerW,
             VramUsedGb = MbToGb(gpu?.MemoryUsedMb),
             VramTotalGb = MbToGb(gpu?.MemoryTotalMb),
+            CpuName = cpuStats.Name,
+            CpuLoadPercent = cpuStats.LoadPercent,
+            CpuPowerW = cpuStats.PowerW,
+            RamUsedGb = cpuStats.RamUsedGb,
+            RamTotalGb = cpuStats.RamTotalGb,
+            GpuName = gpu?.Name,
             TargetDutyPercent = duty,
             PumpDutyPercent = pumpDuty,
             FailsafeActive = failsafe,
@@ -586,6 +593,8 @@ public sealed class HeadlessLoop : IDisposable
             _ => null,
         };
     }
+
+    private readonly CpuStats _cpuStats = new(); // load/power are rates: keeps the previous tick's counters
 
     private static double? MbToGb(double? mb) => mb is null ? null : mb.Value / 1024.0;
 
