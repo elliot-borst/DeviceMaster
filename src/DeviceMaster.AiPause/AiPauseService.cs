@@ -116,8 +116,24 @@ public sealed class AiPauseService : IDisposable
             _journal = RecoveryJournal.Load(_journalPath);
             if (_journal is not null)
             {
-                _coordinator.Holding = true;
-                AddActivity($"Found saved AI from {_journal.PausedAt.LocalDateTime:g} — it will be restored once no game is running.");
+                // providers that must stay off at launch (NInfer) are dropped, not restored
+                foreach (var provider in _providers.Where(p => !p.RestoreOnLaunch && _journal.Providers.ContainsKey(p.Id)))
+                {
+                    _journal.Providers.Remove(provider.Id);
+                    AddActivity($"{provider.DisplayName} was paused when DeviceMaster last closed — it stays off. Start it from Local LLM.");
+                }
+
+                if (_journal.Providers.Count == 0)
+                {
+                    RecoveryJournal.Delete(_journalPath);
+                    _journal = null;
+                }
+                else
+                {
+                    _journal.Save(_journalPath);
+                    _coordinator.Holding = true;
+                    AddActivity($"Found saved AI from {_journal.PausedAt.LocalDateTime:g} — it will be restored once no game is running.");
+                }
             }
         }
         catch (Exception ex)

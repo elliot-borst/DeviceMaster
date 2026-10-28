@@ -19,6 +19,11 @@ internal sealed class NInferAiProvider(NInferService service) : IAiProvider
 
     public bool IsPresent => true;
 
+    /// <summary>NInfer is off by default: DeviceMaster never starts it on launch, even if a game
+    /// had paused it when the app last closed. Only the Start button (or a restore after a game
+    /// in the same session) starts it.</summary>
+    public bool RestoreOnLaunch => false;
+
     public string Describe() => service.Snapshot.State switch
     {
         NInferState.Running => "Ready",

@@ -54,7 +54,7 @@ public sealed record NInferSnapshot
 ///    start/restart respawn the keep-alive that stops WSL idle-killing the distro).
 ///
 /// NInfer is only ever started by the explicit UI buttons, or by AI Pause bringing back a server
-/// that was running when a game paused it (<see cref="NInferAiProvider"/>).
+/// that a game paused earlier in the same session (<see cref="NInferAiProvider"/>) — never on launch.
 /// </summary>
 public sealed class NInferService : IDisposable
 {

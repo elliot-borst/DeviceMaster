@@ -19,6 +19,13 @@ public interface IAiProvider
     /// <summary>Show a status line for this provider (installed / running / configured).</summary>
     bool IsPresent { get; }
 
+    /// <summary>
+    /// False = a pause still recorded when DeviceMaster starts is dropped rather than restored,
+    /// so the app never brings this provider up on launch (it stays off until started by hand).
+    /// Restoring after a game in the same session is unaffected.
+    /// </summary>
+    bool RestoreOnLaunch => true;
+
     /// <summary>One line for the status card. Must be side-effect-free and cheap.</summary>
     string Describe();
 
