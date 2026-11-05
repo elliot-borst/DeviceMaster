@@ -17,6 +17,9 @@ public static class AuraUsbProtocol
     public const byte ReportId = 0xEC;
 
     public const byte ModeStatic = 0x01;
+
+    /// <summary>Built-in rainbow (OpenRGB AURA_MODE_RAINBOW); the USB effect command carries no speed.</summary>
+    public const byte ModeRainbow = 0x05;
     public const byte ModeDirect = 0xFF;
 
     /// <summary>Direct (0x40) packets carry at most 20 LEDs (60 color bytes).</summary>

@@ -105,6 +105,18 @@ public sealed class AuraController : IDisposable
         }
     }
 
+    /// <summary>Every zone on the controller's own rainbow effect (it animates by itself).</summary>
+    public void ApplyRainbow()
+    {
+        lock (_ioLock)
+        {
+            foreach (var zone in Zones)
+            {
+                Write(AuraUsbProtocol.BuildEffect(zone.EffectChannel, AuraUsbProtocol.ModeRainbow));
+            }
+        }
+    }
+
     /// <summary>Persists the currently applied configuration across reboots (0x3F 0x55).</summary>
     public void Commit()
     {

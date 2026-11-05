@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeviceMaster.Core.Curves;
+using DeviceMaster.Core.Lighting;
 
 namespace DeviceMaster.Control;
 
@@ -150,6 +151,16 @@ public sealed class ControlSettings
 
     /// <summary>Static-color brightness 0–100; scales the RGB value sent to every LED (100 = the chosen color as-is).</summary>
     public int RgbBrightness { get; set; } = 100;
+
+    /// <summary>Static colour or a rainbow cycling along every LED chain (Blackout/Off still paints black).</summary>
+    public RgbEffect RgbEffect { get; set; } = RgbEffect.Static;
+
+    /// <summary>Rainbow speed 1 (slow) … 5 (fast); see <see cref="RainbowEffect.CycleSeconds"/>.</summary>
+    public int RgbSpeed { get; set; } = RainbowEffect.DefaultSpeed;
+
+    /// <summary>True when the LEDs should show the rainbow right now (enabled, not blacked out).</summary>
+    [JsonIgnore]
+    public bool RainbowActive => RgbEnabled && !RgbOff && RgbEffect == RgbEffect.Rainbow;
 
     /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, a solid background, or metrics.</summary>
     public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;

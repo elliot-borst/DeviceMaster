@@ -422,6 +422,29 @@ public sealed class Slv3Controller : IDisposable
     /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
     /// and loops the effect, so this is sent once per color change, not per frame.
     /// </summary>
+    /// <summary>Frames in an uploaded rainbow loop: smooth enough at every speed, at most ~35 KB per group.</summary>
+    public const int RainbowFrames = 60;
+
+    /// <summary>
+    /// Uploads a whole rainbow cycle that the fans' firmware stores and loops by itself (the same
+    /// effect upload as a static colour, just with many frames) — no per-frame radio traffic.
+    /// </summary>
+    public void ApplyRainbow(Slv3Device device, int speed, int brightness, ReadOnlySpan<byte> effectIndex)
+    {
+        var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
+        var raw = DeviceMaster.Core.Lighting.RainbowEffect.Cycle(ledCount, RainbowFrames, brightness);
+        var compressed = TinyUz.Compress(raw);
+        var intervalMs = (ushort)Math.Clamp(DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(speed) * 1000 / RainbowFrames, 10, 60_000);
+        foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
+            device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: RainbowFrames, intervalMs: intervalMs))
+        {
+            SendRfChunks(payload, device.Channel, device.RxType);
+            Thread.Sleep(2);
+        }
+
+        _trace?.Invoke($"RGB rainbow -> {device.MacText} ({ledCount} LEDs × {RainbowFrames} frames @ {intervalMs} ms, {compressed.Length}B compressed)");
+    }
+
     public void ApplyStaticColor(Slv3Device device, byte r, byte g, byte b, ReadOnlySpan<byte> effectIndex)
     {
         var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);

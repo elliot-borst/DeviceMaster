@@ -11,6 +11,7 @@ using DeviceMaster.AiPause;
 using DeviceMaster.AiPause.Providers;
 using DeviceMaster.Control;
 using DeviceMaster.Core.Curves;
+using DeviceMaster.Core.Lighting;
 using DeviceMaster.Core.Conflicts;
 using DeviceMaster.Core.Devices;
 using DeviceMaster.Core.Discovery;
@@ -26,7 +27,7 @@ public sealed class MainWindow : Window
     public static string AppVersion { get; } =
         (Assembly.GetExecutingAssembly().GetName().Version?.Major ?? 0).ToString();
 
-    public const string VersionDate = "2026-10-28";
+    public const string VersionDate = "2026-11-05";
 
     private readonly ControlSettings _controlSettings = ControlSettings.Load();
     private ControlLoop? _loop;
@@ -1051,7 +1052,7 @@ public sealed class MainWindow : Window
 
     private Border BuildRgbCard()
     {
-        var card = Theme.CardShell("◈", "Lighting Control", "static color · every LED in the system", out var body, out var head);
+        var card = Theme.CardShell("◈", "Lighting Control", "static color or rainbow · every LED in the system", out var body, out var head);
 
         var toggle = Theme.Toggle(_controlSettings.RgbEnabled, on =>
         {
@@ -1062,8 +1063,34 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(toggle, Dock.Right);
         head.Children.Add(toggle);
 
+        var effectRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+        effectRow.Children.Add(Theme.SmallLabel("Effect"));
+        effectRow.Children.Add(_effectChips);
+        body.Children.Add(effectRow);
+
         RebuildSwatches();
         body.Children.Add(_swatchPanel);
+
+        // rainbow speed 1–5, shown only while Rainbow is picked
+        _rgbSpeedSlider = new DmSlider(RainbowEffect.MinSpeed, RainbowEffect.MaxSpeed, _controlSettings.RgbSpeed, 300, step: 1);
+        var speedLabel = new TextBlock { FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 60 };
+        void ShowSpeed() => speedLabel.Text = SpeedName(_controlSettings.RgbSpeed);
+        ShowSpeed();
+        _rgbSpeedSlider.ValueChanged += _ =>
+        {
+            _controlSettings.RgbSpeed = (int)Math.Round(_rgbSpeedSlider.Value);
+            ShowSpeed();
+            OnControlSettingChanged();
+        };
+        var speedPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        speedPanel.Children.Add(Theme.SmallLabel("Speed"));
+        speedPanel.Children.Add(_rgbSpeedSlider);
+        speedPanel.Children.Add(speedLabel);
+        _rgbSpeedRow = Theme.InsetRow(speedPanel);
+        _rgbSpeedRow.Margin = new Thickness(0, 0, 0, 4);
+        body.Children.Add(_rgbSpeedRow);
+        RefreshRgbEffectUi();
+
         var rgbBrightness = BrightnessRow(_controlSettings.RgbBrightness, v =>
         {
             _controlSettings.RgbBrightness = v;
@@ -1074,6 +1101,39 @@ public sealed class MainWindow : Window
         body.Children.Add(_rgbStatus);
         UpdateRgbStatusText();
         return card;
+    }
+
+    private readonly StackPanel _effectChips = new() { Orientation = Orientation.Horizontal };
+    private DmSlider _rgbSpeedSlider = null!;
+    private Border _rgbSpeedRow = null!;
+
+    private static string SpeedName(int speed) => Math.Clamp(speed, 1, 5) switch
+    {
+        1 => "Slowest",
+        2 => "Slow",
+        3 => "Medium",
+        4 => "Fast",
+        _ => "Fastest",
+    };
+
+    /// <summary>Static shows the colour swatches; Rainbow hides them and shows the speed (the web page does the same).</summary>
+    private void RefreshRgbEffectUi()
+    {
+        var rainbow = _controlSettings.RgbEffect == RgbEffect.Rainbow;
+        FillChips(_effectChips, ["Static", "Rainbow"], rainbow ? 1 : 0, i =>
+        {
+            _controlSettings.RgbEffect = i == 1 ? RgbEffect.Rainbow : RgbEffect.Static;
+            if (i == 1)
+            {
+                _controlSettings.RgbOff = false; // "lights out" and rainbow are opposites
+            }
+
+            RefreshRgbEffectUi();
+            RebuildSwatches();
+            OnControlSettingChanged();
+        });
+        _rgbSpeedRow.Visibility = rainbow ? Visibility.Visible : Visibility.Collapsed;
+        _swatchPanel.Opacity = rainbow ? 0.45 : 1.0;
     }
 
     private void RebuildSwatches()
@@ -1105,6 +1165,8 @@ public sealed class MainWindow : Window
         offSwatch.MouseLeftButtonUp += (_, _) =>
         {
             _controlSettings.RgbOff = true;
+            _controlSettings.RgbEffect = RgbEffect.Static;
+            RefreshRgbEffectUi();
             RebuildSwatches();
             OnControlSettingChanged();
         };
@@ -1112,7 +1174,7 @@ public sealed class MainWindow : Window
 
         foreach (var (r, g, b) in SwatchColors)
         {
-            var selected = !_controlSettings.RgbOff
+            var selected = !_controlSettings.RgbOff && _controlSettings.RgbEffect == RgbEffect.Static
                 && _controlSettings.RgbR == r && _controlSettings.RgbG == g && _controlSettings.RgbB == b;
             var swatch = new Border
             {
@@ -1129,6 +1191,8 @@ public sealed class MainWindow : Window
             swatch.MouseLeftButtonUp += (_, _) =>
             {
                 _controlSettings.RgbOff = false;
+                _controlSettings.RgbEffect = RgbEffect.Static; // picking a colour means a static colour
+                RefreshRgbEffectUi();
                 _controlSettings.RgbR = cr;
                 _controlSettings.RgbG = cg;
                 _controlSettings.RgbB = cb;
@@ -1152,6 +1216,10 @@ public sealed class MainWindow : Window
         else if (_controlSettings.RgbOff)
         {
             _rgbStatus.Text = "Lights out — every LED on Corsair, Lian Li, motherboard ARGB, RAM and GPU is dark.";
+        }
+        else if (_controlSettings.RgbEffect == RgbEffect.Rainbow)
+        {
+            _rgbStatus.Text = $"Rainbow ({SpeedName(_controlSettings.RgbSpeed).ToLowerInvariant()}) on Corsair, Lian Li, motherboard ARGB, RAM and GPU LEDs.";
         }
         else
         {

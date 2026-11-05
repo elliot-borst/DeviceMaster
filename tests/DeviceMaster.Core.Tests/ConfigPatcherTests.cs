@@ -118,4 +118,15 @@ public class ConfigPatcherTests
         Assert.False(cfg.Control.RgbOff);
         Assert.Equal(LcdMode.Metrics, cfg.Control.LcdScreens);
     }
+
+    [Fact]
+    public void RainbowEffectAndSpeed()
+    {
+        var cfg = NewConfig();
+        cfg.Control.RgbOff = true;
+        var applied = ConfigPatcher.ApplyPatch(cfg, """{"rgbEffect":1,"rgbSpeed":9}""", out _);
+        Assert.Equal(["rgbEffect=1", "rgbSpeed=5"], applied); // speed clamped to 1–5
+        Assert.True(cfg.Control.RainbowActive);                // picking rainbow clears lights-out
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg, """{"rgbEffect":7}""", out _)); // unknown effect ignored
+    }
 }

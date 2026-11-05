@@ -54,6 +54,10 @@ public sealed class HeadlessLoop : IDisposable
     private readonly AutoResetEvent _wake = new(false);
 
     private readonly List<LinkHub> _hubs = [];
+
+    // rainbow frames stream from a background animator (shared with the desktop ControlLoop)
+    private HubRainbowAnimator? _rainbow;
+    private volatile LinkHub[] _hubSnapshot = [];
     private readonly Dictionary<string, long> _hubOpenNotBefore = []; // serial -> cooldown (failed opens)
     private readonly HashSet<string> _hubOpenWarned = [];             // warned about this serial's failures
     private readonly Dictionary<string, int> _hubReceivedDuty = [];   // serial -> last duty that reached it
@@ -136,6 +140,8 @@ public sealed class HeadlessLoop : IDisposable
         }
 
         thread?.Join(TimeSpan.FromSeconds(10));
+        _rainbow?.Dispose(); // no more frames before the hubs go back to hardware mode
+        _rainbow = null;
         ReleaseHardware();
         _status = new ControlStatus();
         _log("headless: control loop stopped, hubs restored to hardware mode");
@@ -381,6 +387,9 @@ public sealed class HeadlessLoop : IDisposable
         }
 
         // ---- RGB (hubs + GPU ENE) ----
+        _hubSnapshot = _hubs.ToArray();
+        _rainbow ??= new HubRainbowAnimator(() => _hubSnapshot, _log);
+        _rainbow.Update(cfg.Control);
         if (cfg.Control.RgbEnabled)
         {
             ApplyHubRgb(cfg, warnings);
@@ -685,10 +694,23 @@ public sealed class HeadlessLoop : IDisposable
     private void ApplyHubRgb(HeadlessConfig cfg, List<string> warnings)
     {
         var (r, g, b) = RgbTarget(cfg);
-        var key = $"{r},{g},{b}";
+        var rainbow = cfg.Control.RainbowActive;
+        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
         {
+            if (rainbow)
+            {
+                // the animator streams this hub's frames; switching back to Static changes the key
+                if (_appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key)
+                {
+                    _log($"RGB rainbow on hub {hub.SerialNumber[..8]}… ({hub.TotalLeds} LEDs, speed {cfg.Control.RgbSpeed})");
+                }
+
+                _appliedHubRgb[hub.SerialNumber] = key;
+                continue;
+            }
+
             // steady re-stream (every HubRgbRefreshMs): color writes are ACKed with no readback
             var isNewColor = _appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key;
             if (!isNewColor && Environment.TickCount64 < _hubRgbRefreshDue.GetValueOrDefault(hub.SerialNumber))

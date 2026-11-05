@@ -30,6 +30,7 @@ public sealed class EneRgbDevice
     private const byte ApplyValue = 0x01;
     private const byte SaveValue = 0xAA;
     private const byte ModeStatic = 0x01;
+    private const byte ModeRainbow = 0x05; // OpenRGB ENE_MODE_RAINBOW
 
     private readonly ISmBus _bus;
     private readonly byte _address;
@@ -124,6 +125,23 @@ public sealed class EneRgbDevice
             WriteRegisterBlock((ushort)(_effectBase + 3 * led), [r, b, g]);
         }
 
+        WriteRegister(RegApply, ApplyValue);
+        if (persist)
+        {
+            WriteRegister(RegApply, SaveValue);
+        }
+    }
+
+    /// <summary>
+    /// The controller's own rainbow effect (it animates by itself). <paramref name="speed"/> is
+    /// DeviceMaster's 1 (slow) … 5 (fast), mapped onto the chip's 4 (slowest) … 0 (fastest).
+    /// </summary>
+    public void ApplyRainbow(int speed, bool persist)
+    {
+        WriteRegister(RegDirectSelect, 0x00);
+        WriteRegister(RegMode, ModeRainbow);
+        WriteRegister(RegSpeed, (byte)(5 - Math.Clamp(speed, 1, 5)));
+        WriteRegister(RegDirection, 0x00);
         WriteRegister(RegApply, ApplyValue);
         if (persist)
         {

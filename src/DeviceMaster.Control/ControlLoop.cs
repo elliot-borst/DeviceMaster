@@ -238,6 +238,8 @@ public sealed class ControlLoop : IDisposable
 
         _turzxWake.Set(); // wake the Turzx worker so it sees the cancel promptly
         thread.Join(TimeSpan.FromSeconds(10));
+        _rainbow?.Dispose(); // no more frames before the hubs go back to hardware mode
+        _rainbow = null;
         keepalive?.Join(TimeSpan.FromSeconds(5));
         turzx?.Join(TimeSpan.FromSeconds(25)); // may be mid-frame (a full serial push is seconds)
         ReleaseHardware();
@@ -366,6 +368,9 @@ public sealed class ControlLoop : IDisposable
         ApplyHeaders(duty, readings, warnings);
         Lap("headers");
 
+        _hubSnapshot = _hubs.ToArray();
+        _rainbow ??= new HubRainbowAnimator(() => _hubSnapshot, _log);
+        _rainbow.Update(settings);
         if (settings.RgbEnabled)
         {
             ApplyRgb(settings, warnings);
@@ -740,6 +745,11 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, long> _hubDeepRepaintDue = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
+
+    // rainbow: Corsair hubs are streamed from a background animator; the other families play
+    // the effect themselves once told to (Aura/ENE built-in rainbow, SL V3 stored loop)
+    private HubRainbowAnimator? _rainbow;
+    private volatile LinkHub[] _hubSnapshot = [];
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
     private long _slv3RgbRefreshDue;
@@ -769,10 +779,18 @@ public sealed class ControlLoop : IDisposable
         var (r, g, b) = settings.RgbOff
             ? ((byte)0, (byte)0, (byte)0)
             : (Scale(settings.RgbR), Scale(settings.RgbG), Scale(settings.RgbB));
-        var key = $"{r},{g},{b}";
+        var rainbow = settings.RainbowActive;
+        var key = rainbow ? $"rainbow:{settings.RgbSpeed}:{bright}" : $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
         {
+            if (rainbow)
+            {
+                // the animator streams this hub's frames; switching back to Static changes the key
+                _appliedHubRgb[hub.SerialNumber] = key;
+                continue;
+            }
+
             var isNewColor = _appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key;
             if (!isNewColor && Environment.TickCount64 < _hubRgbRefreshDue.GetValueOrDefault(hub.SerialNumber))
             {
@@ -814,7 +832,15 @@ public sealed class ControlLoop : IDisposable
         {
             try
             {
-                _aura.ApplyStaticColor(r, g, b);
+                if (rainbow)
+                {
+                    _aura.ApplyRainbow();
+                }
+                else
+                {
+                    _aura.ApplyStaticColor(r, g, b);
+                }
+
                 _appliedAuraRgb = key;
                 _log?.Invoke($"RGB applied on Aura ({_aura.Zones.Count} zones)");
             }
@@ -834,12 +860,26 @@ public sealed class ControlLoop : IDisposable
             {
                 foreach (var ram in _ramRgb)
                 {
-                    ram.ApplyStaticColor(r, g, b, persist: false);
+                    if (rainbow)
+                    {
+                        ram.ApplyRainbow(settings.RgbSpeed, persist: false);
+                    }
+                    else
+                    {
+                        ram.ApplyStaticColor(r, g, b, persist: false);
+                    }
                 }
 
                 foreach (var gpu in _gpuRgb)
                 {
-                    gpu.Ene?.ApplyStaticColor(r, g, b, persist: false);
+                    if (rainbow)
+                    {
+                        gpu.Ene?.ApplyRainbow(settings.RgbSpeed, persist: false);
+                    }
+                    else
+                    {
+                        gpu.Ene?.ApplyStaticColor(r, g, b, persist: false);
+                    }
                 }
 
                 _appliedChipRgb = key;
@@ -917,7 +957,15 @@ public sealed class ControlLoop : IDisposable
                 {
                     var ticks = Environment.TickCount64;
                     var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
-                    _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
+                    if (rainbow)
+                    {
+                        _slv3.ApplyRainbow(device, settings.RgbSpeed, bright, effectIndex);
+                    }
+                    else
+                    {
+                        _slv3.ApplyStaticColor(device, r, g, b, effectIndex);
+                    }
+
                     _appliedSlv3Rgb[device.MacText] = key;
                     sentAny = true;
                 }
@@ -949,8 +997,9 @@ public sealed class ControlLoop : IDisposable
                 {
                     // 20 s steady-state refresh: one group has demonstrably weak RF reception
                     // and drops its stored effect — bound-time-to-heal beats airtime here
-                    // (still nowhere near the v17 continuous-resend flood)
-                    _slv3RgbRefreshDue = Environment.TickCount64 + 20_000;
+                    // (still nowhere near the v17 continuous-resend flood). A rainbow loop is a
+                    // ~60-frame upload, so it re-sends every 2 minutes instead.
+                    _slv3RgbRefreshDue = Environment.TickCount64 + (rainbow ? 120_000 : 20_000);
                 }
             }
         }

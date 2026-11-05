@@ -118,19 +118,24 @@ public sealed class LinkHub : IDisposable
     /// </summary>
     public bool EnumerateChannels(bool allowEnterSoftwareMode)
     {
-        try
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
         {
-            LoadSubDevices();
-            return false;
-        }
-        catch (LinkHubException ex) when (ex.IsIncorrectMode && (allowEnterSoftwareMode || _inSoftwareMode))
-        {
-            // either the hub is in hardware mode and we're allowed to switch, or it dropped
-            // out of software mode behind our back — (re-)enter and retry once
-            var wasInSoftwareMode = _inSoftwareMode;
-            EnterSoftwareMode();
-            LoadSubDevices();
-            return !wasInSoftwareMode;
+            try
+            {
+                LoadSubDevices();
+                return false;
+            }
+            catch (LinkHubException ex) when (ex.IsIncorrectMode && (allowEnterSoftwareMode || _inSoftwareMode))
+            {
+                // either the hub is in hardware mode and we're allowed to switch, or it dropped
+                // out of software mode behind our back — (re-)enter and retry once
+                var wasInSoftwareMode = _inSoftwareMode;
+                EnterSoftwareMode();
+                LoadSubDevices();
+                return !wasInSoftwareMode;
+            }
         }
     }
 
@@ -198,20 +203,38 @@ public sealed class LinkHub : IDisposable
     /// The color buffer is interleaved R,G,B per LED in ascending channel order, wrapped in
     /// the write envelope and chunked at 508 bytes (first chunk 0x06 0x00, rest 0x07 0x00).
     /// </summary>
-    public void ApplyStaticColor(byte r, byte g, byte b)
+    /// <summary>
+    /// Sets every LED individually: <paramref name="rgb"/> is interleaved R,G,B per LED in the
+    /// same ascending-channel order as the static colour (shorter buffers leave the rest black).
+    /// Used for animated effects, so a failure throws straight away rather than retrying in place.
+    /// </summary>
+    public void ApplyLedColors(ReadOnlySpan<byte> rgb)
     {
-        try
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
         {
             EnsureColorReady();
-            WriteColorBuffer(r, g, b);
+            var data = new byte[TotalLeds * 3];
+            rgb[..Math.Min(rgb.Length, data.Length)].CopyTo(data);
+            try
+            {
+                WriteColorData(data);
+            }
+            catch (LinkHubException)
+            {
+                _colorReady = false; // rebuilt on the next frame
+                throw;
+            }
         }
-        catch (LinkHubException)
+    }
+
+    public void ApplyStaticColor(byte r, byte g, byte b)
+    {
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
         {
-            // the color handle/endpoint state on the hub is not durable — registry reads
-            // share the handle and mode blips invalidate it. Rebuild the whole color path
-            // (endpoint open + reset frame) and retry once, in place: waiting for the
-            // caller's backoff turns every color change into a 10+ second affair.
-            _colorReady = false;
             try
             {
                 EnsureColorReady();
@@ -219,8 +242,21 @@ public sealed class LinkHub : IDisposable
             }
             catch (LinkHubException)
             {
+                // the color handle/endpoint state on the hub is not durable — registry reads
+                // share the handle and mode blips invalidate it. Rebuild the whole color path
+                // (endpoint open + reset frame) and retry once, in place: waiting for the
+                // caller's backoff turns every color change into a 10+ second affair.
                 _colorReady = false;
-                throw;
+                try
+                {
+                    EnsureColorReady();
+                    WriteColorBuffer(r, g, b);
+                }
+                catch (LinkHubException)
+                {
+                    _colorReady = false;
+                    throw;
+                }
             }
         }
     }
@@ -232,21 +268,26 @@ public sealed class LinkHub : IDisposable
     /// </summary>
     public void ApplyPerChannelColors(IReadOnlyDictionary<int, (byte R, byte G, byte B)> colors, int? ledsPerDeviceOverride = null)
     {
-        try
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
         {
-            ApplyPerChannelColorsCore(colors, ledsPerDeviceOverride);
-        }
-        catch (LinkHubException)
-        {
-            _colorReady = false; // rebuild the color path and retry once, in place
             try
             {
                 ApplyPerChannelColorsCore(colors, ledsPerDeviceOverride);
             }
             catch (LinkHubException)
             {
-                _colorReady = false;
-                throw;
+                _colorReady = false; // rebuild the color path and retry once, in place
+                try
+                {
+                    ApplyPerChannelColorsCore(colors, ledsPerDeviceOverride);
+                }
+                catch (LinkHubException)
+                {
+                    _colorReady = false;
+                    throw;
+                }
             }
         }
     }
@@ -302,6 +343,11 @@ public sealed class LinkHub : IDisposable
             data[i * 3 + 2] = b;
         }
 
+        WriteColorData(data);
+    }
+
+    private void WriteColorData(byte[] data)
+    {
         var envelope = LinkHubPackets.CreateWriteData(LinkHubProtocol.DataTypes.SetColor, data);
 
         lock (_ioLock)
@@ -562,104 +608,109 @@ public sealed class LinkHub : IDisposable
     /// </summary>
     public bool SyncLedRegistry(Action<string>? log = null)
     {
-        if (_channels.Count == 0)
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
         {
-            return false;
-        }
-
-        var current = ReadLedRegistry();
-        var ledCodes = _channels
-            .Where(c => c.Info is { LedCount: > 0 })
-            .ToDictionary(c => c.Channel, c => c.Info!.LedCommandCode);
-
-        var mustReapply = false;
-        var pulsed = false;
-
-        var plan = LedRegistryPlanner.Compute(current, ledCodes);
-        if (plan is null)
-        {
-            _pendingRegistryPlan = null;
-        }
-        else if (plan.Signature != _pendingRegistryPlan)
-        {
-            _pendingRegistryPlan = plan.Signature;
-            log?.Invoke($"hub {SerialNumber[..8]}… LED registry looks stale (phantom ch[{string.Join(",", plan.Phantoms)}], "
-                + $"code repairs ch[{string.Join(",", plan.CodeRepairs)}]) — rewriting if the next check agrees");
-        }
-        else if (Environment.TickCount64 < _registryWriteNotBeforeTicks)
-        {
-            log?.Invoke($"hub {SerialNumber[..8]}… LED registry rewrite confirmed but inside the write cooldown — skipped");
-        }
-        else
-        {
-            log?.Invoke($"hub {SerialNumber[..8]}… rewriting LED registry to [{Describe(plan.Target)}] "
-                + $"(dropping phantom ch[{string.Join(",", plan.Phantoms)}], repairing codes on ch[{string.Join(",", plan.CodeRepairs)}])");
-            _registryWriteNotBeforeTicks = Environment.TickCount64 + RegistryWriteCooldownMs;
-            _pendingRegistryPlan = null;
-            WriteLedRegistryEntries(plan.Target); // throws on failure → flash untouched, sync aborts
-            current = plan.Target;
-            mustReapply = true;
-
-            try
+            if (_channels.Count == 0)
             {
-                PulseLedPower();
-                pulsed = true;
+                return false;
             }
-            catch (LinkHubException ex)
-            {
-                _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
-                log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse after the registry write failed: {ex.Message} "
-                    + $"— colors still re-apply; pulse retries in ~{PulseRetryCooldownMs / 60_000} min");
-            }
-        }
 
-        var unenrolled = ledCodes.Keys.Where(ch => !current.ContainsKey(ch)).OrderBy(ch => ch).ToList();
-        if (unenrolled.Count == 0)
-        {
-            _lastUnenrolled = [];
-            _pulseRetryAtTicks = null;
-        }
-        else if (pulsed)
-        {
-            _lastUnenrolled = unenrolled; // the write's pulse already nudged enrollment this pass
-        }
-        else if (!unenrolled.SequenceEqual(_lastUnenrolled)
-            || (_pulseRetryAtTicks is { } retryAt && Environment.TickCount64 >= retryAt))
-        {
-            // pulse once per change of the unenrolled set — not every rescan, a pulse visibly
-            // blinks the chain. But a FAILED pulse must retry on the cooldown: latching the
-            // set on failure left unenrolled fans without their nudge for weeks (2026-08)
-            log?.Invoke($"hub {SerialNumber[..8]}… has not LED-enrolled ch{string.Join(", ch", unenrolled)} "
-                + "— pulsing LED power so it retries");
-            try
+            var current = ReadLedRegistry();
+            var ledCodes = _channels
+                .Where(c => c.Info is { LedCount: > 0 })
+                .ToDictionary(c => c.Channel, c => c.Info!.LedCommandCode);
+
+            var mustReapply = false;
+            var pulsed = false;
+
+            var plan = LedRegistryPlanner.Compute(current, ledCodes);
+            if (plan is null)
             {
-                PulseLedPower();
-                _lastUnenrolled = unenrolled;
+                _pendingRegistryPlan = null;
+            }
+            else if (plan.Signature != _pendingRegistryPlan)
+            {
+                _pendingRegistryPlan = plan.Signature;
+                log?.Invoke($"hub {SerialNumber[..8]}… LED registry looks stale (phantom ch[{string.Join(",", plan.Phantoms)}], "
+                    + $"code repairs ch[{string.Join(",", plan.CodeRepairs)}]) — rewriting if the next check agrees");
+            }
+            else if (Environment.TickCount64 < _registryWriteNotBeforeTicks)
+            {
+                log?.Invoke($"hub {SerialNumber[..8]}… LED registry rewrite confirmed but inside the write cooldown — skipped");
+            }
+            else
+            {
+                log?.Invoke($"hub {SerialNumber[..8]}… rewriting LED registry to [{Describe(plan.Target)}] "
+                    + $"(dropping phantom ch[{string.Join(",", plan.Phantoms)}], repairing codes on ch[{string.Join(",", plan.CodeRepairs)}])");
+                _registryWriteNotBeforeTicks = Environment.TickCount64 + RegistryWriteCooldownMs;
+                _pendingRegistryPlan = null;
+                WriteLedRegistryEntries(plan.Target); // throws on failure → flash untouched, sync aborts
+                current = plan.Target;
+                mustReapply = true;
+
+                try
+                {
+                    PulseLedPower();
+                    pulsed = true;
+                }
+                catch (LinkHubException ex)
+                {
+                    _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
+                    log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse after the registry write failed: {ex.Message} "
+                        + $"— colors still re-apply; pulse retries in ~{PulseRetryCooldownMs / 60_000} min");
+                }
+            }
+
+            var unenrolled = ledCodes.Keys.Where(ch => !current.ContainsKey(ch)).OrderBy(ch => ch).ToList();
+            if (unenrolled.Count == 0)
+            {
+                _lastUnenrolled = [];
                 _pulseRetryAtTicks = null;
+            }
+            else if (pulsed)
+            {
+                _lastUnenrolled = unenrolled; // the write's pulse already nudged enrollment this pass
+            }
+            else if (!unenrolled.SequenceEqual(_lastUnenrolled)
+                || (_pulseRetryAtTicks is { } retryAt && Environment.TickCount64 >= retryAt))
+            {
+                // pulse once per change of the unenrolled set — not every rescan, a pulse visibly
+                // blinks the chain. But a FAILED pulse must retry on the cooldown: latching the
+                // set on failure left unenrolled fans without their nudge for weeks (2026-08)
+                log?.Invoke($"hub {SerialNumber[..8]}… has not LED-enrolled ch{string.Join(", ch", unenrolled)} "
+                    + "— pulsing LED power so it retries");
+                try
+                {
+                    PulseLedPower();
+                    _lastUnenrolled = unenrolled;
+                    _pulseRetryAtTicks = null;
+                    mustReapply = true;
+                }
+                catch (LinkHubException ex)
+                {
+                    _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
+                    log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse failed: {ex.Message} "
+                        + $"— retrying in ~{PulseRetryCooldownMs / 60_000} min");
+                }
+            }
+
+            // the hub enrolled or dropped fans on its own — the color slots no longer match
+            if (!mustReapply && _colorReady
+                && !_ledCounts.Keys.OrderBy(k => k).SequenceEqual(current.Keys.OrderBy(k => k)))
+            {
+                log?.Invoke($"hub {SerialNumber[..8]}… LED registry changed on its own: now [{Describe(current)}] "
+                    + "— rebuilding color slots");
+                _colorReady = false;
                 mustReapply = true;
             }
-            catch (LinkHubException ex)
-            {
-                _pulseRetryAtTicks = Environment.TickCount64 + PulseRetryCooldownMs;
-                log?.Invoke($"hub {SerialNumber[..8]}… LED power pulse failed: {ex.Message} "
-                    + $"— retrying in ~{PulseRetryCooldownMs / 60_000} min");
-            }
+
+            return mustReapply;
+
+            static string Describe(IReadOnlyDictionary<int, byte> registry) =>
+                string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
         }
-
-        // the hub enrolled or dropped fans on its own — the color slots no longer match
-        if (!mustReapply && _colorReady
-            && !_ledCounts.Keys.OrderBy(k => k).SequenceEqual(current.Keys.OrderBy(k => k)))
-        {
-            log?.Invoke($"hub {SerialNumber[..8]}… LED registry changed on its own: now [{Describe(current)}] "
-                + "— rebuilding color slots");
-            _colorReady = false;
-            mustReapply = true;
-        }
-
-        return mustReapply;
-
-        static string Describe(IReadOnlyDictionary<int, byte> registry) =>
-            string.Join(", ", registry.OrderBy(kv => kv.Key).Select(kv => $"ch{kv.Key}=0x{kv.Value:X2}"));
     }
 
     /// <summary>Chains carry at most 24 devices (two-packet enumeration, fw 2.5+) — larger slot counts are garbage.</summary>
@@ -720,8 +771,13 @@ public sealed class LinkHub : IDisposable
     /// </summary>
     public void InvalidateColorPath()
     {
-        _colorReady = false;
-        _colorAttached = false;
+        // whole operation under the I/O lock: an animation frame from another thread can land
+        // between operations, never between this one's commands (interleaving corrupts the hub's state)
+        lock (_ioLock)
+        {
+            _colorReady = false;
+            _colorAttached = false;
+        }
     }
 
     /// <summary>

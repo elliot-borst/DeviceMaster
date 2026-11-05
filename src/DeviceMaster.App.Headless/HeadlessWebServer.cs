@@ -315,6 +315,9 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .swatch { width:30px; height:30px; border-radius:8px; border:2px solid var(--line2); cursor:pointer; }
 .swatch.sel { border-color:var(--text); }
 .preview { width:52px; height:34px; border-radius:9px; background:#8000ff; border:1px solid var(--line2); }
+.preview.rainbow { background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
+@keyframes rb { to { background-position:200% 0; } }
+@media (prefers-reduced-motion: reduce){ .preview.rainbow { animation:none; } }
 /* table */
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th { text-align:left; color:var(--dim); font-weight:500; font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -416,12 +419,16 @@ td.dim { color:var(--dim); }
       <div class="row"><label>Enabled</label>
         <span class="toggle"><input type="checkbox" id="rgbOn"><span class="tk"></span></span>
         <span class="val" id="rgbOnEcho"></span></div>
-      <div class="row"><label for="rgbColor">Colour</label>
+      <div class="row"><label>Effect</label><div class="chips" id="effectChips"></div></div>
+      <div class="row" id="colourRow"><label for="rgbColor">Colour</label>
         <input type="color" id="rgbColor">
         <div class="swatches" id="swatches"></div></div>
+      <div class="row" id="speedRow"><label for="rgbSpeed">Speed</label>
+        <input type="range" class="gslider" id="rgbSpeed" min="1" max="5" step="1" style="max-width:300px"><span class="pct" id="rgbSpeedVal">—</span></div>
       <div class="row"><label for="rgbBright">Brightness</label>
         <input type="range" id="rgbBright" min="0" max="100" step="5"><span class="val" id="rgbBrightVal">—</span></div>
       <div class="row"><label>Preview</label><div class="preview" id="rgbPreview"></div><span class="val mono" id="rgbHex"></span></div>
+      <div class="note">Rainbow streams about 15 frames a second to both hubs (the same effect and speeds as the Windows app).</div>
     </div>
     <div class="card">
       <div class="cardhead"><div class="tile">▣</div><div><div class="cardtitle">GPU RGB (ENE)</div><div class="cardsub">4090 Strix</div></div></div>
@@ -494,7 +501,7 @@ function toast(msg, err=false){
 
 /* ---- config load / apply ---- */
 /* config.json stores enums by name ("Curve"); the controls work in numbers */
-const ENUMS = { Mode:["Off","Manual","Curve"], Source:["Coolant","Cpu","Gpu"], LcdScreens:["Unmanaged","Off","Black","White","Metrics"],
+const ENUMS = { RgbEffect:["Static","Rainbow"], Mode:["Off","Manual","Curve"], Source:["Coolant","Cpu","Gpu"], LcdScreens:["Unmanaged","Off","Black","White","Metrics"],
   PumpScreenMetric:["Coolant","CpuTemp","GpuTemp","CpuLoad","GpuLoad","Clock","RamLoad","PumpRpm","FanDuty","Date","VramLoad","FanRpm","PumpDuty","GpuPower","CpuPower","GpuClock","VramTemp"] };
 function normalize(c){
   for (const [k, names] of Object.entries(ENUMS)) if (typeof c.Control[k] === "string") c.Control[k] = Math.max(0, names.indexOf(c.Control[k]));
@@ -518,6 +525,8 @@ function syncControls(){
   if (!busy("rgbOn")) $("rgbOn").checked = c.RgbEnabled;
   if (!busy("blackout")) $("blackout").checked = !!c.BlackoutActive;
   if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
+  if (!busy("rgbSpeed")) { $("rgbSpeed").value = c.RgbSpeed || 3; paintSlider($("rgbSpeed")); }
+  renderEffect();
   if (!busy("rgbBright")) { $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %"; }
   if (!busy("lcdMode")) $("lcdMode").value = c.LcdScreens;
   if (!busy("lcdMetric")) $("lcdMetric").value = c.PumpScreenMetric;
@@ -554,6 +563,8 @@ function apply(patch){
           case "rgbG": c.RgbG = +v; break;
           case "rgbB": c.RgbB = +v; break;
           case "rgbBrightness": c.RgbBrightness = +v; break;
+          case "rgbEffect": c.RgbEffect = +v; if (+v === 1) c.RgbOff = false; break;
+          case "rgbSpeed": c.RgbSpeed = +v; break;
           case "lcdScreens": c.LcdScreens = +v; break;
           case "lcdBrightness": c.LcdBrightness = +v; break;
           case "pumpScreenMetric": c.PumpScreenMetric = +v; break;
@@ -575,7 +586,9 @@ $("curveReset").onclick = () => apply({curvePoints: defaultCurve(cfg.Control.Sou
 $("rgbOn").onchange = e => apply({rgbEnabled: e.target.checked});
 $("blackout").onchange = e => apply({blackout: e.target.checked});
 $("rgbColor").onchange = e => { const v = e.target.value;
-  apply({rgbR: parseInt(v.slice(1,3),16), rgbG: parseInt(v.slice(3,5),16), rgbB: parseInt(v.slice(5,7),16)}); };
+  apply({rgbEffect: 0, rgbR: parseInt(v.slice(1,3),16), rgbG: parseInt(v.slice(3,5),16), rgbB: parseInt(v.slice(5,7),16)}); };
+$("rgbSpeed").onchange = e => apply({rgbSpeed: +e.target.value});
+$("rgbSpeed").oninput  = e => { $("rgbSpeedVal").textContent = SPEED_NAMES[+e.target.value]; paintSlider(e.target); };
 $("rgbBright").onchange = e => apply({rgbBrightness: +e.target.value});
 $("rgbBright").oninput  = e => $("rgbBrightVal").textContent = e.target.value + " %";
 $("lcdMode").onchange = e => apply({lcdScreens: +e.target.value});
@@ -589,10 +602,24 @@ SWATCHES.forEach(([hex,name]) => {
   const d = document.createElement("div");
   d.className = "swatch"; d.style.background = "#"+hex; d.title = name;
   d.onclick = () => { $("rgbColor").value = "#"+hex;
-    apply({rgbR: parseInt(hex.slice(0,2),16), rgbG: parseInt(hex.slice(2,4),16), rgbB: parseInt(hex.slice(4,6),16)}); };
+    apply({rgbEffect: 0, rgbR: parseInt(hex.slice(0,2),16), rgbG: parseInt(hex.slice(2,4),16), rgbB: parseInt(hex.slice(4,6),16)}); };
   $("swatches").appendChild(d);
 });
+/* ---- effect: Static (colour + swatches) or Rainbow (speed) — same as the Windows Lighting card ---- */
+const SPEED_NAMES = ["", "Slowest", "Slow", "Medium", "Fast", "Fastest"];
+const CYCLE_SECONDS = [0, 20, 12, 7, 4, 2]; // RainbowEffect.CycleSeconds
+function renderEffect(){
+  if (!cfg) return;
+  const c = cfg.Control, rainbow = c.RgbEffect === 1;
+  chips($("effectChips"), ["Static","Rainbow"], rainbow ? 1 : 0, i => apply({rgbEffect: i}));
+  $("speedRow").style.display = rainbow ? "" : "none";
+  $("colourRow").style.opacity = rainbow ? .45 : 1;
+  $("rgbSpeedVal").textContent = SPEED_NAMES[c.RgbSpeed || 3];
+  $("rgbPreview").classList.toggle("rainbow", rainbow && !c.RgbOff);
+  $("rgbPreview").style.setProperty("--rbs", CYCLE_SECONDS[c.RgbSpeed || 3] + "s");
+}
 function updateRgbPreview(){
+  if (cfg && cfg.Control.RgbEffect === 1 && !cfg.Control.RgbOff) { $("rgbPreview").style.background = ""; $("rgbHex").textContent = "RAINBOW"; return; }
   const v = $("rgbColor").value, b = $("rgbBright").value/100;
   const r = Math.round(parseInt(v.slice(1,3),16)*b), g = Math.round(parseInt(v.slice(3,5),16)*b), bl = Math.round(parseInt(v.slice(5,7),16)*b);
   $("rgbPreview").style.background = `rgb(${r},${g},${bl})`;

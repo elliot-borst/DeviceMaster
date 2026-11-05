@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DeviceMaster.Core.Curves;
+using DeviceMaster.Core.Lighting;
 using DeviceMaster.Core.Safety;
 using DeviceMaster.Control;
 
@@ -96,6 +97,25 @@ public static class ConfigPatcher
                     break;
                 case "rgbBrightness":
                     if (TryInt(prop.Value, 0, 100, out var rb)) { cfg.Control.RgbBrightness = rb; applied.Add($"rgbBrightness={rb}"); }
+                    break;
+                case "rgbEffect":
+                    if (TryEnum(prop.Value, out var effect) && Enum.IsDefined(typeof(RgbEffect), effect))
+                    {
+                        cfg.Control.RgbEffect = (RgbEffect)effect;
+                        if (cfg.Control.RgbEffect == RgbEffect.Rainbow)
+                        {
+                            cfg.Control.RgbOff = false; // "lights out" and rainbow are opposites
+                        }
+
+                        applied.Add($"rgbEffect={(int)cfg.Control.RgbEffect}");
+                    }
+                    break;
+                case "rgbSpeed":
+                    if (TryInt(prop.Value, RainbowEffect.MinSpeed, RainbowEffect.MaxSpeed, out var speed))
+                    {
+                        cfg.Control.RgbSpeed = speed;
+                        applied.Add($"rgbSpeed={speed}");
+                    }
                     break;
                 case "lcdScreens":
                     if (TryEnum(prop.Value, out var lcd) && Enum.IsDefined(typeof(LcdMode), lcd))
