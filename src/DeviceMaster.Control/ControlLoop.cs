@@ -30,7 +30,7 @@ public sealed record ControlStatus
     public double? CpuTemperatureC { get; init; }
     public double? GpuTemperatureC { get; init; }
 
-    /// <summary>GPU load/power/VRAM figures, sampled with the dashboard temps (NInfer page tiles).</summary>
+    /// <summary>GPU load/power/VRAM figures, sampled with the dashboard temps.</summary>
     public double? GpuLoadPercent { get; init; }
     public double? GpuPowerW { get; init; }
     public double? VramUsedGb { get; init; }
@@ -439,7 +439,7 @@ public sealed class ControlLoop : IDisposable
             _dashCpuTemp = CanonicalTemp(readings, "cpu", CpuTempPreference);
             _dashGpuTemp = CanonicalTemp(readings, "gpu", GpuCorePreference);
 
-            // GPU load/power/VRAM for the NInfer tiles — same already-polled LHM tree, no
+            // GPU load/power/VRAM for the dashboard tiles — same already-polled LHM tree, no
             // second NVML reader; ReadSystemStats picks the same canonical sensors as Turzx
             var stats = Lhm().ReadSystemStats(refresh: false);
             _dashGpuLoad = stats.GpuLoadPercent;
