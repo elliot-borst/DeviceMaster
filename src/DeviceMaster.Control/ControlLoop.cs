@@ -2077,9 +2077,13 @@ public sealed class ControlLoop : IDisposable
         }
         else
         {
-            _log?.Invoke("software USB replug is Windows-only here — recover by restarting the container "
-                + "(docker restart devicemaster) or replugging the hub; the pump hub runs on its hardware "
-                + "fallback until then");
+            // Linux headless container (--privileged -v /dev:/dev): sysfs authorized toggle is the
+            // in-process equivalent of replugging the hub's USB device node.
+            if (LinuxUsbRestarter.ReplugFromHidPath(devicePath, _log) is null)
+            {
+                _log?.Invoke("recover by restarting the container (docker restart devicemaster) or replugging "
+                    + "the hub; the pump hub runs on its hardware fallback until then");
+            }
         }
     }
 
