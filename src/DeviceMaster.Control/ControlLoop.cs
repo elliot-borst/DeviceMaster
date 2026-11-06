@@ -1,4 +1,5 @@
 using DeviceMaster.Core.Curves;
+using DeviceMaster.Core.Discovery;
 using DeviceMaster.Core.Safety;
 using DeviceMaster.Core.Sensors;
 using DeviceMaster.Devices.AsusAura;
@@ -472,6 +473,11 @@ public sealed class ControlLoop : IDisposable
     // abandons the hub, so re-poke those only occasionally in case the chain was rearranged
     private readonly Dictionary<string, long> _hubPathRetryNotBefore = [];
 
+    // #211 circuit breaker: a hub whose session fails repeatedly (reopened fine but every
+    // telemetry read throws, 2026-10-30: NRE every ~6 s forever, pump hub orphaned, fans at
+    // 100%) gets backed off instead of flapped, and the caller escalates to a software USB replug
+    private readonly HubFailureBreaker _hubBreaker = new();
+
     private void EnsureDevices(List<string> warnings)
     {
         if (_hubs.Count == 0 || Environment.TickCount64 >= _hubRediscoverDue)
@@ -481,7 +487,8 @@ public sealed class ControlLoop : IDisposable
             foreach (var device in LinkHub.FindHubDevices())
             {
                 if (openHubPaths.Contains(device.DevicePath)
-                    || Environment.TickCount64 < _hubPathRetryNotBefore.GetValueOrDefault(device.DevicePath))
+                    || Environment.TickCount64 < _hubPathRetryNotBefore.GetValueOrDefault(device.DevicePath)
+                    || _hubBreaker.IsBackedOff(device.DevicePath, Environment.TickCount64))
                 {
                     continue;
                 }
@@ -499,6 +506,7 @@ public sealed class ControlLoop : IDisposable
                     }
 
                     _hubPathRetryNotBefore.Remove(device.DevicePath);
+                    _hubBreaker.Forget(device.DevicePath); // a healthy open ends the failure history
 
                     _hubs.Add(hub);
                     _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
@@ -2029,6 +2037,55 @@ public sealed class ControlLoop : IDisposable
     // per-hub fingerprint of the channels that currently report a tach, for reseat detection
     private readonly Dictionary<string, string> _hubTachSignatures = [];
 
+    /// <summary>
+    /// #211: one failed hub session. Repeated failures trip the <see cref="HubFailureBreaker"/>,
+    /// which parks the path (hardware failsafe keeps cooling while backed off) and escalates to a
+    /// software USB replug of the hub's device node — the same class of recovery the SL V3 dongles
+    /// have. On Windows that is a real node restart; on Linux (headless container) there is no
+    /// in-process replug primitive, so the log names the exact recovery instead of pretending.
+    /// </summary>
+    private void NoteHubSessionFailure(string devicePath, long nowMs)
+    {
+        if (!_hubBreaker.Note(devicePath, nowMs))
+        {
+            return;
+        }
+
+        _log?.Invoke($"hub at {ShortHubPath(devicePath)} failed its session repeatedly — reopening is parked for "
+            + $"{HubFailureBreaker.DefaultBackoffMs / 1000} s and the hub is being recovered (hardware failsafe "
+            + "keeps its ports at full speed meanwhile)");
+
+        if (OperatingSystem.IsWindows())
+        {
+            var instanceId = UsbDeviceRestarter.InstanceIdFromInterfacePath(devicePath);
+            if (instanceId is null)
+            {
+                _log?.Invoke("could not resolve the hub's USB device node from its path — manual replug required");
+                return;
+            }
+
+            try
+            {
+                UsbDeviceRestarter.Restart(instanceId);
+                _log?.Invoke($"hub USB device node restarted ({instanceId})");
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"hub USB node restart failed ({instanceId}): {ex.Message} — requires elevation; "
+                    + "run DeviceMaster elevated or replug the hub physically");
+            }
+        }
+        else
+        {
+            _log?.Invoke("software USB replug is Windows-only here — recover by restarting the container "
+                + "(docker restart devicemaster) or replugging the hub; the pump hub runs on its hardware "
+                + "fallback until then");
+        }
+    }
+
+    private static string ShortHubPath(string devicePath) =>
+        devicePath.Length <= 40 ? devicePath : devicePath[..40] + "…";
+
     private void ApplyCorsair(int duty, int pumpDuty, List<DeviceReading> readings, List<string> warnings)
     {
         var pulseActive = AnyPulsePending();
@@ -2181,6 +2238,7 @@ public sealed class ControlLoop : IDisposable
                 _log?.Invoke($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
                 hub.Dispose();
                 _hubs.Remove(hub);
+                NoteHubSessionFailure(hub.DevicePath, Environment.TickCount64);
             }
         }
 
