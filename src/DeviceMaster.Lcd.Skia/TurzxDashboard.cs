@@ -34,6 +34,9 @@ public sealed record TurzxDashboardData
     /// <summary>Share of speculative draft tokens accepted since start, 0–100.</summary>
     public double? LlmDraftHitPercent { get; init; }
 
+    /// <summary>Share of prompt tokens reused from the server's cache instead of read again, 0–100.</summary>
+    public double? LlmCacheHitPercent { get; init; }
+
     public string GpuName { get; init; } = "GPU";
     public double? GpuTempC { get; init; }
     public double? GpuUtil { get; init; }
@@ -194,13 +197,15 @@ public static class TurzxDashboard
         var sx = r.Right - 24 - statsWidth;
         using (var divider = new SKPaint { Color = Line, StrokeWidth = 2 })
         {
-            c.DrawLine(sx - 22, r.Top + 70, sx - 22, r.Top + 330, divider);
+            c.DrawLine(sx - 22, r.Top + 70, sx - 22, r.Top + 336, divider);
         }
 
-        Stat(c, sx, r.Top + 96, "TOKENS OUT", d.LlmReachable ? Tokens(d.LlmOutputTokens) : "—", "");
-        Stat(c, sx, r.Top + 186, "PROMPT READ",
-            d.LlmPromptTokPerSec is { } p && d.LlmReachable ? Tokens((long)Math.Round(p)) : "—", d.LlmPromptTokPerSec is not null && d.LlmReachable ? "tok/s" : "");
-        Stat(c, sx, r.Top + 276, "DRAFTS HIT", d.LlmDraftHitPercent is { } h && d.LlmReachable ? $"{h:0}%" : "—", "");
+        // since the server started: tokens written, prompt reading speed, guesses kept, prompt reused from cache
+        var up = d.LlmReachable;
+        Stat(c, sx, r.Top + 90, "WRITTEN", up ? Tokens(d.LlmOutputTokens) : "—", up ? "tok" : "");
+        Stat(c, sx, r.Top + 158, "READ SPEED", d.LlmPromptTokPerSec is { } p && up ? Tokens((long)Math.Round(p)) : "—", d.LlmPromptTokPerSec is not null && up ? "tok/s" : "");
+        Stat(c, sx, r.Top + 226, "GUESS HIT", d.LlmDraftHitPercent is { } h && up ? $"{h:0}%" : "—", "");
+        Stat(c, sx, r.Top + 294, "CACHE HIT", d.LlmCacheHitPercent is { } k && up ? $"{k:0}%" : "—", "");
 
         // slot pills: S1 Write / S2 Idle …, centred
         const float slotGap = 12;
@@ -301,10 +306,10 @@ public static class TurzxDashboard
     private static void Stat(SKCanvas c, float x, float y, string label, string value, string unit)
     {
         Label(c, label, x, y, 18, Dim, bold: true);
-        var w = Label(c, value, x, y + 40, 34, Text, bold: true);
+        var w = Label(c, value, x, y + 36, 32, Text, bold: true);
         if (unit.Length > 0)
         {
-            Label(c, unit, x + w + 8, y + 40, 20, Dim);
+            Label(c, unit, x + w + 8, y + 36, 20, Dim);
         }
     }
 

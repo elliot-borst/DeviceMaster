@@ -30,6 +30,7 @@ public sealed record LlmStatus(
     int? PromptTokens = null,
     double? PromptTokPerSec = null,   // average prompt-reading speed since start (cache reuse excluded)
     double? DraftHitPercent = null,   // speculative draft tokens accepted since start, 0–100
+    double? CacheHitPercent = null,   // prompt tokens reused from the conversation cache since start, 0–100
     double? GpuPowerLimitW = null);
 
 /// <summary>
@@ -137,6 +138,8 @@ public sealed class StrataStatus : IDisposable
             PromptTokPerSec: totals is { } t3 ? PromptSpeed(t3) : null,
             DraftHitPercent: totals is { } t4 && Num(t4, "drafts_offered") is { } offered && offered > 0
                 ? 100.0 * (Num(t4, "drafts_accepted") ?? 0) / offered : null,
+            CacheHitPercent: totals is { } t5 && Num(t5, "prompt_tokens") is { } prompted && prompted > 0
+                ? 100.0 * (Num(t5, "reused") ?? 0) / prompted : null,
             GpuPowerLimitW: hw is { } k && Num(k, "gpu_power_limit") is { } limit && limit > 0 ? limit : null);
     }
 

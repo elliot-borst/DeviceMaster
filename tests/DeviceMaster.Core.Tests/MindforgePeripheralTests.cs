@@ -95,6 +95,7 @@ public class StrataStatusTests
         Assert.Equal("thinking", s.Phase);
         Assert.Equal(2500, s.PromptTokPerSec); // (120000 - 100000 reused) tokens in 8 s
         Assert.Equal(75, s.DraftHitPercent);
+        Assert.Equal(100.0 * 100000 / 120000, s.CacheHitPercent!.Value, 6);
         Assert.Equal(500, s.GpuPowerLimitW);
     }
 

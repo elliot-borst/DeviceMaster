@@ -275,6 +275,7 @@ public sealed partial class HeadlessLoop
             LlmOutputTokens = llm?.OutputTokens ?? 0,
             LlmPromptTokPerSec = llm?.PromptTokPerSec,
             LlmDraftHitPercent = llm?.DraftHitPercent,
+            LlmCacheHitPercent = llm?.CacheHitPercent,
             GpuName = status.GpuName ?? "GPU",
             GpuTempC = status.GpuTemperatureC,
             GpuUtil = status.GpuLoadPercent,
