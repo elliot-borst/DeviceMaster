@@ -63,117 +63,6 @@ public class HwmonFanControlTests : IDisposable
     }
 }
 
-public class StrataStatusTests
-{
-    private const string Metrics = """
-        {"engine": {"model": "qwen3.8-flash-next-unsloth-ud-iq3_xxs", "max_context": 262144},
-         "live": {"state": "generating", "phase": "thinking", "running": 1, "outside_slots": 1, "queued": 1, "tok_s": 108.5, "waiting": 0,
-                  "slots": [{"slot": 0, "state": "generating", "held_tokens": 1200}, {"slot": 1, "state": "idle", "held_tokens": 0}]},
-         "totals": {"requests": 42, "output_tokens": 9000, "prompt_tokens": 120000, "reused": 100000, "prompt_ms": 8000,
-                    "drafts_offered": 400, "drafts_accepted": 300},
-         "hardware": {"gpu_util": 93, "gpu_mem_used": 25077088256, "gpu_mem_total": 25757220864, "gpu_temp": 66, "gpu_power": 301.5, "gpu_power_limit": 500.0},
-         "hardware_static": {"gpu_name": "NVIDIA GeForce RTX 4090"},
-         "history": {"tok_s": [0.0, 50.5, 108.5]}}
-        """;
-
-    [Fact]
-    public void ParsesStateSlotsAndGpu()
-    {
-        var s = StrataStatus.Parse(Metrics, DateTime.UtcNow);
-        Assert.Equal("qwen3.8-flash-next-unsloth-ud-iq3_xxs", s.Model);
-        Assert.Equal("generating", s.State);
-        Assert.Equal(108.5, s.TokPerSec);
-        Assert.Equal(2, s.Slots.Count);
-        Assert.Equal(new LlmSlot(0, "generating", 1200), s.Slots[0]);
-        Assert.Equal(1, s.Queued);
-        Assert.Equal(42, s.Requests);
-        Assert.Equal(66, s.GpuTempC);
-        Assert.Equal(23915.375, s.GpuMemUsedMb!.Value, 3); // 25077088256 bytes / 2^20
-        Assert.Equal([0.0, 50.5, 108.5], s.TokHistory);
-        Assert.Equal(1, s.Running);
-        Assert.Equal(1, s.OutsideSlots);
-        Assert.Equal("thinking", s.Phase);
-        Assert.Equal(262144, s.ContextMax);
-        Assert.Equal(500, s.GpuPowerLimitW);
-    }
-
-    [Fact]
-    public void LastReplyComesFromTheNewestRequest()
-    {
-        var s = StrataStatus.Parse("""
-            {"live": {"state": "idle"},
-             "requests": [{"prompt_tokens": 193007, "reused": 190968, "output_tokens": 730, "first_engine_token_s": 1.987,
-                           "drafts_offered": 577, "drafts_accepted": 308},
-                          {"prompt_tokens": 100, "output_tokens": 5}]}
-            """, DateTime.UtcNow);
-        var reply = s.Reply!;
-        Assert.False(reply.Live);
-        Assert.Equal(1.987, reply.Seconds);
-        Assert.Equal(98.9, reply.CacheHitPercent!.Value, 1);
-        Assert.Equal(53.4, reply.GuessHitPercent!.Value, 1);
-        Assert.Equal(730, reply.Written);
-    }
-
-    [Fact]
-    public void LiveReplyCountsUpWhileReadingThenEstimatesTheStart()
-    {
-        var reading = StrataStatus.Parse("""
-            {"live": {"state": "reading", "prompt_tokens": 15194, "generated": 0, "elapsed_s": 2.1}}
-            """, DateTime.UtcNow).Reply!;
-        Assert.True(reading.Live && reading.Reading);
-        Assert.Equal(2.1, reading.Seconds);
-
-        var writing = StrataStatus.Parse("""
-            {"live": {"state": "generating", "prompt_tokens": 15194, "generated": 92, "elapsed_s": 4.2, "tok_s": 65.8},
-             "conversation_cache": {"last_prompt": 15194, "last_reused": 15000}}
-            """, DateTime.UtcNow).Reply!;
-        Assert.False(writing.Reading);
-        Assert.Equal(2.8, writing.Seconds!.Value, 1); // 4.2 s − 92 tokens at 65.8 tok/s (actual: 2.7 s)
-        Assert.Equal(98.7, writing.CacheHitPercent!.Value, 1);
-        Assert.Null(writing.GuessHitPercent);
-        Assert.Equal(92, writing.Written);
-    }
-
-    [Fact]
-    public void ContextIsTheLiveConversationOrTheNewestRequest()
-    {
-        var busy = StrataStatus.Parse("""{"live": {"prompt_total": 190000, "generated": 512}}""", DateTime.UtcNow);
-        Assert.Equal(190512, busy.ContextUsed);
-        var idle = StrataStatus.Parse("""
-            {"live": {"prompt_total": null},
-             "requests": [{"prompt_total": 56925, "output_tokens": 245}, {"prompt_total": 195993, "output_tokens": 662}]}
-            """, DateTime.UtcNow);
-        Assert.Equal(57170, idle.ContextUsed);
-        Assert.Null(StrataStatus.Parse("{}", DateTime.UtcNow).ContextUsed);
-    }
-
-    [Fact]
-    public void ToleratesMissingSections()
-    {
-        var s = StrataStatus.Parse("{}", DateTime.UtcNow);
-        Assert.Equal("unknown", s.State);
-        Assert.Empty(s.Slots);
-        Assert.Null(s.GpuTempC);
-        Assert.Null(s.Reply);
-    }
-
-    [Fact]
-    public void ReadsTheKeyFromAnEnvFileWithoutLoggingIt()
-    {
-        var path = Path.GetTempFileName();
-        try
-        {
-            File.WriteAllText(path, "FAMILY=unsloth\nAPI_KEY=\"sk-test-123\"\n");
-            Assert.Equal("sk-test-123", StrataStatus.ReadKeyFile(path));
-            Assert.Null(StrataStatus.ReadKeyFile(path + ".missing"));
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-}
-
 public class TurzxLinuxTests : IDisposable
 {
     private readonly string _sys = Path.Combine(Path.GetTempPath(), $"dm-tty-{Guid.NewGuid():N}");
@@ -215,35 +104,10 @@ public class TurzxDashboardTests
     [Fact]
     public void NativeFrameIsThePanelsPortraitBgra()
     {
-        var frame = TurzxDashboard.RenderNative(new TurzxDashboardData { HasLlm = true, LlmModel = "x" }, flip: false);
+        var frame = TurzxDashboard.RenderNative(new TurzxDashboardData { GpuName = "x" }, flip: false);
         Assert.Equal(480 * 1920 * 4, frame.Length);
         Assert.Equal(480 * 1920 * 4, TurzxDashboard.RenderNative(new TurzxDashboardData(), flip: true).Length);
     }
-
-    [Theory]
-    [InlineData("qwen3.8-flash-next-unsloth-ud-iq3_xxs", "qwen3.8 flash next · UD-IQ3_XXS")]
-    [InlineData("unsloth/Qwen3.8-Flash-Next-UD-IQ3_XXS", "Qwen3.8 Flash Next · UD-IQ3_XXS")]
-    [InlineData("qwen3.8-27b", "qwen3.8 27b")]
-    public void ModelNamesAreShortened(string model, string expected) => Assert.Equal(expected, TurzxDashboard.ShortModel(model));
-
-    [Fact]
-    public void IdleIsCapitalised() => Assert.Equal("Idle", TurzxDashboard.StateWord("idle"));
-
-    [Fact]
-    public void TokenCountsAreCompact()
-    {
-        Assert.Equal("950", TurzxDashboard.Tokens(950));
-        Assert.Equal("12.4K", TurzxDashboard.Tokens(12_400));
-        Assert.Equal("262K", TurzxDashboard.Tokens(262_144));
-        Assert.Equal("1.24M", TurzxDashboard.Tokens(1_243_118));
-        Assert.Equal("30.1K", TurzxDashboard.Tokens(30_110));
-    }
-
-    [Theory]
-    [InlineData("generating", "Write")]
-    [InlineData("prefill", "Read")]
-    [InlineData("idle", "Idle")]
-    public void SlotWordsAreShort(string state, string expected) => Assert.Equal(expected, TurzxDashboard.SlotWord(state));
 
     [Theory]
     [InlineData("AMD Ryzen 7 9800X3D 8-Core Processor", "R7 9800X3D")]

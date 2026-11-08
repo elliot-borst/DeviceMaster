@@ -452,7 +452,7 @@ public sealed partial class HeadlessLoop : IDisposable
             RamUsedGb = cpuStats.RamUsedGb,
             RamTotalGb = cpuStats.RamTotalGb,
             GpuName = gpu?.Name,
-            GpuFanPercent = gpu?.FanPercent ?? (gpu is not null ? _gpuFanPercent : null),
+            GpuFanPercent = gpu?.FanPercent,
             GpuFanRpm = gpu is not null ? _gpuFanRpm : null,
             TargetDutyPercent = duty,
             PumpDutyPercent = pumpDuty,
@@ -461,7 +461,7 @@ public sealed partial class HeadlessLoop : IDisposable
             Warnings = warnings,
         };
 
-        UpdateDashboard(cfg, _status);
+        UpdateDashboard(_status);
 
         // optional status snapshot file (dashboards / external monitoring)
         if (cfg.StatusFile is { Length: > 0 } && Environment.TickCount64 >= _statusFileDue)
@@ -621,13 +621,6 @@ public sealed partial class HeadlessLoop : IDisposable
     /// <summary>GPU reading: external sensor file first (host-cron pattern), nvidia-smi as fallback.</summary>
     private GpuReading? ReadGpu(HeadlessConfig cfg)
     {
-        // a local LLM server already samples the GPU — use it while it's up
-        if (GpuFromLlm() is { } fromLlm)
-        {
-            _gpuSensorStale = false;
-            return fromLlm;
-        }
-
         if (!string.IsNullOrWhiteSpace(cfg.GpuSensorFile))
         {
             try
