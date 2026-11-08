@@ -7,6 +7,12 @@ namespace DeviceMaster.Sensors.Linux;
 /// <summary>One serving slot (conversation) of a local LLM server.</summary>
 public sealed record LlmSlot(int Id, string State, int HeldTokens);
 
+/// <summary>
+/// One reply: the one being worked on (<paramref name="Live"/>) or the newest finished one.
+/// <paramref name="Seconds"/> is the wait before the first word (while still reading: the time so far).
+/// </summary>
+public sealed record LlmReply(bool Live, bool Reading, double? Seconds, double? CacheHitPercent, double? GuessHitPercent, int? Written);
+
 /// <summary>What the dashboard shows about a local LLM server, from Strata's <c>/metrics</c>.</summary>
 public sealed record LlmStatus(
     string Model,
@@ -28,9 +34,7 @@ public sealed record LlmStatus(
     int OutsideSlots = 0,     // single conversations run outside the batch slots (Strata's solo path)
     string? Phase = null,     // what the model is doing: "thinking", "answering", "writing a tool call: …"
     int? PromptTokens = null,
-    double? PromptTokPerSec = null,   // average prompt-reading speed since start (cache reuse excluded)
-    double? DraftHitPercent = null,   // speculative draft tokens accepted since start, 0–100
-    double? CacheHitPercent = null,   // prompt tokens reused from the conversation cache since start, 0–100
+    LlmReply? Reply = null,           // the current reply, else the last one
     int? ContextUsed = null,          // tokens the current conversation holds (the last one while idle)
     int? ContextMax = null,           // the model's context limit
     double? GpuPowerLimitW = null);
@@ -137,11 +141,7 @@ public sealed class StrataStatus : IDisposable
             OutsideSlots: (int)(live is { } l6 ? Num(l6, "outside_slots") ?? 0 : 0),
             Phase: live is { } l7 ? Str(l7, "phase") : null,
             PromptTokens: live is { } l8 && (Num(l8, "prompt_total") ?? Num(l8, "prompt_tokens")) is { } pt ? (int)pt : null,
-            PromptTokPerSec: totals is { } t3 ? PromptSpeed(t3) : null,
-            DraftHitPercent: totals is { } t4 && Num(t4, "drafts_offered") is { } offered && offered > 0
-                ? 100.0 * (Num(t4, "drafts_accepted") ?? 0) / offered : null,
-            CacheHitPercent: totals is { } t5 && Num(t5, "prompt_tokens") is { } prompted && prompted > 0
-                ? 100.0 * (Num(t5, "reused") ?? 0) / prompted : null,
+            Reply: ParseReply(root, live),
             ContextUsed: ContextInUse(root, live),
             ContextMax: engine is { } e2 && (Num(e2, "context") ?? Num(e2, "max_context")) is { } cm ? (int)cm : null,
             GpuPowerLimitW: hw is { } k && Num(k, "gpu_power_limit") is { } limit && limit > 0 ? limit : null);
@@ -168,12 +168,38 @@ public sealed class StrataStatus : IDisposable
         return null;
     }
 
-    /// <summary>Prompt tokens actually read (not reused from the cache) per second of prompt time.</summary>
-    private static double? PromptSpeed(JsonElement totals)
+    private static LlmReply? ParseReply(JsonElement root, JsonElement? live)
     {
-        var ms = Num(totals, "prompt_ms") ?? 0;
-        var read = (Num(totals, "prompt_tokens") ?? 0) - (Num(totals, "reused") ?? 0);
-        return ms > 0 && read > 0 ? read / (ms / 1000.0) : null;
+        if (live is { } l && Str(l, "state") is { } state && state != "idle" && Num(l, "prompt_tokens") is { } prompt && prompt > 0)
+        {
+            var generated = (int)(Num(l, "generated") ?? 0);
+            var elapsed = Num(l, "elapsed_s");
+            var tokS = Num(l, "tok_s");
+            var reading = generated == 0;
+            // live data has no first-token time: elapsed minus the time spent writing at the current speed
+            double? started = reading ? elapsed
+                : elapsed is { } e && tokS is { } speed && speed > 0 ? Math.Max(0, e - generated / speed) : null;
+            // the conversation cache reports what it restored for the request it just admitted
+            double? cache = Obj(root, "conversation_cache") is { } cc && Num(cc, "last_prompt") == prompt && Num(cc, "last_reused") is { } reused
+                ? 100.0 * reused / prompt : null;
+            return new LlmReply(true, reading, started, cache, null, generated);
+        }
+
+        if (root.TryGetProperty("requests", out var requests) && requests.ValueKind == JsonValueKind.Array
+            && requests.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } last)
+        {
+            var lastPrompt = Num(last, "prompt_tokens") ?? Num(last, "prompt_total");
+            var offered = Num(last, "drafts_offered");
+            return new LlmReply(
+                Live: false,
+                Reading: false,
+                Seconds: Num(last, "first_engine_token_s"),
+                CacheHitPercent: lastPrompt is { } p && p > 0 ? 100.0 * (Num(last, "reused") ?? 0) / p : null,
+                GuessHitPercent: offered is { } o && o > 0 ? 100.0 * (Num(last, "drafts_accepted") ?? 0) / o : null,
+                Written: Num(last, "output_tokens") is { } w ? (int)w : null);
+        }
+
+        return null;
     }
 
     private static JsonElement? Obj(JsonElement e, string key) =>

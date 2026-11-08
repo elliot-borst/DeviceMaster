@@ -272,10 +272,9 @@ public sealed partial class HeadlessLoop
             LlmTokHistory = llm?.TokHistory ?? [],
             LlmSlots = llm?.Slots.Select(s => new DashboardSlot(s.State, s.HeldTokens)).ToList() ?? [],
             LlmQueued = llm?.Queued ?? 0,
-            LlmOutputTokens = llm?.OutputTokens ?? 0,
-            LlmPromptTokPerSec = llm?.PromptTokPerSec,
-            LlmDraftHitPercent = llm?.DraftHitPercent,
-            LlmCacheHitPercent = llm?.CacheHitPercent,
+            LlmReply = llm?.Reply is { } reply
+                ? new DashboardReply(reply.Live, reply.Reading, reply.Seconds, reply.CacheHitPercent, reply.GuessHitPercent, reply.Written)
+                : null,
             LlmContextUsed = llm?.ContextUsed,
             LlmContextMax = llm?.ContextMax,
             GpuName = status.GpuName ?? "GPU",

@@ -93,11 +93,45 @@ public class StrataStatusTests
         Assert.Equal(1, s.Running);
         Assert.Equal(1, s.OutsideSlots);
         Assert.Equal("thinking", s.Phase);
-        Assert.Equal(2500, s.PromptTokPerSec); // (120000 - 100000 reused) tokens in 8 s
-        Assert.Equal(75, s.DraftHitPercent);
-        Assert.Equal(100.0 * 100000 / 120000, s.CacheHitPercent!.Value, 6);
         Assert.Equal(262144, s.ContextMax);
         Assert.Equal(500, s.GpuPowerLimitW);
+    }
+
+    [Fact]
+    public void LastReplyComesFromTheNewestRequest()
+    {
+        var s = StrataStatus.Parse("""
+            {"live": {"state": "idle"},
+             "requests": [{"prompt_tokens": 193007, "reused": 190968, "output_tokens": 730, "first_engine_token_s": 1.987,
+                           "drafts_offered": 577, "drafts_accepted": 308},
+                          {"prompt_tokens": 100, "output_tokens": 5}]}
+            """, DateTime.UtcNow);
+        var reply = s.Reply!;
+        Assert.False(reply.Live);
+        Assert.Equal(1.987, reply.Seconds);
+        Assert.Equal(98.9, reply.CacheHitPercent!.Value, 1);
+        Assert.Equal(53.4, reply.GuessHitPercent!.Value, 1);
+        Assert.Equal(730, reply.Written);
+    }
+
+    [Fact]
+    public void LiveReplyCountsUpWhileReadingThenEstimatesTheStart()
+    {
+        var reading = StrataStatus.Parse("""
+            {"live": {"state": "reading", "prompt_tokens": 15194, "generated": 0, "elapsed_s": 2.1}}
+            """, DateTime.UtcNow).Reply!;
+        Assert.True(reading.Live && reading.Reading);
+        Assert.Equal(2.1, reading.Seconds);
+
+        var writing = StrataStatus.Parse("""
+            {"live": {"state": "generating", "prompt_tokens": 15194, "generated": 92, "elapsed_s": 4.2, "tok_s": 65.8},
+             "conversation_cache": {"last_prompt": 15194, "last_reused": 15000}}
+            """, DateTime.UtcNow).Reply!;
+        Assert.False(writing.Reading);
+        Assert.Equal(2.8, writing.Seconds!.Value, 1); // 4.2 s − 92 tokens at 65.8 tok/s (actual: 2.7 s)
+        Assert.Equal(98.7, writing.CacheHitPercent!.Value, 1);
+        Assert.Null(writing.GuessHitPercent);
+        Assert.Equal(92, writing.Written);
     }
 
     [Fact]
@@ -120,8 +154,7 @@ public class StrataStatusTests
         Assert.Equal("unknown", s.State);
         Assert.Empty(s.Slots);
         Assert.Null(s.GpuTempC);
-        Assert.Null(s.PromptTokPerSec);
-        Assert.Null(s.DraftHitPercent);
+        Assert.Null(s.Reply);
     }
 
     [Fact]

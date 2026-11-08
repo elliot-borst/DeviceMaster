@@ -6,6 +6,12 @@ namespace DeviceMaster.Lcd.Skia;
 /// <summary>One serving slot on the dashboard: "idle", "generating", "prefill", … and tokens held.</summary>
 public sealed record DashboardSlot(string State, int HeldTokens);
 
+/// <summary>
+/// One reply's figures: wait before the first word (while reading: the time so far), prompt share
+/// reused from cache, draft guesses kept, tokens written. Live = still being worked on.
+/// </summary>
+public sealed record DashboardReply(bool Live, bool Reading, double? Seconds, double? CacheHitPercent, double? GuessHitPercent, int? Written);
+
 /// <summary>Everything the 8.8" bar shows; any figure may be null (drawn as a dash).</summary>
 public sealed record TurzxDashboardData
 {
@@ -25,17 +31,8 @@ public sealed record TurzxDashboardData
     public int LlmQueued { get; init; }
     public bool LlmReachable { get; init; } = true;
 
-    /// <summary>Tokens written since the server started.</summary>
-    public long LlmOutputTokens { get; init; }
-
-    /// <summary>Average prompt-reading speed since start (tokens actually read, cache reuse excluded).</summary>
-    public double? LlmPromptTokPerSec { get; init; }
-
-    /// <summary>Share of speculative draft tokens accepted since start, 0–100.</summary>
-    public double? LlmDraftHitPercent { get; init; }
-
-    /// <summary>Share of prompt tokens reused from the server's cache instead of read again, 0–100.</summary>
-    public double? LlmCacheHitPercent { get; init; }
+    /// <summary>The reply being worked on, else the last finished one.</summary>
+    public DashboardReply? LlmReply { get; init; }
 
     /// <summary>Tokens the current (or last) conversation holds, against the model's context limit.</summary>
     public int? LlmContextUsed { get; init; }
@@ -202,9 +199,10 @@ public static class TurzxDashboard
             Sparkline(c, new SKRect(r.Left + 24, r.Top + 246, leftRight, r.Top + 298), d.LlmTokHistory);
             var fraction = Math.Clamp((double)used / max, 0, 1);
             var tint = fraction >= 0.9 ? Danger : fraction >= 0.75 ? Warn : Cool;
-            var labelW = Label(c, "CONTEXT", r.Left + 24, r.Top + 326, 18, Dim, bold: true);
-            var valueW = Label(c, $"{Tokens(used)} / {Tokens(max)}", leftRight, r.Top + 326, 20, fraction >= 0.75 ? tint : Text, bold: true, align: SKTextAlign.Right);
-            var track = new SKRect(r.Left + 36 + labelW, r.Top + 313, leftRight - valueW - 14, r.Top + 325);
+            // the row sits midway between the graph (ends +298) and the slot pills (start +356)
+            var labelW = Label(c, "CONTEXT", r.Left + 24, r.Top + 334, 18, Dim, bold: true);
+            var valueW = Label(c, $"{Tokens(used)} / {Tokens(max)}", leftRight, r.Top + 334, 20, fraction >= 0.75 ? tint : Text, bold: true, align: SKTextAlign.Right);
+            var track = new SKRect(r.Left + 36 + labelW, r.Top + 321, leftRight - valueW - 14, r.Top + 333);
             using (var bg = new SKPaint { Color = Track, IsAntialias = true })
             {
                 c.DrawRoundRect(track, 6, 6, bg);
@@ -225,12 +223,22 @@ public static class TurzxDashboard
             c.DrawLine(sx - 20, r.Top + 70, sx - 20, r.Top + 336, divider);
         }
 
-        // since the server started: tokens written, prompt reading speed, guesses kept, prompt reused from cache
-        var up = d.LlmReachable;
-        Stat(c, sx, r.Top + 90, "WRITTEN", up ? Tokens(d.LlmOutputTokens) : "—", up ? "tok" : "");
-        Stat(c, sx, r.Top + 158, "READ SPEED", d.LlmPromptTokPerSec is { } p && up ? Tokens((long)Math.Round(p)) : "—", d.LlmPromptTokPerSec is not null && up ? "tok/s" : "");
-        Stat(c, sx, r.Top + 226, "GUESS HIT", d.LlmDraftHitPercent is { } h && up ? $"{h:0}%" : "—", "");
-        Stat(c, sx, r.Top + 294, "CACHE HIT", d.LlmCacheHitPercent is { } k && up ? $"{k:0}%" : "—", "");
+        // this reply (live) or the last one: wait before the first word, cache reuse, guesses kept, length
+        var reply = d.LlmReachable ? d.LlmReply : null;
+        var live = reply?.Live == true;
+        Label(c, live ? "THIS REPLY" : "LAST REPLY", sx, r.Top + 94, 18, live ? Good : Faint, bold: true);
+        if (reply is { Reading: true })
+        {
+            Stat(c, sx, r.Top + 134, "READING", reply.Seconds is { } s ? $"{s:0.0}" : "…", "s", Warn);
+        }
+        else
+        {
+            Stat(c, sx, r.Top + 134, "STARTED IN", reply?.Seconds is { } s ? $"{s:0.0}" : "—", reply?.Seconds is null ? "" : "s");
+        }
+
+        Stat(c, sx, r.Top + 192, "CACHE HIT", reply?.CacheHitPercent is { } k ? $"{k:0}%" : live ? "…" : "—", "");
+        Stat(c, sx, r.Top + 250, "GUESS HIT", reply?.GuessHitPercent is { } h ? $"{h:0}%" : live ? "…" : "—", "");
+        Stat(c, sx, r.Top + 308, "WRITTEN", reply?.Written is { } w ? Tokens(w) : "—", reply?.Written is null ? "" : "tok");
 
         // slot pills: S1 Write / S2 Idle …, centred
         const float slotGap = 12;
@@ -328,13 +336,13 @@ public static class TurzxDashboard
         Label(c, $"{p:0}", r.Right - 34 - unitWidth, y, size, Text, bold: true, align: SKTextAlign.Right);
     }
 
-    private static void Stat(SKCanvas c, float x, float y, string label, string value, string unit)
+    private static void Stat(SKCanvas c, float x, float y, string label, string value, string unit, SKColor? color = null)
     {
-        Label(c, label, x, y, 18, Dim, bold: true);
-        var w = Label(c, value, x, y + 36, 32, Text, bold: true);
+        Label(c, label, x, y, 16, Dim, bold: true);
+        var w = Label(c, value, x, y + 30, 28, color ?? Text, bold: true);
         if (unit.Length > 0)
         {
-            Label(c, unit, x + w + 8, y + 36, 20, Dim);
+            Label(c, unit, x + w + 6, y + 30, 18, Dim);
         }
     }
 

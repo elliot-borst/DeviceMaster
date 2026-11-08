@@ -583,10 +583,10 @@ internal static class Program
             LlmTokHistory = Enumerable.Range(0, 60).Select(i => busy ? 80 + 30 * Math.Sin(i / 6.0) : 0.0).ToList(),
             // one conversation, run outside the batch slots: every slot reports idle
             LlmSlots = [new("idle", 0), new("idle", 0), new("idle", 0), new("idle", 0)],
-            LlmOutputTokens = 1_243_118,
-            LlmPromptTokPerSec = 2_456,
-            LlmDraftHitPercent = 68,
-            LlmCacheHitPercent = 97,
+            // busy: a reply being written (cache figure known, guess hit only once it's done); idle: the last reply
+            LlmReply = busy
+                ? new DeviceMaster.Lcd.Skia.DashboardReply(true, false, 1.9, 99, null, 412)
+                : new DeviceMaster.Lcd.Skia.DashboardReply(false, false, 1.9, 99, 53, 731),
             LlmContextUsed = busy ? 193_007 : null,
             LlmContextMax = 262_144,
             GpuName = "NVIDIA GeForce RTX 4090",
