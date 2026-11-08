@@ -44,6 +44,25 @@ public sealed class HeadlessConfig
     /// <summary>Drive the GPU's ENE RGB chip (default on when the chip is found).</summary>
     public bool GpuRgbEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Base URL of a local Strata LLM server (e.g. http://127.0.0.1:8081). When set, the Turzx
+    /// dashboard shows its model, live speed and slots, and its GPU figures are used (read-only:
+    /// only <c>GET /metrics</c>). Null = no LLM panel.
+    /// </summary>
+    public string? StrataUrl { get; set; }
+
+    /// <summary>Env-style file holding the server's <c>API_KEY=</c> (mounted read-only); never logged.</summary>
+    public string? StrataKeyFile { get; set; }
+
+    /// <summary>Drive the motherboard's spinning fan headers (Nuvoton Super I/O via hwmon) with the fan duty.</summary>
+    public bool MotherboardFans { get; set; } = true;
+
+    /// <summary>Drive the ASUS Aura mainboard LED controller (static colour / rainbow).</summary>
+    public bool AuraEnabled { get; set; } = true;
+
+    /// <summary>Name shown on the Turzx dashboard; empty = the machine name.</summary>
+    public string? DisplayName { get; set; }
+
     /// <summary>Write a JSON status snapshot to this path every N seconds (0 = off). Great for external dashboards.</summary>
     public string? StatusFile { get; set; }
 

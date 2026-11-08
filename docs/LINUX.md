@@ -12,7 +12,11 @@ designed to run in a Docker container on a server.
 | Pump / radiator LCD (JPEG frames, brightness) | yes | **yes** (same HID session) |
 | GPU RGB via ENE controller (ASUS boards, i2c 0x67) | yes | **yes** (raw i2c-dev, repeated starts) |
 | CPU/GPU temperature | LHM / nvidia | kernel hwmon (k10temp/coretemp) + nvidia-smi |
-| Lian Li / Turzx / ASUS AURA / SLV3 / PresentMon | yes | not ported (Windows-only sources) |
+| Turzx 8.8" screen (system dashboard: CPU, GPU, RAM, cooling, local LLM) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
+| ASUS AURA mainboard LED controller (static / rainbow) | yes | **yes** (HidSharp → hidraw) |
+| Motherboard fan headers (Nuvoton NCT67xx Super I/O) | yes (LHM) | **yes** (hwmon `pwmN`; only headers spinning at start-up; never below 30 %; BIOS curve restored on stop / mode Off) |
+| Local LLM status (Strata `/metrics`, read-only) | — | **yes** (model, live speed, slots; also the GPU figures) |
+| Lian Li SL V3 / RAM ENE RGB / PresentMon | yes | not ported |
 
 ## Projects
 
@@ -58,7 +62,10 @@ devicemaster ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-10]
 devicemaster lcd <off|black|white|metrics> [--metric COOLANT|CPU_TEMP|GPU_TEMP|FAN_DUTY|PUMP_DUTY|PUMP_RPM]
     [--hold 10] [--brightness 80]
 devicemaster loop [--config /config/config.json]   # the daemon
-devicemaster web [--config /config/config.json] --port 27004
+devicemaster web [--config /config/config.json] --port 27004 [--bind 100.x.y.z --bind 127.0.0.1]
+    # --bind (repeatable) limits the dashboard to those addresses, e.g. tailnet IP + localhost
+devicemaster dashboard-preview [--busy] [--out dashboard.png]
+    # renders the Turzx 8.8" dashboard with sample figures to a PNG (layout check, no panel needed)
     # control loop + built-in web dashboard (page at /, data at /status.json)
 ```
 
@@ -153,3 +160,20 @@ manual duty, pump duty, RGB, LCD), plus:
 - `nvidia-smi` is not in the image. Without a GPU temperature source, GPU source
   temperature is simply unavailable (failsafe engages if you selected GPU as the curve
   source — use Coolant or CPU).
+
+## Air-cooled boxes: motherboard fans, Aura, Turzx, local LLM
+
+Config keys (see `HeadlessConfig`): `MotherboardFans` (default true), `AuraEnabled` (default true),
+`StrataUrl` + `StrataKeyFile` (env-style file with `API_KEY=`; only `GET /metrics` is ever sent),
+`DisplayName` (shown on the screen). The Turzx screen follows `Control.TurzxScreen`
+(`Unmanaged` / `Off` / `Metrics`), `TurzxBrightness` and `TurzxRotation` (180 = mounted upside down).
+Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
+
+- **Fan driver:** load the kernel's Super I/O driver (`modprobe nct6775`, persist with
+  `/etc/modules-load.d/nct6775.conf`). Only headers with a spinning fan at start-up are controlled.
+- **Safety:** SuperIO has no hardware fallback, so a killed process leaves the last duty in place;
+  duties never go below `SafetyLimits.HeaderMinimumDutyPercent` (30 %, rounded up), sensor failure
+  drives 100 %, and SIGTERM/mode Off hand every header back to its original `pwmN_enable` mode.
+  Run under a restart policy.
+- **Clock:** the dashboard shows the container's local time; set `TZ` (the image includes tzdata).
+

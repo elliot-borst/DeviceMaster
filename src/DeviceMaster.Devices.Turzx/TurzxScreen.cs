@@ -107,6 +107,88 @@ public sealed class TurzxScreen : IDisposable
     public bool FlipLandscape { get; set; }
 
     /// <summary>
+    /// Linux: the panel's DATA port (<c>/dev/ttyACMn</c> of the <c>0525:A4A7</c> gadget-serial
+    /// endpoint), found through sysfs — but only while its <c>1A86:CA88</c> control port is also
+    /// enumerated and write-allowed, the same pairing <see cref="Find"/> does on Windows. Null when
+    /// no panel is present. Pure file reads; <paramref name="sysRoot"/> is for tests.
+    /// </summary>
+    public static string? FindLinuxDataPort(string sysRoot = "/sys")
+    {
+        var tty = Path.Combine(sysRoot, "class", "tty");
+        if (!Directory.Exists(tty) || !KnownDeviceRegistry.IsWriteAllowed(new UsbId(ScreenVid, ScreenPid)))
+        {
+            return null;
+        }
+
+        var ports = new List<(string Name, ushort Vid, ushort Pid)>();
+        foreach (var dir in Directory.GetDirectories(tty, "ttyACM*").Order(StringComparer.Ordinal))
+        {
+            if (UsbIdsAbove(Path.Combine(dir, "device")) is { } id)
+            {
+                ports.Add((Path.GetFileName(dir), id.Vid, id.Pid));
+            }
+        }
+
+        if (!ports.Any(p => p.Vid == ScreenVid && p.Pid == ScreenPid))
+        {
+            return null; // no Turzx control port: whatever gadget-serial device this is, it isn't ours
+        }
+
+        var data = ports.FirstOrDefault(p => DataPortIds.Any(d => d.Vid == p.Vid && d.Pid == p.Pid));
+        return data.Name is null ? null : "/dev/" + data.Name;
+    }
+
+    /// <summary>idVendor/idProduct of the USB device a tty interface hangs off (walks up the sysfs path).</summary>
+    private static (ushort Vid, ushort Pid)? UsbIdsAbove(string devicePath)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(RealPath(devicePath));
+            for (var d = dir; d is not null; d = d.Parent)
+            {
+                var vid = Path.Combine(d.FullName, "idVendor");
+                var pid = Path.Combine(d.FullName, "idProduct");
+                if (File.Exists(vid) && File.Exists(pid))
+                {
+                    return (Convert.ToUInt16(File.ReadAllText(vid).Trim(), 16), Convert.ToUInt16(File.ReadAllText(pid).Trim(), 16));
+                }
+            }
+        }
+        catch
+        {
+            // unreadable node — not a port we can identify
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves every symlink along a sysfs path, component by component. sysfs links are relative
+    /// to where the link really lives (<c>/sys/class/tty/ttyACM0</c> is itself a link into
+    /// <c>/sys/devices/…</c>, and its <c>device</c> link is relative to that real folder), so a
+    /// textual resolve against <c>/sys/class/tty</c> lands in the wrong place.
+    /// </summary>
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "/";
+        var current = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var next = Path.Combine(current, part);
+            for (var hops = 0; hops < 40 && new DirectoryInfo(next).LinkTarget is { } target; hops++)
+            {
+                // a relative target is relative to the folder the link itself sits in
+                next = Path.GetFullPath(Path.IsPathRooted(target) ? target : Path.Combine(Path.GetDirectoryName(next)!, target));
+            }
+
+            current = next;
+        }
+
+        return current;
+    }
+
+    /// <summary>
     /// The Turzx panel's writable DATA port (COM + serial hint), or empty if no panel is present.
     /// A panel is present iff its <c>1A86:CA88</c> control port is enumerated and write-allowed;
     /// the port returned is the panel's gadget-serial DATA port — the one that speaks the protocol.
@@ -251,10 +333,23 @@ public sealed class TurzxScreen : IDisposable
     /// rotated onto the native portrait panel and sent as BGRA. Returns what was actually sent
     /// (full heal / partial diff / nothing) so callers can log push activity.
     /// </summary>
-    public TurzxPushResult SendJpegFrame(byte[] landscapeJpeg)
+    public TurzxPushResult SendJpegFrame(byte[] landscapeJpeg) =>
+        SendNativeFrame(LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape));
+
+    /// <summary>
+    /// Pushes one frame already in the panel's native layout: 480×1920 portrait, BGRA, rows top
+    /// to bottom (the caller has rotated its landscape content). Platform-neutral — the Linux
+    /// headless app renders with SkiaSharp and calls this; <see cref="SendJpegFrame"/> is the
+    /// Windows (System.Drawing) path into the same push.
+    /// </summary>
+    public TurzxPushResult SendNativeFrame(byte[] native)
     {
+        if (native.Length != TurzxProtocol.ScreenWidth * TurzxProtocol.ScreenHeight * 4)
+        {
+            throw new ArgumentException($"Expected a {TurzxProtocol.ScreenWidth}×{TurzxProtocol.ScreenHeight} BGRA frame.", nameof(native));
+        }
+
         EnsureInitialized();
-        var native = LandscapeJpegToPanelBgra(landscapeJpeg, FlipLandscape);
 
         // First frame after (re)connect must be a full DISPLAY_BITMAP to establish the framebuffer;
         // then push only the changed pixels. A periodic full frame heals any dropped region.

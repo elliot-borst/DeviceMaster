@@ -21,14 +21,25 @@ public sealed class HeadlessWebServer : IDisposable
     private readonly string _configPath;
     private readonly object _configLock = new();
 
-    public HeadlessWebServer(HeadlessLoop loop, int port, Action<string> log, string configPath)
+    /// <param name="binds">Addresses to listen on; empty = every interface.</param>
+    public HeadlessWebServer(HeadlessLoop loop, int port, Action<string> log, string configPath, IReadOnlyList<string>? binds = null)
     {
         _loop = loop;
         _port = port;
         _log = log;
         _configPath = configPath;
         _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://+:{port}/");
+        if (binds is { Count: > 0 })
+        {
+            foreach (var host in binds)
+            {
+                _listener.Prefixes.Add($"http://{host}:{port}/");
+            }
+        }
+        else
+        {
+            _listener.Prefixes.Add($"http://+:{port}/");
+        }
         _thread = new Thread(Run) { IsBackground = true, Name = "web" };
     }
 
@@ -752,7 +763,8 @@ function tick(){
     $("fansSub").textContent = silent ? `${silent} without rpm` : "all reporting";
     $("duty").textContent = s.TargetDutyPercent + "%";
     $("dutySub").textContent = s.Mode === 1 ? "fixed" : "from curve";
-    $("fanGrid").innerHTML = fans.map(x => `<div class="fanpill"><span class="n">Corsair · ${x.Name||"fan"}</span>`
+    const family = f => ({"corsair-link":"Corsair","motherboard":"Motherboard","lian-li":"Lian Li"})[f] || f;
+    $("fanGrid").innerHTML = fans.map(x => `<div class="fanpill"><span class="n">${family(x.Family)} · ${x.Name||"fan"}</span>`
       + `<span class="r${x.Rpm == null ? " none" : ""}">${x.Rpm == null ? "no rpm" : x.Rpm + " rpm"}</span></div>`).join("");
     $("dashWarnings").innerHTML = (s.Warnings||[]).filter(w => !String(w).includes("LED registry"))
       .map(w => `<div class="dashwarn">⚠&nbsp; ${String(w).replace(/</g,"&lt;")}</div>`).join("");

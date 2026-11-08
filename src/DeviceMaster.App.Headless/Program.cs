@@ -56,6 +56,7 @@ internal static class Program
                 "lcd" => RunLcd(rest, trace),
                 "loop" => RunLoop(rest, trace),
                 "web" => RunWeb(rest, trace),
+                "dashboard-preview" => RunDashboardPreview(rest),
                 "help" or "--help" or "-h" => PrintUsageAnd(0),
                 _ => UnknownCommand(command),
             };
@@ -566,6 +567,46 @@ internal static class Program
     }
 
     /// <summary>Control loop + tiny web dashboard (the container's recommended mode).</summary>
+    /// <summary>Renders the Turzx 8.8" dashboard with sample figures to a PNG (layout check without a panel).</summary>
+    private static int RunDashboardPreview(List<string> args)
+    {
+        var output = GetOption(args, "--out") ?? "dashboard.png";
+        var busy = args.Contains("--busy");
+        var sample = new DeviceMaster.Lcd.Skia.TurzxDashboardData
+        {
+            Host = "example-host",
+            HasLlm = true,
+            LlmModel = "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
+            LlmState = busy ? "generating" : "idle",
+            LlmTokPerSec = busy ? 108.4 : 0,
+            LlmTokHistory = Enumerable.Range(0, 60).Select(i => busy ? 80 + 30 * Math.Sin(i / 6.0) : 0.0).ToList(),
+            LlmSlots = busy
+                ? [new("generating", 12_400), new("generating", 3_100), new("idle", 0), new("prefill", 88_000)]
+                : [new("idle", 0), new("idle", 0), new("idle", 0), new("idle", 0)],
+            LlmQueued = busy ? 1 : 0,
+            LlmRequests = 1_284,
+            GpuName = "NVIDIA GeForce RTX 4090",
+            GpuTempC = busy ? 67 : 45,
+            GpuUtil = busy ? 94 : 0,
+            GpuPowerW = busy ? 312 : 15,
+            VramUsedGb = 23.4,
+            VramTotalGb = 24,
+            CpuName = "AMD Ryzen 7 9800X3D 8-Core Processor",
+            CpuTempC = busy ? 71 : 42,
+            CpuLoad = busy ? 63 : 2,
+            CpuPowerW = busy ? 88 : 24,
+            RamUsedGb = 96,
+            RamTotalGb = 121,
+            FanRpm = busy ? 1_240 : 660,
+            FanDuty = busy ? 62 : 35,
+            FanMode = "curve on cpu",
+        };
+        File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
+        var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);
+        Console.WriteLine($"wrote {output} (landscape 1920×480); native frame {native.Length} bytes");
+        return 0;
+    }
+
     private static int RunWeb(List<string> args, bool trace)
     {
         var configPath = GetOption(args, "--config") ?? HeadlessConfig.DefaultPath;
@@ -576,9 +617,20 @@ internal static class Program
             return 1;
         }
 
-        // --config and --port are the only flags
+        // --bind restricts the dashboard to given addresses (repeatable; e.g. a tailnet IP + 127.0.0.1)
+        var binds = new List<string>();
+        for (var i = 0; i < args.Count - 1; i++)
+        {
+            if (args[i] == "--bind")
+            {
+                binds.Add(args[i + 1]);
+            }
+        }
+
+        // --config, --port and --bind are the only flags
         var leftover = args.Where(a => a != "--config" && a != configPath
                                         && a != "--port" && a != portText
+                                        && a != "--bind" && !binds.Contains(a)
                                         && !string.IsNullOrWhiteSpace(a)).ToList();
         if (leftover.Count > 0)
         {
@@ -588,7 +640,7 @@ internal static class Program
 
         var log = (Action<string>)(msg => Log.Information("{msg}", msg));
         using var loop = StartLoop(configPath, trace, log);
-        using var web = new HeadlessWebServer(loop, port, log, configPath);
+        using var web = new HeadlessWebServer(loop, port, log, configPath, binds);
 
         SignalWatcher.Install();
 

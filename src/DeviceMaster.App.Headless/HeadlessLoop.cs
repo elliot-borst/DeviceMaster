@@ -27,7 +27,7 @@ namespace DeviceMaster.App.Headless;
 /// Safety (mirrors CLAUDE.md): pump duty hard-floored, sensor failure ⇒ 100%, hub writes only
 /// through LinkHub (VID/PID-identified), Stop() restores hardware mode on every hub.
 /// </summary>
-public sealed class HeadlessLoop : IDisposable
+public sealed partial class HeadlessLoop : IDisposable
 {
     // tick policy — same constants as the Windows ControlLoop
     private const int TickMs = 1000;
@@ -120,6 +120,7 @@ public sealed class HeadlessLoop : IDisposable
             _cts = new CancellationTokenSource();
             _thread = new Thread(() => Run(_cts.Token)) { IsBackground = true, Name = "DeviceMaster headless loop" };
             _thread.Start();
+            StartPeripheralWorkers(_cts.Token);
             _log("headless: control loop started");
         }
     }
@@ -142,6 +143,7 @@ public sealed class HeadlessLoop : IDisposable
         thread?.Join(TimeSpan.FromSeconds(10));
         _rainbow?.Dispose(); // no more frames before the hubs go back to hardware mode
         _rainbow = null;
+        StopPeripheralWorkers();
         ReleaseHardware();
         _status = new ControlStatus();
         _log("headless: control loop stopped, hubs restored to hardware mode");
@@ -245,6 +247,7 @@ public sealed class HeadlessLoop : IDisposable
                 }
             }
 
+            ApplyMotherboardFans(cfg, 0, off: true, readings, warnings);
             var sourceTempForStatus = cfg.Control.Source == CurveSource.Coolant
                 ? coolant
                 : ReadSourceTemperature(cfg);
@@ -348,6 +351,9 @@ public sealed class HeadlessLoop : IDisposable
             }
         }
 
+        // ---- motherboard fan headers: same duty, same failsafe ----
+        ApplyMotherboardFans(cfg, duty, off: false, readings, warnings);
+
         // ---- rescan the chains (topology changes: a device moved/removed) ----
         if (++_ticksSinceRescan >= CorsairRescanTicks)
         {
@@ -396,6 +402,7 @@ public sealed class HeadlessLoop : IDisposable
         }
 
         ApplyGpuRgb(cfg, warnings);
+        ApplyAura(cfg, warnings);
 
         // ---- pump LCD ----
         ApplyLcd(cfg, coolant, sourceTemp, duty, pumpDuty, readings, warnings);
@@ -451,6 +458,8 @@ public sealed class HeadlessLoop : IDisposable
             Devices = readings,
             Warnings = warnings,
         };
+
+        UpdateDashboard(cfg, _status);
 
         // optional status snapshot file (dashboards / external monitoring)
         if (cfg.StatusFile is { Length: > 0 } && Environment.TickCount64 >= _statusFileDue)
@@ -610,6 +619,13 @@ public sealed class HeadlessLoop : IDisposable
     /// <summary>GPU reading: external sensor file first (host-cron pattern), nvidia-smi as fallback.</summary>
     private GpuReading? ReadGpu(HeadlessConfig cfg)
     {
+        // a local LLM server already samples the GPU — use it while it's up
+        if (GpuFromLlm() is { } fromLlm)
+        {
+            _gpuSensorStale = false;
+            return fromLlm;
+        }
+
         if (!string.IsNullOrWhiteSpace(cfg.GpuSensorFile))
         {
             try
@@ -1005,6 +1021,8 @@ public sealed class HeadlessLoop : IDisposable
 
     private void ReleaseHardware()
     {
+        ReleasePeripherals(); // motherboard fan headers back to the BIOS curve first
+
         foreach (var hub in _hubs)
         {
             try
