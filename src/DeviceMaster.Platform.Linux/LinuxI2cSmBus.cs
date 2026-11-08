@@ -66,9 +66,12 @@ public sealed class LinuxI2cSmBus : ISmBus, IDisposable
 
     public int WriteBlockData(byte address, byte command, byte[] data)
     {
-        var payload = new byte[data.Length + 1];
+        // SMBus block write on the wire: command, byte count, data (the count was missing — the
+        // chip then read the first color byte as the count and stored garbage)
+        var payload = new byte[data.Length + 2];
         payload[0] = command;
-        Buffer.BlockCopy(data, 0, payload, 1, data.Length);
+        payload[1] = (byte)data.Length;
+        Buffer.BlockCopy(data, 0, payload, 2, data.Length);
         return I2cDev.Run(_fd, [new I2cDev.Message((ushort)address, Write: true, payload)]);
     }
 
