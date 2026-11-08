@@ -587,6 +587,8 @@ internal static class Program
             LlmPromptTokPerSec = 2_456,
             LlmDraftHitPercent = 68,
             LlmCacheHitPercent = 97,
+            LlmContextUsed = busy ? 193_007 : null,
+            LlmContextMax = 262_144,
             GpuName = "NVIDIA GeForce RTX 4090",
             GpuTempC = busy ? 67 : 45,
             GpuUtil = busy ? 94 : 0,

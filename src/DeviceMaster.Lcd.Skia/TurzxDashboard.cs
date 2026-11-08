@@ -37,6 +37,10 @@ public sealed record TurzxDashboardData
     /// <summary>Share of prompt tokens reused from the server's cache instead of read again, 0–100.</summary>
     public double? LlmCacheHitPercent { get; init; }
 
+    /// <summary>Tokens the current (or last) conversation holds, against the model's context limit.</summary>
+    public int? LlmContextUsed { get; init; }
+    public int? LlmContextMax { get; init; }
+
     public string GpuName { get; init; } = "GPU";
     public double? GpuTempC { get; init; }
     public double? GpuUtil { get; init; }
@@ -169,8 +173,9 @@ public static class TurzxDashboard
             }
         }
 
-        const float statsWidth = 250;
-        var leftRight = r.Right - 24 - statsWidth - 46;
+        // stats hug the right edge; the speed graph and context bar take the rest
+        const float statsWidth = 160;
+        var leftRight = r.Right - 24 - statsWidth - 40;
 
         // state: dot + word + live phase (or queue)
         var (stateText, stateColor) = !d.LlmReachable ? ("Offline", Danger) : (StateWord(d.LlmState), StateColor(d.LlmState));
@@ -191,13 +196,33 @@ public static class TurzxDashboard
         var speed = d.LlmTokPerSec is { } t && t > 0 ? t.ToString("0", CultureInfo.InvariantCulture) : "0";
         var speedWidth = Label(c, speed, r.Left + 22, r.Top + 226, 112, Text, bold: true);
         Label(c, "tok/s", r.Left + 34 + speedWidth, r.Top + 226, 30, Dim);
-        Sparkline(c, new SKRect(r.Left + 24, r.Top + 250, leftRight, r.Top + 330), d.LlmTokHistory);
+        if (d.LlmContextUsed is { } used && d.LlmContextMax is { } max && max > 0)
+        {
+            // context: a slim bar under the speed graph, amber past 75 %, red past 90 %
+            Sparkline(c, new SKRect(r.Left + 24, r.Top + 246, leftRight, r.Top + 298), d.LlmTokHistory);
+            var fraction = Math.Clamp((double)used / max, 0, 1);
+            var tint = fraction >= 0.9 ? Danger : fraction >= 0.75 ? Warn : Cool;
+            var labelW = Label(c, "CONTEXT", r.Left + 24, r.Top + 326, 18, Dim, bold: true);
+            var valueW = Label(c, $"{Tokens(used)} / {Tokens(max)}", leftRight, r.Top + 326, 20, fraction >= 0.75 ? tint : Text, bold: true, align: SKTextAlign.Right);
+            var track = new SKRect(r.Left + 36 + labelW, r.Top + 313, leftRight - valueW - 14, r.Top + 325);
+            using (var bg = new SKPaint { Color = Track, IsAntialias = true })
+            {
+                c.DrawRoundRect(track, 6, 6, bg);
+            }
+
+            using var fill = new SKPaint { Color = tint, IsAntialias = true };
+            c.DrawRoundRect(new SKRect(track.Left, track.Top, track.Left + (float)(track.Width * fraction), track.Bottom), 6, 6, fill);
+        }
+        else
+        {
+            Sparkline(c, new SKRect(r.Left + 24, r.Top + 250, leftRight, r.Top + 330), d.LlmTokHistory);
+        }
 
         // stats column
         var sx = r.Right - 24 - statsWidth;
         using (var divider = new SKPaint { Color = Line, StrokeWidth = 2 })
         {
-            c.DrawLine(sx - 22, r.Top + 70, sx - 22, r.Top + 336, divider);
+            c.DrawLine(sx - 20, r.Top + 70, sx - 20, r.Top + 336, divider);
         }
 
         // since the server started: tokens written, prompt reading speed, guesses kept, prompt reused from cache

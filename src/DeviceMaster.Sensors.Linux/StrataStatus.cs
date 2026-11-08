@@ -31,6 +31,8 @@ public sealed record LlmStatus(
     double? PromptTokPerSec = null,   // average prompt-reading speed since start (cache reuse excluded)
     double? DraftHitPercent = null,   // speculative draft tokens accepted since start, 0–100
     double? CacheHitPercent = null,   // prompt tokens reused from the conversation cache since start, 0–100
+    int? ContextUsed = null,          // tokens the current conversation holds (the last one while idle)
+    int? ContextMax = null,           // the model's context limit
     double? GpuPowerLimitW = null);
 
 /// <summary>
@@ -140,7 +142,30 @@ public sealed class StrataStatus : IDisposable
                 ? 100.0 * (Num(t4, "drafts_accepted") ?? 0) / offered : null,
             CacheHitPercent: totals is { } t5 && Num(t5, "prompt_tokens") is { } prompted && prompted > 0
                 ? 100.0 * (Num(t5, "reused") ?? 0) / prompted : null,
+            ContextUsed: ContextInUse(root, live),
+            ContextMax: engine is { } e2 && (Num(e2, "context") ?? Num(e2, "max_context")) is { } cm ? (int)cm : null,
             GpuPowerLimitW: hw is { } k && Num(k, "gpu_power_limit") is { } limit && limit > 0 ? limit : null);
+    }
+
+    /// <summary>
+    /// The conversation being worked on (prompt + tokens written so far), or while idle the most
+    /// recent one (<c>requests[0]</c> is the newest).
+    /// </summary>
+    private static int? ContextInUse(JsonElement root, JsonElement? live)
+    {
+        if (live is { } l && Num(l, "prompt_total") is { } prompt)
+        {
+            return (int)(prompt + (Num(l, "generated") ?? 0));
+        }
+
+        if (root.TryGetProperty("requests", out var requests) && requests.ValueKind == JsonValueKind.Array
+            && requests.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } last
+            && (Num(last, "prompt_total") ?? Num(last, "prompt_tokens")) is { } lastPrompt)
+        {
+            return (int)(lastPrompt + (Num(last, "output_tokens") ?? 0));
+        }
+
+        return null;
     }
 
     /// <summary>Prompt tokens actually read (not reused from the cache) per second of prompt time.</summary>

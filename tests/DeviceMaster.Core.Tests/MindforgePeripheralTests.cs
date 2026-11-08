@@ -96,7 +96,21 @@ public class StrataStatusTests
         Assert.Equal(2500, s.PromptTokPerSec); // (120000 - 100000 reused) tokens in 8 s
         Assert.Equal(75, s.DraftHitPercent);
         Assert.Equal(100.0 * 100000 / 120000, s.CacheHitPercent!.Value, 6);
+        Assert.Equal(262144, s.ContextMax);
         Assert.Equal(500, s.GpuPowerLimitW);
+    }
+
+    [Fact]
+    public void ContextIsTheLiveConversationOrTheNewestRequest()
+    {
+        var busy = StrataStatus.Parse("""{"live": {"prompt_total": 190000, "generated": 512}}""", DateTime.UtcNow);
+        Assert.Equal(190512, busy.ContextUsed);
+        var idle = StrataStatus.Parse("""
+            {"live": {"prompt_total": null},
+             "requests": [{"prompt_total": 56925, "output_tokens": 245}, {"prompt_total": 195993, "output_tokens": 662}]}
+            """, DateTime.UtcNow);
+        Assert.Equal(57170, idle.ContextUsed);
+        Assert.Null(StrataStatus.Parse("{}", DateTime.UtcNow).ContextUsed);
     }
 
     [Fact]
