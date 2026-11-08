@@ -9,7 +9,10 @@ public static class GpuI2cLocator
 {
     public sealed record Match(string DevicePath, string Name, string PciAddress);
 
-    /// <summary>All NVIDIA i2c adapter nodes visible to this host.</summary>
+    /// <summary>PCI subsystem vendor of ASUS boards (their GPUs carry the ENE RGB controller).</summary>
+    public const int AsusSubsystemVendor = 0x1043;
+
+    /// <summary>All NVIDIA i2c adapter nodes visible to this host, in adapter order (1, 2, …) per GPU.</summary>
     public static IReadOnlyList<Match> FindAll(string sysRoot = "/sys")
     {
         var matches = new List<Match>();
@@ -32,7 +35,40 @@ public static class GpuI2cLocator
             matches.Add(new Match($"/dev/{node}", name, pci));
         }
 
-        return matches;
+        // directory order is arbitrary (i2c-10 sorts before i2c-7); the RGB chip is on adapter 1
+        return matches.OrderBy(m => m.PciAddress, StringComparer.Ordinal).ThenBy(m => AdapterNumber(m.Name)).ToList();
+    }
+
+    /// <summary>Every adapter of the wanted GPU (null = the first GPU found), in adapter order.</summary>
+    public static IReadOnlyList<Match> Candidates(string? preferredPciAddress = null, string sysRoot = "/sys")
+    {
+        var all = FindAll(sysRoot);
+        var pci = preferredPciAddress ?? all.FirstOrDefault()?.PciAddress;
+        return pci is null ? [] : all.Where(m => m.PciAddress is { } p && SamePci(p, pci)).ToList();
+    }
+
+    /// <summary>The GPU's PCI subsystem vendor (the board maker: 0x1043 = ASUS), or null.</summary>
+    public static int? SubsystemVendor(string pciAddress, string sysRoot = "/sys")
+    {
+        var parts = pciAddress.Split(':', '.');
+        if (parts.Length != 3
+            || !int.TryParse(parts[0], System.Globalization.NumberStyles.HexNumber, null, out var bus)
+            || !int.TryParse(parts[1], System.Globalization.NumberStyles.HexNumber, null, out var device)
+            || !int.TryParse(parts[2], System.Globalization.NumberStyles.HexNumber, null, out var function))
+        {
+            return null;
+        }
+
+        var text = ReadFile(Path.Combine(sysRoot, "bus", "pci", "devices", $"0000:{bus:x2}:{device:x2}.{function:x}", "subsystem_vendor"));
+        return text is not null && text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(text[2..], System.Globalization.NumberStyles.HexNumber, null, out var vendor) ? vendor : null;
+    }
+
+    /// <summary>"NVIDIA i2c adapter 4 at 1:00.0" → 4 (unknown → last).</summary>
+    public static int AdapterNumber(string name)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(name, @"adapter (\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success ? int.Parse(match.Groups[1].Value) : int.MaxValue;
     }
 
     /// <summary>

@@ -149,12 +149,19 @@ manual duty, pump duty, RGB, LCD), plus:
   cron writes one `nvidia-smi --query-gpu=... --format=csv,noheader,nounits` row into the
   config volume every minute; the loop reads it (freshness-checked) and falls back to
   `NvidiaSmiPath` if the file is missing/stale.
+- **Which bus:** ASUS boards keep the ENE chip on the GPU's *first* NVIDIA adapter
+  ("NVIDIA i2c adapter 1", e.g. `/dev/i2c-7`), not whichever node sorts first. The loop drives GPU
+  RGB only on ASUS boards (PCI subsystem vendor `0x1043`) and takes the first of the GPU's adapters,
+  in adapter order, whose `0x67` passes the read-only ENE fingerprint. `I2cDevice` overrides it.
 - **The GPU's ENE i2c bus may be unusable at the driver level.** Some NVIDIA driver
   builds (observed with 610.57.04) reject every transaction on their own i2c-dev adapter
   with `EINVAL` — including trivial 1-byte writes, and OpenRGB fails identically. The loop
   logs `no ENE controller at 0x67` and continues without GPU RGB; the chip's flash-persisted
   color remains on the card. There is no software workaround on the host; it is a driver
   limitation (a different driver build may expose the bus).
+  Note: before #21 DeviceMaster's own raw-transfer code sent the wrong ioctl (`I2C_TENBIT`
+  instead of `I2C_RDWR`), which also fails with `EINVAL`, so earlier "unusable bus" sightings
+  should be rechecked with a current build.
 - LCD frames render through SkiaSharp (`DeviceMaster.Lcd.Skia`); the image ships
   `fonts-dejavu-core` because the base image has no fonts.
 - `nvidia-smi` is not in the image. Without a GPU temperature source, GPU source

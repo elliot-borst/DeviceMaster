@@ -154,6 +154,30 @@ public class LinuxPlatformTests : IDisposable
     }
 
     [Fact]
+    public void GpuI2cLocator_Candidates_AreInAdapterOrder()
+    {
+        // directory order puts i2c-10 (adapter 4) before i2c-7 (adapter 1, where ASUS boards keep the ENE chip)
+        foreach (var (node, adapter) in new[] { ("i2c-10", 4), ("i2c-7", 1), ("i2c-8", 2) })
+        {
+            MakeDir($"bus/i2c/devices/{node}");
+            Write($"bus/i2c/devices/{node}/name", $"NVIDIA i2c adapter {adapter} at 1:00.0");
+        }
+
+        var candidates = GpuI2cLocator.Candidates(null, _fixtureRoot);
+        Assert.Equal(["/dev/i2c-7", "/dev/i2c-8", "/dev/i2c-10"], candidates.Select(c => c.DevicePath));
+        Assert.Equal("/dev/i2c-7", GpuI2cLocator.Find(null, _fixtureRoot)!.DevicePath);
+    }
+
+    [Fact]
+    public void GpuI2cLocator_SubsystemVendor_ReadsTheBoardMaker()
+    {
+        MakeDir("bus/pci/devices/0000:01:00.0");
+        Write("bus/pci/devices/0000:01:00.0/subsystem_vendor", "0x1043\n");
+        Assert.Equal(GpuI2cLocator.AsusSubsystemVendor, GpuI2cLocator.SubsystemVendor("1:00.0", _fixtureRoot));
+        Assert.Null(GpuI2cLocator.SubsystemVendor("2:00.0", _fixtureRoot));
+    }
+
+    [Fact]
     public void GpuI2cLocator_SamePci_NumericHexCompare()
     {
         Assert.True(GpuI2cLocator.SamePci("1:00.0", "01:00.0"));

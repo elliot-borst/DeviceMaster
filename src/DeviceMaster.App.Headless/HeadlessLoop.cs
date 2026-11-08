@@ -785,25 +785,53 @@ public sealed partial class HeadlessLoop : IDisposable
         _gpuRgbScanned = true;
         try
         {
-            string? path = cfg.I2cDevice;
-            if (path is null)
+            // an explicit I2cDevice is taken as is; otherwise only ASUS boards, and the first of the
+            // GPU's adapters whose 0x67 answers the read-only ENE fingerprint (normally adapter 1)
+            var candidates = new List<string>();
+            if (cfg.I2cDevice is { } configured)
             {
-                path = GpuI2cLocator.Find(cfg.GpuPciAddress)?.DevicePath;
+                candidates.Add(configured);
             }
-
-            if (path is null)
+            else
             {
-                _log("headless: no NVIDIA i2c adapter found — GPU RGB unavailable");
-                return;
-            }
-
-            using (var probe = new LinuxI2cSmBus(path))
-            {
-                if (!EneRgbDevice.Fingerprint(probe, 0x67))
+                var adapters = GpuI2cLocator.Candidates(cfg.GpuPciAddress);
+                if (adapters.Count == 0)
                 {
-                    _log($"headless: no ENE controller at 0x67 on {path} — GPU RGB unavailable");
+                    _log("headless: no NVIDIA i2c adapter found — GPU RGB unavailable");
                     return;
                 }
+
+                if (adapters[0].PciAddress is not { } pci || GpuI2cLocator.SubsystemVendor(pci) != GpuI2cLocator.AsusSubsystemVendor)
+                {
+                    _log("headless: GPU is not an ASUS board — no ENE RGB controller expected, GPU RGB unavailable");
+                    return;
+                }
+
+                candidates.AddRange(adapters.Select(a => a.DevicePath));
+            }
+
+            string? path = null;
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    using var probe = new LinuxI2cSmBus(candidate);
+                    if (EneRgbDevice.Fingerprint(probe, 0x67))
+                    {
+                        path = candidate;
+                        break;
+                    }
+                }
+                catch
+                {
+                    // this adapter rejects transactions (see docs/LINUX.md); try the next
+                }
+            }
+
+            if (path is null)
+            {
+                _log($"headless: no ENE controller at 0x67 on {string.Join(", ", candidates)} — GPU RGB unavailable");
+                return;
             }
 
             _gpuBus = new LinuxI2cSmBus(path);

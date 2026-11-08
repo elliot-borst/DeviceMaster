@@ -13,7 +13,7 @@ public static class I2cDev
 {
     private const ushort I2cMWrite = 0x00;
     private const ushort I2cMRead = 0x01;
-    private const uint I2cRdwrIoctl = 0x0706;
+    private const uint I2cRdwrIoctl = 0x0707; // I2C_RDWR (0x0706 is I2C_TENBIT)
     private const int O_RDWR = 0x0002;
 
     // mirrors struct i2c_msg (include/uapi/linux/i2c.h): __u16 addr, __u16 flags, __u16 len, __u8 *buf.
@@ -28,11 +28,12 @@ public static class I2cDev
         public IntPtr Buf;
     }
 
+    // mirrors struct i2c_rdwr_ioctl_data: struct i2c_msg *msgs; __u32 nmsgs (pointer first)
     [StructLayout(LayoutKind.Sequential)]
     private struct I2cRdwr
     {
-        public uint Msgs;
-        public IntPtr Msg;
+        public IntPtr Msgs;
+        public uint Count;
     }
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
@@ -100,10 +101,24 @@ public static class I2cDev
                 Marshal.StructureToPtr(msg, msgArray + i * msgSize, false);
             }
 
-            var rdwr = new I2cRdwr { Msgs = (uint)messages.Count, Msg = msgArray };
+            var rdwr = new I2cRdwr { Msgs = msgArray, Count = (uint)messages.Count };
             Marshal.StructureToPtr(rdwr, rdwrPtr, false);
 
-            return Ioctl(fd, I2cRdwrIoctl, rdwrPtr) == 0 ? 0 : -1;
+            if (Ioctl(fd, I2cRdwrIoctl, rdwrPtr) < 0)
+            {
+                return -1;
+            }
+
+            // read messages land in the unmanaged buffers: copy them back to the caller's arrays
+            for (var i = 0; i < messages.Count; i++)
+            {
+                if (!messages[i].Write && pointers[i] != IntPtr.Zero)
+                {
+                    Marshal.Copy(pointers[i], messages[i].Data, 0, messages[i].Data.Length);
+                }
+            }
+
+            return 0;
         }
         catch
         {
