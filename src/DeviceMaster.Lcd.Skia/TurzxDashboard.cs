@@ -38,10 +38,11 @@ public sealed record TurzxDashboardData
     public double? GpuTempC { get; init; }
     public double? GpuUtil { get; init; }
     public double? GpuPowerW { get; init; }
-    public double? GpuPowerLimitW { get; init; }
+
+    /// <summary>GPU fan speed in percent (0 = the card's idle fan stop).</summary>
+    public double? GpuFanPercent { get; init; }
     public double? VramUsedGb { get; init; }
     public double? VramTotalGb { get; init; }
-    public IReadOnlyList<double> GpuTempHistory { get; init; } = [];
 
     public string CpuName { get; init; } = "CPU";
     public double? CpuTempC { get; init; }
@@ -49,7 +50,6 @@ public sealed record TurzxDashboardData
     public double? CpuPowerW { get; init; }
     public double? RamUsedGb { get; init; }
     public double? RamTotalGb { get; init; }
-    public IReadOnlyList<double> CpuTempHistory { get; init; } = [];
 
     /// <summary>The CPU cooler's fans (motherboard header).</summary>
     public int? FanRpm { get; init; }
@@ -67,9 +67,6 @@ public static class TurzxDashboard
 {
     public const int Width = 1920, Height = 480;
 
-    /// <summary>Minutes of temperature history the GPU/CPU cards show.</summary>
-    public const int TempHistoryMinutes = 10;
-
     private static readonly SKColor Bg = SKColor.Parse("#0f1115");
     private static readonly SKColor Card = SKColor.Parse("#171a20");
     private static readonly SKColor Line = SKColor.Parse("#2a2f39");
@@ -83,6 +80,11 @@ public static class TurzxDashboard
     private static readonly SKColor Good = SKColor.Parse("#34d399");
     private static readonly SKColor Warn = SKColor.Parse("#fbbf24");
     private static readonly SKColor Danger = SKColor.Parse("#ef4444");
+
+    // vendor colours for the device names
+    private static readonly SKColor Nvidia = SKColor.Parse("#76b900");
+    private static readonly SKColor Amd = SKColor.Parse("#f2353b");
+    private static readonly SKColor Intel = SKColor.Parse("#3d9be9");
 
     private const string Families = "DejaVu Sans, Segoe UI, Liberation Sans, sans-serif";
     private static readonly SKTypeface Regular = Face(SKFontStyle.Normal);
@@ -126,22 +128,17 @@ public static class TurzxDashboard
         using var canvas = new SKCanvas(bitmap);
         canvas.Clear(Bg);
 
-        // three cards: LLM (widest) | GPU | CPU + RAM + cooler; without an LLM, GPU and CPU split the bar
-        const float pad = 18, gap = 16, top = 18;
+        // three cards: LLM (widest) | GPU | CPU, the last two sharing what's left equally
+        const float pad = 18, gap = 16, top = 18, llmWidth = 840;
         var bottom = Height - top;
         var x = pad;
-        float gpuWidth;
         if (d.HasLlm)
         {
-            DrawLlm(canvas, new SKRect(x, top, x + 900, bottom), d);
-            x += 900 + gap;
-            gpuWidth = 460;
-        }
-        else
-        {
-            gpuWidth = (Width - 2 * pad - gap) / 2;
+            DrawLlm(canvas, new SKRect(x, top, x + llmWidth, bottom), d);
+            x += llmWidth + gap;
         }
 
+        var gpuWidth = (Width - pad - x - gap) / 2;
         DrawGpu(canvas, new SKRect(x, top, x + gpuWidth, bottom), d);
         x += gpuWidth + gap;
         DrawCpu(canvas, new SKRect(x, top, Width - pad, bottom), d);
@@ -235,34 +232,35 @@ public static class TurzxDashboard
 
     private static void DrawGpu(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "GPU", ShortGpu(d.GpuName), 30, bold: true);
-        Reading(c, r, d.GpuTempC, TempColor(d.GpuTempC, 70, 83), d.GpuPowerW,
-            d.GpuPowerLimitW is { } limit ? $"of {limit:0} W" : "power draw");
-        Bar(c, r.Left + 24, r.Right - 24, r.Top + 222, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—");
-        Bar(c, r.Left + 24, r.Right - 24, r.Top + 290, "VRAM", d.VramUsedGb, d.VramTotalGb,
+        CardShell(c, r, "GPU", ShortGpu(d.GpuName), 30, bold: true, VendorColor(d.GpuName));
+        Reading(c, r, d.GpuTempC, TempColor(d.GpuTempC, 70, 83), d.GpuPowerW);
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—");
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "VRAM", d.VramUsedGb, d.VramTotalGb,
             d.VramUsedGb is { } v ? (d.VramTotalGb is { } vt ? $"{v:0.0} / {vt:0} GB" : $"{v:0.0} GB") : "—");
-        TempTrend(c, r, d.GpuTempHistory);
+        var fan = d.GpuFanPercent switch
+        {
+            null => "—",
+            < 0.5 => "stopped",
+            var f => $"{f:0}%",
+        };
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "FANS", d.GpuFanPercent, 100, fan, fill: Cool, valueColor: Cool);
     }
 
     private static void DrawCpu(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "CPU", ShortCpu(d.CpuName), 30, bold: true);
-        Reading(c, r, d.CpuTempC, TempColor(d.CpuTempC, 75, 88), d.CpuPowerW, "power draw");
-
-        var mid = r.MidX;
-        Bar(c, r.Left + 24, mid - 10, r.Top + 222, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—");
-        Bar(c, mid + 10, r.Right - 24, r.Top + 222, "RAM", d.RamUsedGb, d.RamTotalGb,
-            d.RamUsedGb is { } u ? (d.RamTotalGb is { } rt ? $"{u:0}/{rt:0}" : $"{u:0} GB") : "—");
-
+        CardShell(c, r, "CPU", ShortCpu(d.CpuName), 30, bold: true, VendorColor(d.CpuName));
+        Reading(c, r, d.CpuTempC, TempColor(d.CpuTempC, 75, 88), d.CpuPowerW);
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—");
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "RAM", d.RamUsedGb, d.RamTotalGb,
+            d.RamUsedGb is { } u ? (d.RamTotalGb is { } rt ? $"{u:0} / {rt:0} GB" : $"{u:0} GB") : "—");
         var fans = d.Failsafe ? "FAILSAFE 100%" : d.FanRpm is { } rpm ? $"{rpm.ToString("N0", CultureInfo.InvariantCulture)} rpm · {d.FanDuty}%" : $"{d.FanDuty}%";
-        Bar(c, r.Left + 24, r.Right - 24, r.Top + 290, "COOLER", d.Failsafe ? 100 : d.FanDuty, 100, fans,
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "COOLER", d.Failsafe ? 100 : d.FanDuty, 100, fans,
             fill: d.Failsafe ? Danger : Cool, valueColor: d.Failsafe ? Danger : Cool);
-        TempTrend(c, r, d.CpuTempHistory);
     }
 
     // ---------- pieces ----------
 
-    private static void CardShell(SKCanvas c, SKRect r, string title, string subtitle, float subtitleSize, bool bold)
+    private static void CardShell(SKCanvas c, SKRect r, string title, string subtitle, float subtitleSize, bool bold, SKColor? subtitleColor = null)
     {
         using (var fill = new SKPaint { Color = Card, IsAntialias = true })
         {
@@ -275,15 +273,23 @@ public static class TurzxDashboard
         }
 
         var titleWidth = Label(c, title, r.Left + 24, r.Top + 46, 22, Dim, bold: true);
-        FitLabel(c, subtitle, r.Right - 24, r.Top + 47, subtitleSize, r.Width - 48 - titleWidth - 24, Text, bold, SKTextAlign.Right);
+        FitLabel(c, subtitle, r.Right - 24, r.Top + 47, subtitleSize, r.Width - 48 - titleWidth - 24, subtitleColor ?? Text, bold, SKTextAlign.Right);
     }
 
-    /// <summary>Big temperature on the left, power draw (with a caption) on the right.</summary>
-    private static void Reading(SKCanvas c, SKRect r, double? tempC, SKColor color, double? powerW, string caption)
+    /// <summary>Temperature (left) and power draw (right) at one size, room for three digits each.</summary>
+    private static void Reading(SKCanvas c, SKRect r, double? tempC, SKColor color, double? powerW)
     {
-        Label(c, tempC is { } t ? $"{t:0}°" : "—", r.Left + 22, r.Top + 176, 104, color, bold: true);
-        Label(c, powerW is { } p ? $"{p:0} W" : "—", r.Right - 24, r.Top + 136, 38, Text, bold: true, align: SKTextAlign.Right);
-        Label(c, caption, r.Right - 24, r.Top + 168, 22, Dim, align: SKTextAlign.Right);
+        const float size = 84, unit = 44;
+        var y = r.Top + 160;
+        Label(c, tempC is { } t ? $"{t:0}°" : "—", r.Left + 22, y, size, color, bold: true);
+        if (powerW is not { } p)
+        {
+            Label(c, "—", r.Right - 24, y, size, Text, bold: true, align: SKTextAlign.Right);
+            return;
+        }
+
+        var unitWidth = Label(c, "W", r.Right - 24, y, unit, Dim, bold: true, align: SKTextAlign.Right);
+        Label(c, $"{p:0}", r.Right - 34 - unitWidth, y, size, Text, bold: true, align: SKTextAlign.Right);
     }
 
     private static void Stat(SKCanvas c, float x, float y, string label, string value, string unit)
@@ -325,44 +331,6 @@ public static class TurzxDashboard
             : null;
         using var paint = new SKPaint { Color = fill ?? SKColors.White, Shader = shader, IsAntialias = true };
         c.DrawRoundRect(fillRect, 9, 9, paint);
-    }
-
-    /// <summary>The card's bottom strip: temperature over the last minutes, scaled to its own range.</summary>
-    private static void TempTrend(SKCanvas c, SKRect r, IReadOnlyList<double> history)
-    {
-        var y = r.Top + 354;
-        Label(c, $"TEMP · LAST {TempHistoryMinutes} MIN", r.Left + 24, y, 18, Faint, bold: true);
-        if (history.Count < 2)
-        {
-            return;
-        }
-
-        var lo = history.Min();
-        var hi = history.Max();
-        Label(c, lo.ToString("0", CultureInfo.InvariantCulture) + "–" + hi.ToString("0", CultureInfo.InvariantCulture) + "°",
-            r.Right - 24, y, 20, Dim, bold: true, align: SKTextAlign.Right);
-
-        // at least a 10° window so a steady temperature reads as a flat line, not noise
-        var span = Math.Max(hi - lo, 10);
-        var floor = (lo + hi) / 2 - span / 2;
-        var area = new SKRect(r.Left + 24, y + 12, r.Right - 24, r.Bottom - 20);
-        using var path = new SKPath();
-        for (var i = 0; i < history.Count; i++)
-        {
-            var px = area.Left + area.Width * i / (history.Count - 1);
-            var py = area.Bottom - (float)((history[i] - floor) / span) * area.Height;
-            if (i == 0)
-            {
-                path.MoveTo(px, py);
-            }
-            else
-            {
-                path.LineTo(px, py);
-            }
-        }
-
-        using var stroke = new SKPaint { Color = Warn, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3, StrokeJoin = SKStrokeJoin.Round };
-        c.DrawPath(path, stroke);
     }
 
     private static void Sparkline(SKCanvas c, SKRect r, IReadOnlyList<double> history)
@@ -468,6 +436,13 @@ public static class TurzxDashboard
         _ => Accent,
     };
 
+    /// <summary>The maker's brand colour for a CPU/GPU name (NVIDIA green, AMD red, Intel blue).</summary>
+    public static SKColor VendorColor(string name) =>
+        System.Text.RegularExpressions.Regex.IsMatch(name, @"(?i)nvidia|geforce|\b(rtx|gtx|quadro)\b") ? Nvidia
+        : System.Text.RegularExpressions.Regex.IsMatch(name, @"(?i)\bamd\b|ryzen|radeon|epyc|threadripper") ? Amd
+        : System.Text.RegularExpressions.Regex.IsMatch(name, @"(?i)intel|\bcore\b|\barc\b|xeon") ? Intel
+        : Text;
+
     private static SKColor TempColor(double? t, double warn, double hot) =>
         t is not { } v ? Faint : v >= hot ? Danger : v >= warn ? Warn : Text;
 
@@ -495,8 +470,13 @@ public static class TurzxDashboard
     public static string ShortGpu(string name) =>
         Fit(name.Replace("NVIDIA ", "", StringComparison.OrdinalIgnoreCase).Replace("GeForce ", "", StringComparison.OrdinalIgnoreCase), 30);
 
-    public static string ShortCpu(string name) =>
-        Fit(System.Text.RegularExpressions.Regex.Replace(name.Replace("AMD ", "").Replace("Intel(R) ", "").Replace("(TM)", ""), @"\s+\d+-Core Processor", "").Trim(), 30);
+    /// <summary>"AMD Ryzen 7 9800X3D 8-Core Processor" → "R7 9800X3D".</summary>
+    public static string ShortCpu(string name)
+    {
+        var s = System.Text.RegularExpressions.Regex.Replace(name.Replace("AMD ", "").Replace("Intel(R) ", "").Replace("(TM)", ""), @"\s+\d+-Core Processor", "");
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"Ryzen (\d+)\b", "R$1");
+        return Fit(s.Trim(), 30);
+    }
 
     /// <summary>12345 → "12.3K", 1240000 → "1.24M".</summary>
     public static string Tokens(long n) => n switch

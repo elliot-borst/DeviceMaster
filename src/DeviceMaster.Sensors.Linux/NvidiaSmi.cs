@@ -5,7 +5,7 @@ namespace DeviceMaster.Sensors.Linux;
 /// <summary>One GPU's headline figures as reported by nvidia-smi.</summary>
 public sealed record GpuReading(
     string Name, double TemperatureC, double? UtilizationPercent, double? PowerW,
-    double? MemoryUsedMb, double? MemoryTotalMb);
+    double? MemoryUsedMb, double? MemoryTotalMb, double? FanPercent = null);
 
 /// <summary>
 /// Thin nvidia-smi wrapper (the GPU is the only meaningful sensor on this host besides the
@@ -22,7 +22,7 @@ public static class NvidiaSmi
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = path,
-                Arguments = "--query-gpu=name,temperature.gpu,utilization.gpu,power.draw,memory.used,memory.total --format=csv,noheader,nounits",
+                Arguments = "--query-gpu=name,temperature.gpu,utilization.gpu,power.draw,memory.used,memory.total,fan.speed --format=csv,noheader,nounits",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -64,7 +64,8 @@ public static class NvidiaSmi
             UtilizationPercent: parts.Length > 2 ? int.Parse(parts[2]) : null,
             PowerW: parts.Length > 3 ? ParseDouble(parts[3]) : null,
             MemoryUsedMb: parts.Length > 4 ? int.Parse(parts[4]) : null,
-            MemoryTotalMb: parts.Length > 5 ? int.Parse(parts[5]) : null);
+            MemoryTotalMb: parts.Length > 5 ? int.Parse(parts[5]) : null,
+            FanPercent: parts.Length > 6 ? ParseDouble(parts[6].TrimEnd('%')) : null); // "[N/A]" on fanless cards → null
     }
 
     private static double? ParseDouble(string text)

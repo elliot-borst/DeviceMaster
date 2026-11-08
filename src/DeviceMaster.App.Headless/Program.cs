@@ -590,8 +590,7 @@ internal static class Program
             GpuTempC = busy ? 67 : 45,
             GpuUtil = busy ? 94 : 0,
             GpuPowerW = busy ? 312 : 15,
-            GpuPowerLimitW = 500,
-            GpuTempHistory = Enumerable.Range(0, 60).Select(i => (busy ? 60 : 43) + 4 * Math.Sin(i / 9.0)).ToList(),
+            GpuFanPercent = busy ? 41 : 0,
             VramUsedGb = 23.4,
             VramTotalGb = 24,
             CpuName = "AMD Ryzen 7 9800X3D 8-Core Processor",
@@ -600,7 +599,6 @@ internal static class Program
             CpuPowerW = busy ? 88 : 24,
             RamUsedGb = 96,
             RamTotalGb = 121,
-            CpuTempHistory = Enumerable.Range(0, 60).Select(i => (busy ? 66 : 41) + 3 * Math.Cos(i / 7.0)).ToList(),
             FanRpm = busy ? 1_240 : 660,
             FanDuty = busy ? 62 : 35,
         };

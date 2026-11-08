@@ -45,6 +45,9 @@ public sealed record ControlStatus
     public double? RamTotalGb { get; init; }
     public string? GpuName { get; init; }
 
+    /// <summary>GPU fan speed in percent (0 = the card's idle fan stop; null = unknown).</summary>
+    public double? GpuFanPercent { get; init; }
+
     public int TargetDutyPercent { get; init; }
 
     /// <summary>Pump duty actually written to the chain (null = hubs in hardware mode).</summary>

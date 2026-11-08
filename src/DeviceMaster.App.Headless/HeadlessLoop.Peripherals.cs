@@ -38,11 +38,8 @@ public sealed partial class HeadlessLoop
     private readonly AutoResetEvent _turzxWake = new(false);
     private volatile TurzxDashboardData? _dashboard;
 
-    // temperature history for the dashboard: one sample every 10 s
-    private const int TempSampleMs = 10_000;
-    private readonly Queue<double> _gpuTempHistory = new();
-    private readonly Queue<double> _cpuTempHistory = new();
-    private long _nextTempSampleAt;
+    // GPU fan speed: the LLM server's GPU figures have none, so nvidia-smi is asked alongside it
+    private double? _gpuFanPercent;
 
     private void StartPeripheralWorkers(CancellationToken token)
     {
@@ -209,6 +206,7 @@ public sealed partial class HeadlessLoop
                 {
                     _strata ??= new StrataStatus(url, StrataStatus.ReadKeyFile(cfg.StrataKeyFile));
                     _llm = _strata.ReadAsync(token).GetAwaiter().GetResult() ?? _llm;
+                    _gpuFanPercent = File.Exists(cfg.NvidiaSmiPath) ? NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath)?.FanPercent : null;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -245,13 +243,6 @@ public sealed partial class HeadlessLoop
         var llm = FreshLlm();
         var fan = status.Devices.FirstOrDefault(d => d.Family == "motherboard" && d.Rpm is > 0)
             ?? status.Devices.FirstOrDefault(d => !d.IsPump && !d.IsScreen && d.Rpm is > 0);
-        if (Environment.TickCount64 >= _nextTempSampleAt)
-        {
-            _nextTempSampleAt = Environment.TickCount64 + TempSampleMs;
-            Sample(_gpuTempHistory, status.GpuTemperatureC);
-            Sample(_cpuTempHistory, status.CpuTemperatureC);
-        }
-
         _dashboard = new TurzxDashboardData
         {
             HasLlm = cfg.StrataUrl is { Length: > 0 },
@@ -271,35 +262,19 @@ public sealed partial class HeadlessLoop
             GpuTempC = status.GpuTemperatureC,
             GpuUtil = status.GpuLoadPercent,
             GpuPowerW = status.GpuPowerW,
-            GpuPowerLimitW = llm?.GpuPowerLimitW,
+            GpuFanPercent = status.GpuFanPercent,
             VramUsedGb = status.VramUsedGb,
             VramTotalGb = status.VramTotalGb,
-            GpuTempHistory = [.. _gpuTempHistory],
             CpuName = status.CpuName ?? "CPU",
             CpuTempC = status.CpuTemperatureC,
             CpuLoad = status.CpuLoadPercent,
             CpuPowerW = status.CpuPowerW,
             RamUsedGb = status.RamUsedGb,
             RamTotalGb = status.RamTotalGb,
-            CpuTempHistory = [.. _cpuTempHistory],
             FanRpm = fan?.Rpm,
             FanDuty = status.TargetDutyPercent,
             Failsafe = status.FailsafeActive,
         };
-    }
-
-    private static void Sample(Queue<double> history, double? value)
-    {
-        if (value is not { } v)
-        {
-            return;
-        }
-
-        history.Enqueue(v);
-        while (history.Count > TurzxDashboard.TempHistoryMinutes * 60_000 / TempSampleMs)
-        {
-            history.Dequeue();
-        }
     }
 
     private void RunTurzx(CancellationToken token)

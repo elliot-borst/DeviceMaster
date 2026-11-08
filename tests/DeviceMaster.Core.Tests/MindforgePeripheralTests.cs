@@ -196,4 +196,23 @@ public class TurzxDashboardTests
     [InlineData("prefill", "Read")]
     [InlineData("idle", "Idle")]
     public void SlotWordsAreShort(string state, string expected) => Assert.Equal(expected, TurzxDashboard.SlotWord(state));
+
+    [Theory]
+    [InlineData("AMD Ryzen 7 9800X3D 8-Core Processor", "R7 9800X3D")]
+    [InlineData("AMD Ryzen 9 7950X 16-Core Processor", "R9 7950X")]
+    public void CpuNamesAreShortened(string name, string expected) => Assert.Equal(expected, TurzxDashboard.ShortCpu(name));
+
+    [Fact]
+    public void DeviceNamesTakeTheirMakersColour()
+    {
+        Assert.Equal(SkiaSharp.SKColor.Parse("#76b900"), TurzxDashboard.VendorColor("NVIDIA GeForce RTX 4090"));
+        Assert.Equal(SkiaSharp.SKColor.Parse("#f2353b"), TurzxDashboard.VendorColor("AMD Ryzen 7 9800X3D 8-Core Processor"));
+    }
+
+    [Theory]
+    [InlineData("NVIDIA GeForce RTX 4090, 44, 0, 14.85, 23900, 24564, 0", 0.0)]
+    [InlineData("NVIDIA GeForce RTX 4090, 67, 94, 312.10, 23900, 24564, 41", 41.0)]
+    [InlineData("NVIDIA GeForce RTX 4090, 44, 0, 14.85, 23900, 24564, [N/A]", null)]
+    [InlineData("NVIDIA GeForce RTX 4090, 44, 0, 14.85, 23900, 24564", null)]
+    public void GpuFanSpeedIsParsed(string row, double? expected) => Assert.Equal(expected, DeviceMaster.Sensors.Linux.NvidiaSmi.ParseLine(row)!.FanPercent);
 }
