@@ -40,6 +40,9 @@ public sealed partial class HeadlessLoop
 
     // GPU fan speed: the LLM server's GPU figures have none, so nvidia-smi is asked alongside it
     private double? _gpuFanPercent;
+    private int? _gpuFanRpm;          // NVML (nvidia-smi has percent only)
+    private NvmlFans? _nvmlFans;
+    private long _nvmlRetryAt;
 
     private void StartPeripheralWorkers(CancellationToken token)
     {
@@ -207,6 +210,7 @@ public sealed partial class HeadlessLoop
                     _strata ??= new StrataStatus(url, StrataStatus.ReadKeyFile(cfg.StrataKeyFile));
                     _llm = _strata.ReadAsync(token).GetAwaiter().GetResult() ?? _llm;
                     _gpuFanPercent = File.Exists(cfg.NvidiaSmiPath) ? NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath)?.FanPercent : null;
+                    _gpuFanRpm = ReadGpuFanRpm();
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -223,6 +227,19 @@ public sealed partial class HeadlessLoop
 
         _strata?.Dispose();
         _strata = null;
+        _nvmlFans?.Dispose();
+        _nvmlFans = null;
+    }
+
+    private int? ReadGpuFanRpm()
+    {
+        if (_nvmlFans is null && Environment.TickCount64 >= _nvmlRetryAt)
+        {
+            _nvmlRetryAt = Environment.TickCount64 + 60_000;
+            _nvmlFans = NvmlFans.TryOpen();
+        }
+
+        return _nvmlFans?.ReadRpm();
     }
 
     /// <summary>A recent LLM reading (≤ 10 s old), or null.</summary>
@@ -263,6 +280,7 @@ public sealed partial class HeadlessLoop
             GpuUtil = status.GpuLoadPercent,
             GpuPowerW = status.GpuPowerW,
             GpuFanPercent = status.GpuFanPercent,
+            GpuFanRpm = status.GpuFanRpm,
             VramUsedGb = status.VramUsedGb,
             VramTotalGb = status.VramTotalGb,
             CpuName = status.CpuName ?? "CPU",

@@ -48,6 +48,9 @@ public sealed record ControlStatus
     /// <summary>GPU fan speed in percent (0 = the card's idle fan stop; null = unknown).</summary>
     public double? GpuFanPercent { get; init; }
 
+    /// <summary>GPU fan speed in RPM, averaged over the card's fans (null = unknown).</summary>
+    public int? GpuFanRpm { get; init; }
+
     public int TargetDutyPercent { get; init; }
 
     /// <summary>Pump duty actually written to the chain (null = hubs in hardware mode).</summary>

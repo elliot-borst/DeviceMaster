@@ -453,6 +453,7 @@ public sealed partial class HeadlessLoop : IDisposable
             RamTotalGb = cpuStats.RamTotalGb,
             GpuName = gpu?.Name,
             GpuFanPercent = gpu?.FanPercent ?? (gpu is not null ? _gpuFanPercent : null),
+            GpuFanRpm = gpu is not null ? _gpuFanRpm : null,
             TargetDutyPercent = duty,
             PumpDutyPercent = pumpDuty,
             FailsafeActive = failsafe,

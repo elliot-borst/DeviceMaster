@@ -591,6 +591,7 @@ internal static class Program
             GpuUtil = busy ? 94 : 0,
             GpuPowerW = busy ? 312 : 15,
             GpuFanPercent = busy ? 41 : 0,
+            GpuFanRpm = busy ? 1_450 : 0,
             VramUsedGb = 23.4,
             VramTotalGb = 24,
             CpuName = "AMD Ryzen 7 9800X3D 8-Core Processor",

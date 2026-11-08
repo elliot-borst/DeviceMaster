@@ -41,6 +41,7 @@ public sealed record TurzxDashboardData
 
     /// <summary>GPU fan speed in percent (0 = the card's idle fan stop).</summary>
     public double? GpuFanPercent { get; init; }
+    public int? GpuFanRpm { get; init; }
     public double? VramUsedGb { get; init; }
     public double? VramTotalGb { get; init; }
 
@@ -81,7 +82,8 @@ public static class TurzxDashboard
     private static readonly SKColor Warn = SKColor.Parse("#fbbf24");
     private static readonly SKColor Danger = SKColor.Parse("#ef4444");
 
-    // vendor colours for the device names
+    // colours for the card names: the model in purple, devices in their maker's colour
+    private static readonly SKColor ModelPurple = SKColor.Parse("#a970ff");
     private static readonly SKColor Nvidia = SKColor.Parse("#76b900");
     private static readonly SKColor Amd = SKColor.Parse("#f2353b");
     private static readonly SKColor Intel = SKColor.Parse("#3d9be9");
@@ -149,7 +151,7 @@ public static class TurzxDashboard
 
     private static void DrawLlm(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "LOCAL AI", ShortModel(d.LlmModel), 26, bold: false);
+        CardShell(c, r, "LOCAL AI", ShortModel(d.LlmModel), 30, bold: true, ModelPurple);
 
         // a lone conversation runs outside the batch slots (the slots all say idle):
         // light the first idle pills for that work so the bar matches what's happening
@@ -237,13 +239,15 @@ public static class TurzxDashboard
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—");
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "VRAM", d.VramUsedGb, d.VramTotalGb,
             d.VramUsedGb is { } v ? (d.VramTotalGb is { } vt ? $"{v:0.0} / {vt:0} GB" : $"{v:0.0} GB") : "—");
-        var fan = d.GpuFanPercent switch
-        {
-            null => "—",
-            < 0.5 => "stopped",
-            var f => $"{f:0}%",
-        };
-        Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "FANS", d.GpuFanPercent, 100, fan, fill: Cool, valueColor: Cool);
+        var fan = d.GpuFanPercent is < 0.5 || (d.GpuFanPercent is null && d.GpuFanRpm == 0) ? "stopped"
+            : (d.GpuFanRpm, d.GpuFanPercent) switch
+            {
+                ({ } rpm, { } pct) => $"{Rpm(rpm)} · {pct:0}%",
+                ({ } rpm, null) => Rpm(rpm),
+                (null, { } pct) => $"{pct:0}%",
+                _ => "—",
+            };
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "COOLER", d.GpuFanPercent, 100, fan, fill: Cool, valueColor: Cool);
     }
 
     private static void DrawCpu(SKCanvas c, SKRect r, TurzxDashboardData d)
@@ -253,10 +257,12 @@ public static class TurzxDashboard
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—");
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "RAM", d.RamUsedGb, d.RamTotalGb,
             d.RamUsedGb is { } u ? (d.RamTotalGb is { } rt ? $"{u:0} / {rt:0} GB" : $"{u:0} GB") : "—");
-        var fans = d.Failsafe ? "FAILSAFE 100%" : d.FanRpm is { } rpm ? $"{rpm.ToString("N0", CultureInfo.InvariantCulture)} rpm · {d.FanDuty}%" : $"{d.FanDuty}%";
+        var fans = d.Failsafe ? "FAILSAFE 100%" : d.FanRpm is { } rpm ? $"{Rpm(rpm)} · {d.FanDuty}%" : $"{d.FanDuty}%";
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "COOLER", d.Failsafe ? 100 : d.FanDuty, 100, fans,
             fill: d.Failsafe ? Danger : Cool, valueColor: d.Failsafe ? Danger : Cool);
     }
+
+    private static string Rpm(int rpm) => rpm.ToString("N0", CultureInfo.InvariantCulture) + " rpm";
 
     // ---------- pieces ----------
 
