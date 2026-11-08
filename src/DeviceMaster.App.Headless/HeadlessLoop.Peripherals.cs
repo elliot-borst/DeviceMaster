@@ -38,6 +38,12 @@ public sealed partial class HeadlessLoop
     private readonly AutoResetEvent _turzxWake = new(false);
     private volatile TurzxDashboardData? _dashboard;
 
+    // temperature history for the dashboard: one sample every 10 s
+    private const int TempSampleMs = 10_000;
+    private readonly Queue<double> _gpuTempHistory = new();
+    private readonly Queue<double> _cpuTempHistory = new();
+    private long _nextTempSampleAt;
+
     private void StartPeripheralWorkers(CancellationToken token)
     {
         _turzxThread = new Thread(() => RunTurzx(token)) { IsBackground = true, Name = "DeviceMaster Turzx dashboard" };
@@ -239,9 +245,15 @@ public sealed partial class HeadlessLoop
         var llm = FreshLlm();
         var fan = status.Devices.FirstOrDefault(d => d.Family == "motherboard" && d.Rpm is > 0)
             ?? status.Devices.FirstOrDefault(d => !d.IsPump && !d.IsScreen && d.Rpm is > 0);
+        if (Environment.TickCount64 >= _nextTempSampleAt)
+        {
+            _nextTempSampleAt = Environment.TickCount64 + TempSampleMs;
+            Sample(_gpuTempHistory, status.GpuTemperatureC);
+            Sample(_cpuTempHistory, status.CpuTemperatureC);
+        }
+
         _dashboard = new TurzxDashboardData
         {
-            Host = cfg.DisplayName is { Length: > 0 } name ? name : Environment.MachineName,
             HasLlm = cfg.StrataUrl is { Length: > 0 },
             LlmReachable = llm is not null,
             LlmModel = llm?.Model ?? "",
@@ -252,27 +264,42 @@ public sealed partial class HeadlessLoop
             LlmTokHistory = llm?.TokHistory ?? [],
             LlmSlots = llm?.Slots.Select(s => new DashboardSlot(s.State, s.HeldTokens)).ToList() ?? [],
             LlmQueued = llm?.Queued ?? 0,
-            LlmRequests = llm?.Requests ?? 0,
+            LlmOutputTokens = llm?.OutputTokens ?? 0,
+            LlmPromptTokPerSec = llm?.PromptTokPerSec,
+            LlmDraftHitPercent = llm?.DraftHitPercent,
             GpuName = status.GpuName ?? "GPU",
             GpuTempC = status.GpuTemperatureC,
             GpuUtil = status.GpuLoadPercent,
             GpuPowerW = status.GpuPowerW,
+            GpuPowerLimitW = llm?.GpuPowerLimitW,
             VramUsedGb = status.VramUsedGb,
             VramTotalGb = status.VramTotalGb,
+            GpuTempHistory = [.. _gpuTempHistory],
             CpuName = status.CpuName ?? "CPU",
             CpuTempC = status.CpuTemperatureC,
             CpuLoad = status.CpuLoadPercent,
             CpuPowerW = status.CpuPowerW,
             RamUsedGb = status.RamUsedGb,
             RamTotalGb = status.RamTotalGb,
+            CpuTempHistory = [.. _cpuTempHistory],
             FanRpm = fan?.Rpm,
             FanDuty = status.TargetDutyPercent,
-            FanMode = status.Mode == ControlMode.Manual ? "fixed duty"
-                : status.Mode == ControlMode.Curve ? $"curve on {status.SourceName.ToLowerInvariant()}"
-                : "BIOS curves",
             Failsafe = status.FailsafeActive,
-            Now = DateTime.Now,
         };
+    }
+
+    private static void Sample(Queue<double> history, double? value)
+    {
+        if (value is not { } v)
+        {
+            return;
+        }
+
+        history.Enqueue(v);
+        while (history.Count > TurzxDashboard.TempHistoryMinutes * 60_000 / TempSampleMs)
+        {
+            history.Dequeue();
+        }
     }
 
     private void RunTurzx(CancellationToken token)

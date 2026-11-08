@@ -69,8 +69,9 @@ public class StrataStatusTests
         {"engine": {"model": "qwen3.8-flash-next-unsloth-ud-iq3_xxs", "max_context": 262144},
          "live": {"state": "generating", "phase": "thinking", "running": 1, "outside_slots": 1, "queued": 1, "tok_s": 108.5, "waiting": 0,
                   "slots": [{"slot": 0, "state": "generating", "held_tokens": 1200}, {"slot": 1, "state": "idle", "held_tokens": 0}]},
-         "totals": {"requests": 42, "output_tokens": 9000},
-         "hardware": {"gpu_util": 93, "gpu_mem_used": 25077088256, "gpu_mem_total": 25757220864, "gpu_temp": 66, "gpu_power": 301.5},
+         "totals": {"requests": 42, "output_tokens": 9000, "prompt_tokens": 120000, "reused": 100000, "prompt_ms": 8000,
+                    "drafts_offered": 400, "drafts_accepted": 300},
+         "hardware": {"gpu_util": 93, "gpu_mem_used": 25077088256, "gpu_mem_total": 25757220864, "gpu_temp": 66, "gpu_power": 301.5, "gpu_power_limit": 500.0},
          "hardware_static": {"gpu_name": "NVIDIA GeForce RTX 4090"},
          "history": {"tok_s": [0.0, 50.5, 108.5]}}
         """;
@@ -92,6 +93,9 @@ public class StrataStatusTests
         Assert.Equal(1, s.Running);
         Assert.Equal(1, s.OutsideSlots);
         Assert.Equal("thinking", s.Phase);
+        Assert.Equal(2500, s.PromptTokPerSec); // (120000 - 100000 reused) tokens in 8 s
+        Assert.Equal(75, s.DraftHitPercent);
+        Assert.Equal(500, s.GpuPowerLimitW);
     }
 
     [Fact]
@@ -101,6 +105,8 @@ public class StrataStatusTests
         Assert.Equal("unknown", s.State);
         Assert.Empty(s.Slots);
         Assert.Null(s.GpuTempC);
+        Assert.Null(s.PromptTokPerSec);
+        Assert.Null(s.DraftHitPercent);
     }
 
     [Fact]
@@ -181,5 +187,13 @@ public class TurzxDashboardTests
         Assert.Equal("950", TurzxDashboard.Tokens(950));
         Assert.Equal("12.4K", TurzxDashboard.Tokens(12_400));
         Assert.Equal("262K", TurzxDashboard.Tokens(262_144));
+        Assert.Equal("1.24M", TurzxDashboard.Tokens(1_243_118));
+        Assert.Equal("30.1K", TurzxDashboard.Tokens(30_110));
     }
+
+    [Theory]
+    [InlineData("generating", "Write")]
+    [InlineData("prefill", "Read")]
+    [InlineData("idle", "Idle")]
+    public void SlotWordsAreShort(string state, string expected) => Assert.Equal(expected, TurzxDashboard.SlotWord(state));
 }

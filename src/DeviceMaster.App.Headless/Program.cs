@@ -574,7 +574,6 @@ internal static class Program
         var busy = args.Contains("--busy");
         var sample = new DeviceMaster.Lcd.Skia.TurzxDashboardData
         {
-            Host = "example-host",
             HasLlm = true,
             LlmModel = "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
             LlmState = busy ? "generating" : "idle",
@@ -584,11 +583,15 @@ internal static class Program
             LlmTokHistory = Enumerable.Range(0, 60).Select(i => busy ? 80 + 30 * Math.Sin(i / 6.0) : 0.0).ToList(),
             // one conversation, run outside the batch slots: every slot reports idle
             LlmSlots = [new("idle", 0), new("idle", 0), new("idle", 0), new("idle", 0)],
-            LlmRequests = 1_284,
+            LlmOutputTokens = 1_243_118,
+            LlmPromptTokPerSec = 2_456,
+            LlmDraftHitPercent = 68,
             GpuName = "NVIDIA GeForce RTX 4090",
             GpuTempC = busy ? 67 : 45,
             GpuUtil = busy ? 94 : 0,
             GpuPowerW = busy ? 312 : 15,
+            GpuPowerLimitW = 500,
+            GpuTempHistory = Enumerable.Range(0, 60).Select(i => (busy ? 60 : 43) + 4 * Math.Sin(i / 9.0)).ToList(),
             VramUsedGb = 23.4,
             VramTotalGb = 24,
             CpuName = "AMD Ryzen 7 9800X3D 8-Core Processor",
@@ -597,9 +600,9 @@ internal static class Program
             CpuPowerW = busy ? 88 : 24,
             RamUsedGb = 96,
             RamTotalGb = 121,
+            CpuTempHistory = Enumerable.Range(0, 60).Select(i => (busy ? 66 : 41) + 3 * Math.Cos(i / 7.0)).ToList(),
             FanRpm = busy ? 1_240 : 660,
             FanDuty = busy ? 62 : 35,
-            FanMode = "curve on cpu",
         };
         File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
         var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);

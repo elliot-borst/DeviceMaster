@@ -27,7 +27,10 @@ public sealed record LlmStatus(
     int Running = 0,          // conversations being worked on right now (slots + outside them)
     int OutsideSlots = 0,     // single conversations run outside the batch slots (Strata's solo path)
     string? Phase = null,     // what the model is doing: "thinking", "answering", "writing a tool call: …"
-    int? PromptTokens = null);
+    int? PromptTokens = null,
+    double? PromptTokPerSec = null,   // average prompt-reading speed since start (cache reuse excluded)
+    double? DraftHitPercent = null,   // speculative draft tokens accepted since start, 0–100
+    double? GpuPowerLimitW = null);
 
 /// <summary>
 /// Read-only client for a Strata (llama.cpp-style) server's JSON <c>/metrics</c>: model, live
@@ -130,7 +133,19 @@ public sealed class StrataStatus : IDisposable
             Running: (int)(live is { } l5 ? Num(l5, "running") ?? 0 : 0),
             OutsideSlots: (int)(live is { } l6 ? Num(l6, "outside_slots") ?? 0 : 0),
             Phase: live is { } l7 ? Str(l7, "phase") : null,
-            PromptTokens: live is { } l8 && (Num(l8, "prompt_total") ?? Num(l8, "prompt_tokens")) is { } pt ? (int)pt : null);
+            PromptTokens: live is { } l8 && (Num(l8, "prompt_total") ?? Num(l8, "prompt_tokens")) is { } pt ? (int)pt : null,
+            PromptTokPerSec: totals is { } t3 ? PromptSpeed(t3) : null,
+            DraftHitPercent: totals is { } t4 && Num(t4, "drafts_offered") is { } offered && offered > 0
+                ? 100.0 * (Num(t4, "drafts_accepted") ?? 0) / offered : null,
+            GpuPowerLimitW: hw is { } k && Num(k, "gpu_power_limit") is { } limit && limit > 0 ? limit : null);
+    }
+
+    /// <summary>Prompt tokens actually read (not reused from the cache) per second of prompt time.</summary>
+    private static double? PromptSpeed(JsonElement totals)
+    {
+        var ms = Num(totals, "prompt_ms") ?? 0;
+        var read = (Num(totals, "prompt_tokens") ?? 0) - (Num(totals, "reused") ?? 0);
+        return ms > 0 && read > 0 ? read / (ms / 1000.0) : null;
     }
 
     private static JsonElement? Obj(JsonElement e, string key) =>

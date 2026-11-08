@@ -9,9 +9,7 @@ public sealed record DashboardSlot(string State, int HeldTokens);
 /// <summary>Everything the 8.8" bar shows; any figure may be null (drawn as a dash).</summary>
 public sealed record TurzxDashboardData
 {
-    public string Host { get; init; } = "";
-
-    // local LLM (null block = no LLM server configured)
+    // local LLM (HasLlm false = no LLM server configured)
     public bool HasLlm { get; init; }
     public string LlmModel { get; init; } = "";
     public string LlmState { get; init; } = "";
@@ -25,15 +23,25 @@ public sealed record TurzxDashboardData
     public IReadOnlyList<double> LlmTokHistory { get; init; } = [];
     public IReadOnlyList<DashboardSlot> LlmSlots { get; init; } = [];
     public int LlmQueued { get; init; }
-    public long LlmRequests { get; init; }
     public bool LlmReachable { get; init; } = true;
+
+    /// <summary>Tokens written since the server started.</summary>
+    public long LlmOutputTokens { get; init; }
+
+    /// <summary>Average prompt-reading speed since start (tokens actually read, cache reuse excluded).</summary>
+    public double? LlmPromptTokPerSec { get; init; }
+
+    /// <summary>Share of speculative draft tokens accepted since start, 0–100.</summary>
+    public double? LlmDraftHitPercent { get; init; }
 
     public string GpuName { get; init; } = "GPU";
     public double? GpuTempC { get; init; }
     public double? GpuUtil { get; init; }
     public double? GpuPowerW { get; init; }
+    public double? GpuPowerLimitW { get; init; }
     public double? VramUsedGb { get; init; }
     public double? VramTotalGb { get; init; }
+    public IReadOnlyList<double> GpuTempHistory { get; init; } = [];
 
     public string CpuName { get; init; } = "CPU";
     public double? CpuTempC { get; init; }
@@ -41,27 +49,31 @@ public sealed record TurzxDashboardData
     public double? CpuPowerW { get; init; }
     public double? RamUsedGb { get; init; }
     public double? RamTotalGb { get; init; }
+    public IReadOnlyList<double> CpuTempHistory { get; init; } = [];
 
+    /// <summary>The CPU cooler's fans (motherboard header).</summary>
     public int? FanRpm { get; init; }
     public int FanDuty { get; init; }
-    public string FanMode { get; init; } = "";
     public bool Failsafe { get; init; }
-
-    public DateTime Now { get; init; } = DateTime.Now;
 }
 
 /// <summary>
 /// The Turzx 8.8" (1920×480) system dashboard, drawn with SkiaSharp in the DeviceMaster "Thermal"
-/// palette: local-LLM activity (state, speed, slots), GPU, CPU/RAM and cooling. Renders landscape and
-/// returns the panel's native 480×1920 BGRA frame for <c>TurzxScreen.SendNativeFrame</c>.
+/// palette: local-LLM activity (state, speed, totals, slots), GPU, and CPU/RAM with its cooler.
+/// Renders landscape and returns the panel's native 480×1920 BGRA frame for
+/// <c>TurzxScreen.SendNativeFrame</c>.
 /// </summary>
 public static class TurzxDashboard
 {
     public const int Width = 1920, Height = 480;
 
+    /// <summary>Minutes of temperature history the GPU/CPU cards show.</summary>
+    public const int TempHistoryMinutes = 10;
+
     private static readonly SKColor Bg = SKColor.Parse("#0f1115");
     private static readonly SKColor Card = SKColor.Parse("#171a20");
     private static readonly SKColor Line = SKColor.Parse("#2a2f39");
+    private static readonly SKColor Track = SKColor.Parse("#0c0e12");
     private static readonly SKColor Text = SKColor.Parse("#eceef2");
     private static readonly SKColor Dim = SKColor.Parse("#a0a6b3");
     private static readonly SKColor Faint = SKColor.Parse("#6b7180");
@@ -114,23 +126,25 @@ public static class TurzxDashboard
         using var canvas = new SKCanvas(bitmap);
         canvas.Clear(Bg);
 
-        // four cards: LLM (widest) | GPU | CPU + RAM | cooling + clock
+        // three cards: LLM (widest) | GPU | CPU + RAM + cooler; without an LLM, GPU and CPU split the bar
         const float pad = 18, gap = 16, top = 18;
-        var widths = d.HasLlm ? new float[] { 640, 430, 430, 0 } : new float[] { 0, 600, 600, 0 };
-        widths[3] = Width - 2 * pad - gap * (widths.Count(w => w > 0)) - widths.Sum();
+        var bottom = Height - top;
         var x = pad;
-        var h = Height - 2 * top;
+        float gpuWidth;
         if (d.HasLlm)
         {
-            DrawLlm(canvas, new SKRect(x, top, x + widths[0], top + h), d);
-            x += widths[0] + gap;
+            DrawLlm(canvas, new SKRect(x, top, x + 900, bottom), d);
+            x += 900 + gap;
+            gpuWidth = 460;
+        }
+        else
+        {
+            gpuWidth = (Width - 2 * pad - gap) / 2;
         }
 
-        DrawGpu(canvas, new SKRect(x, top, x + widths[1], top + h), d);
-        x += widths[1] + gap;
-        DrawCpu(canvas, new SKRect(x, top, x + widths[2], top + h), d);
-        x += widths[2] + gap;
-        DrawCooling(canvas, new SKRect(x, top, Width - pad, top + h), d);
+        DrawGpu(canvas, new SKRect(x, top, x + gpuWidth, bottom), d);
+        x += gpuWidth + gap;
+        DrawCpu(canvas, new SKRect(x, top, Width - pad, bottom), d);
         return bitmap;
     }
 
@@ -138,7 +152,8 @@ public static class TurzxDashboard
 
     private static void DrawLlm(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "LOCAL AI", ShortModel(d.LlmModel));
+        CardShell(c, r, "LOCAL AI", ShortModel(d.LlmModel), 26, bold: false);
+
         // a lone conversation runs outside the batch slots (the slots all say idle):
         // light the first idle pills for that work so the bar matches what's happening
         var slots = d.LlmSlots.Count == 0 ? new List<DashboardSlot> { new("idle", 0) } : d.LlmSlots.ToList();
@@ -152,30 +167,52 @@ public static class TurzxDashboard
             }
         }
 
-        var busy = Math.Max(d.LlmRunning, slots.Count(s => s.State != "idle"));
-        var (stateText, stateColor) = !d.LlmReachable ? ("OFFLINE", Danger) : (StateWord(d.LlmState).ToUpperInvariant(), StateColor(d.LlmState));
-        var stateWidth = Label(c, stateText, r.Left + 24, r.Top + 108, 26, stateColor, bold: true);
-        var detail = d.LlmQueued > 0 ? $"+{d.LlmQueued} waiting" : d.LlmReachable && d.LlmPhase is { Length: > 0 } phase ? Fit(phase, 34) : "";
+        const float statsWidth = 250;
+        var leftRight = r.Right - 24 - statsWidth - 46;
+
+        // state: dot + word + live phase (or queue)
+        var (stateText, stateColor) = !d.LlmReachable ? ("Offline", Danger) : (StateWord(d.LlmState), StateColor(d.LlmState));
+        using (var dot = new SKPaint { Color = stateColor, IsAntialias = true })
+        {
+            c.DrawCircle(r.Left + 32, r.Top + 99, 8, dot);
+        }
+
+        var stateWidth = Label(c, stateText, r.Left + 50, r.Top + 111, 34, stateColor, bold: true);
+        var detail = d.LlmQueued > 0 ? $"+{d.LlmQueued} waiting" : d.LlmReachable && d.LlmPhase is { Length: > 0 } phase ? phase : "";
         if (detail.Length > 0)
         {
-            Label(c, detail, r.Left + 40 + stateWidth, r.Top + 108, 22, d.LlmQueued > 0 ? Warn : Dim);
+            var dx = r.Left + 66 + stateWidth;
+            FitLabel(c, detail, dx, r.Top + 111, 24, leftRight - dx, d.LlmQueued > 0 ? Warn : Dim);
         }
 
         // big speed + sparkline
         var speed = d.LlmTokPerSec is { } t && t > 0 ? t.ToString("0", CultureInfo.InvariantCulture) : "0";
-        var speedWidth = Label(c, speed, r.Left + 24, r.Top + 216, 96, Text, bold: true);
-        Label(c, "tok/s", r.Left + 34 + speedWidth, r.Top + 216, 26, Dim);
-        Sparkline(c, new SKRect(r.Left + 300, r.Top + 140, r.Right - 24, r.Top + 220), d.LlmTokHistory);
+        var speedWidth = Label(c, speed, r.Left + 22, r.Top + 226, 112, Text, bold: true);
+        Label(c, "tok/s", r.Left + 34 + speedWidth, r.Top + 226, 30, Dim);
+        Sparkline(c, new SKRect(r.Left + 24, r.Top + 250, leftRight, r.Top + 330), d.LlmTokHistory);
 
-        // slots
-        var slotW = (r.Width - 48 - 12 * (slots.Count - 1)) / slots.Count;
+        // stats column
+        var sx = r.Right - 24 - statsWidth;
+        using (var divider = new SKPaint { Color = Line, StrokeWidth = 2 })
+        {
+            c.DrawLine(sx - 22, r.Top + 70, sx - 22, r.Top + 330, divider);
+        }
+
+        Stat(c, sx, r.Top + 96, "TOKENS OUT", d.LlmReachable ? Tokens(d.LlmOutputTokens) : "—", "");
+        Stat(c, sx, r.Top + 186, "PROMPT READ",
+            d.LlmPromptTokPerSec is { } p && d.LlmReachable ? Tokens((long)Math.Round(p)) : "—", d.LlmPromptTokPerSec is not null && d.LlmReachable ? "tok/s" : "");
+        Stat(c, sx, r.Top + 276, "DRAFTS HIT", d.LlmDraftHitPercent is { } h && d.LlmReachable ? $"{h:0}%" : "—", "");
+
+        // slot pills: S1 Write / S2 Idle …, centred
+        const float slotGap = 12;
+        var slotW = (r.Width - 48 - slotGap * (slots.Count - 1)) / slots.Count;
         for (var i = 0; i < slots.Count; i++)
         {
-            var sx = r.Left + 24 + i * (slotW + 12);
-            var sr = new SKRect(sx, r.Bottom - 150, sx + slotW, r.Bottom - 24);
+            var px = r.Left + 24 + i * (slotW + slotGap);
+            var sr = new SKRect(px, r.Bottom - 88, px + slotW, r.Bottom - 24);
             var active = slots[i].State != "idle";
             var tint = StateColor(slots[i].State);
-            using (var fill = new SKPaint { Color = active ? tint.WithAlpha(40) : SKColor.Parse("#0c0e12"), IsAntialias = true })
+            using (var fill = new SKPaint { Color = active ? tint.WithAlpha(40) : Track, IsAntialias = true })
             {
                 c.DrawRoundRect(sr, 12, 12, fill);
             }
@@ -185,47 +222,47 @@ public static class TurzxDashboard
                 c.DrawRoundRect(sr, 12, 12, border);
             }
 
-            Label(c, $"SLOT {i + 1}", sr.Left + 16, sr.Top + 34, 18, Faint, bold: true);
-            Label(c, StateWord(slots[i].State), sr.Left + 16, sr.Top + 72, 24, active ? tint : Dim, bold: active);
-            Label(c, slots[i].HeldTokens > 0 ? Tokens(slots[i].HeldTokens) + " ctx" : "", sr.Left + 16, sr.Top + 106, 18, Faint);
+            var tag = $"S{i + 1}";
+            var word = SlotWord(slots[i].State);
+            var tagW = Measure(tag, 20, bold: true);
+            var wordW = Measure(word, 28, bold: active);
+            var tx = sr.MidX - (tagW + 12 + wordW) / 2;
+            var baseline = sr.MidY + 10;
+            Label(c, tag, tx, baseline, 20, Faint, bold: true);
+            Label(c, word, tx + tagW + 12, baseline, 28, active ? tint : Dim, bold: active);
         }
-
-        // above the slot pills: how many conversations are being worked on, and model calls since the server started
-        Label(c, $"{busy}/{slots.Count} busy · {d.LlmRequests:N0} model calls since start", r.Left + 24, r.Bottom - 162, 18, Faint);
     }
 
     private static void DrawGpu(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "GPU", ShortGpu(d.GpuName));
-        BigReading(c, r, d.GpuTempC is { } t ? $"{t:0}°" : "—", TempColor(d.GpuTempC, 70, 83));
-        Bar(c, r, 0, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—", d.GpuPowerW is { } p ? $"{p:0} W" : "");
-        Bar(c, r, 1, "VRAM", d.VramUsedGb, d.VramTotalGb, d.VramUsedGb is { } v ? $"{v:0.0} GB" : "—", d.VramTotalGb is { } vt ? $"of {vt:0}" : "");
+        CardShell(c, r, "GPU", ShortGpu(d.GpuName), 30, bold: true);
+        Reading(c, r, d.GpuTempC, TempColor(d.GpuTempC, 70, 83), d.GpuPowerW,
+            d.GpuPowerLimitW is { } limit ? $"of {limit:0} W" : "power draw");
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 222, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—");
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 290, "VRAM", d.VramUsedGb, d.VramTotalGb,
+            d.VramUsedGb is { } v ? (d.VramTotalGb is { } vt ? $"{v:0.0} / {vt:0} GB" : $"{v:0.0} GB") : "—");
+        TempTrend(c, r, d.GpuTempHistory);
     }
 
     private static void DrawCpu(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "CPU", ShortCpu(d.CpuName));
-        BigReading(c, r, d.CpuTempC is { } t ? $"{t:0}°" : "—", TempColor(d.CpuTempC, 75, 88));
-        Bar(c, r, 0, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—", d.CpuPowerW is { } p ? $"{p:0} W" : "");
-        Bar(c, r, 1, "RAM", d.RamUsedGb, d.RamTotalGb, d.RamUsedGb is { } u ? $"{u:0} GB" : "—", d.RamTotalGb is { } rt ? $"of {rt:0}" : "");
-    }
+        CardShell(c, r, "CPU", ShortCpu(d.CpuName), 30, bold: true);
+        Reading(c, r, d.CpuTempC, TempColor(d.CpuTempC, 75, 88), d.CpuPowerW, "power draw");
 
-    private static void DrawCooling(SKCanvas c, SKRect r, TurzxDashboardData d)
-    {
-        CardShell(c, r, "COOLING", d.Failsafe ? "FAILSAFE — fans 100%" : d.FanMode);
-        var rpm = d.FanRpm is { } f ? f.ToString("N0", CultureInfo.InvariantCulture) : "—";
-        var w = Label(c, rpm, r.Left + 24, r.Top + 196, 72, d.Failsafe ? Danger : Text, bold: true);
-        Label(c, "rpm", r.Left + 32 + w, r.Top + 196, 24, Dim);
-        Label(c, $"fans {d.FanDuty}%", r.Left + 24, r.Top + 240, 24, Accent, bold: true);
+        var mid = r.MidX;
+        Bar(c, r.Left + 24, mid - 10, r.Top + 222, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—");
+        Bar(c, mid + 10, r.Right - 24, r.Top + 222, "RAM", d.RamUsedGb, d.RamTotalGb,
+            d.RamUsedGb is { } u ? (d.RamTotalGb is { } rt ? $"{u:0}/{rt:0}" : $"{u:0} GB") : "—");
 
-        Label(c, d.Now.ToString("HH:mm", CultureInfo.InvariantCulture), r.Left + 24, r.Bottom - 56, 64, Text, bold: true);
-        Label(c, d.Now.ToString("ddd d MMM", CultureInfo.InvariantCulture) + (d.Host.Length > 0 ? " · " + d.Host : ""),
-            r.Left + 24, r.Bottom - 22, 20, Faint);
+        var fans = d.Failsafe ? "FAILSAFE 100%" : d.FanRpm is { } rpm ? $"{rpm.ToString("N0", CultureInfo.InvariantCulture)} rpm · {d.FanDuty}%" : $"{d.FanDuty}%";
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 290, "COOLER", d.Failsafe ? 100 : d.FanDuty, 100, fans,
+            fill: d.Failsafe ? Danger : Cool, valueColor: d.Failsafe ? Danger : Cool);
+        TempTrend(c, r, d.CpuTempHistory);
     }
 
     // ---------- pieces ----------
 
-    private static void CardShell(SKCanvas c, SKRect r, string title, string subtitle)
+    private static void CardShell(SKCanvas c, SKRect r, string title, string subtitle, float subtitleSize, bool bold)
     {
         using (var fill = new SKPaint { Color = Card, IsAntialias = true })
         {
@@ -237,37 +274,95 @@ public static class TurzxDashboard
             c.DrawRoundRect(r, 18, 18, border);
         }
 
-        Label(c, title, r.Left + 24, r.Top + 44, 22, Faint, bold: true);
-        Label(c, Fit(subtitle, 34), r.Left + 24, r.Top + 74, 22, Dim);
+        var titleWidth = Label(c, title, r.Left + 24, r.Top + 46, 22, Dim, bold: true);
+        FitLabel(c, subtitle, r.Right - 24, r.Top + 47, subtitleSize, r.Width - 48 - titleWidth - 24, Text, bold, SKTextAlign.Right);
     }
 
-    private static void BigReading(SKCanvas c, SKRect r, string value, SKColor color) =>
-        Label(c, value, r.Left + 24, r.Top + 196, 92, color, bold: true);
-
-    /// <summary>Labelled progress bar; row 0 or 1 in the card's lower half.</summary>
-    private static void Bar(SKCanvas c, SKRect r, int row, string label, double? value, double? max, string valueText, string extra)
+    /// <summary>Big temperature on the left, power draw (with a caption) on the right.</summary>
+    private static void Reading(SKCanvas c, SKRect r, double? tempC, SKColor color, double? powerW, string caption)
     {
-        var y = r.Top + 262 + row * 80;
-        Label(c, label, r.Left + 24, y, 18, Faint, bold: true);
-        Label(c, valueText + (extra.Length > 0 ? "  " + extra : ""), r.Right - 24, y, 20, Dim, align: SKTextAlign.Right);
-        var track = new SKRect(r.Left + 24, y + 16, r.Right - 24, y + 32);
-        using (var bg = new SKPaint { Color = SKColor.Parse("#0c0e12"), IsAntialias = true })
+        Label(c, tempC is { } t ? $"{t:0}°" : "—", r.Left + 22, r.Top + 176, 104, color, bold: true);
+        Label(c, powerW is { } p ? $"{p:0} W" : "—", r.Right - 24, r.Top + 136, 38, Text, bold: true, align: SKTextAlign.Right);
+        Label(c, caption, r.Right - 24, r.Top + 168, 22, Dim, align: SKTextAlign.Right);
+    }
+
+    private static void Stat(SKCanvas c, float x, float y, string label, string value, string unit)
+    {
+        Label(c, label, x, y, 18, Dim, bold: true);
+        var w = Label(c, value, x, y + 40, 34, Text, bold: true);
+        if (unit.Length > 0)
         {
-            c.DrawRoundRect(track, 8, 8, bg);
+            Label(c, unit, x + w + 8, y + 40, 20, Dim);
+        }
+    }
+
+    /// <summary>Label + value line with a bar under it, between <paramref name="x0"/> and <paramref name="x1"/>.</summary>
+    private static void Bar(SKCanvas c, float x0, float x1, float y, string label, double? value, double? max, string valueText,
+        SKColor? fill = null, SKColor? valueColor = null)
+    {
+        var labelWidth = Label(c, label, x0, y, 22, Dim, bold: true);
+        FitLabel(c, valueText, x1, y + 1, 26, x1 - x0 - labelWidth - 12, valueColor ?? Text, bold: true, align: SKTextAlign.Right);
+        var track = new SKRect(x0, y + 12, x1, y + 30);
+        using (var bg = new SKPaint { Color = Track, IsAntialias = true })
+        {
+            c.DrawRoundRect(track, 9, 9, bg);
         }
 
-        if (value is { } v && max is > 0)
+        if (value is not { } v || max is not > 0)
         {
-            var fraction = (float)Math.Clamp(v / max.Value, 0, 1);
-            if (fraction > 0.005f)
+            return;
+        }
+
+        var fraction = (float)Math.Clamp(v / max.Value, 0, 1);
+        if (fraction <= 0.005f)
+        {
+            return;
+        }
+
+        var fillRect = new SKRect(track.Left, track.Top, track.Left + track.Width * fraction, track.Bottom);
+        using var shader = fill is null
+            ? SKShader.CreateLinearGradient(new SKPoint(track.Left, 0), new SKPoint(track.Right, 0), [Cool, Warm, Accent], [0f, 0.5f, 1f], SKShaderTileMode.Clamp)
+            : null;
+        using var paint = new SKPaint { Color = fill ?? SKColors.White, Shader = shader, IsAntialias = true };
+        c.DrawRoundRect(fillRect, 9, 9, paint);
+    }
+
+    /// <summary>The card's bottom strip: temperature over the last minutes, scaled to its own range.</summary>
+    private static void TempTrend(SKCanvas c, SKRect r, IReadOnlyList<double> history)
+    {
+        var y = r.Top + 354;
+        Label(c, $"TEMP · LAST {TempHistoryMinutes} MIN", r.Left + 24, y, 18, Faint, bold: true);
+        if (history.Count < 2)
+        {
+            return;
+        }
+
+        var lo = history.Min();
+        var hi = history.Max();
+        Label(c, lo.ToString("0", CultureInfo.InvariantCulture) + "–" + hi.ToString("0", CultureInfo.InvariantCulture) + "°",
+            r.Right - 24, y, 20, Dim, bold: true, align: SKTextAlign.Right);
+
+        // at least a 10° window so a steady temperature reads as a flat line, not noise
+        var span = Math.Max(hi - lo, 10);
+        var floor = (lo + hi) / 2 - span / 2;
+        var area = new SKRect(r.Left + 24, y + 12, r.Right - 24, r.Bottom - 20);
+        using var path = new SKPath();
+        for (var i = 0; i < history.Count; i++)
+        {
+            var px = area.Left + area.Width * i / (history.Count - 1);
+            var py = area.Bottom - (float)((history[i] - floor) / span) * area.Height;
+            if (i == 0)
             {
-                var fillRect = new SKRect(track.Left, track.Top, track.Left + track.Width * fraction, track.Bottom);
-                using var shader = SKShader.CreateLinearGradient(new SKPoint(track.Left, 0), new SKPoint(track.Right, 0),
-                    [Cool, Warm, Accent], [0f, 0.5f, 1f], SKShaderTileMode.Clamp);
-                using var paint = new SKPaint { Shader = shader, IsAntialias = true };
-                c.DrawRoundRect(fillRect, 8, 8, paint);
+                path.MoveTo(px, py);
+            }
+            else
+            {
+                path.LineTo(px, py);
             }
         }
+
+        using var stroke = new SKPaint { Color = Warn, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3, StrokeJoin = SKStrokeJoin.Round };
+        c.DrawPath(path, stroke);
     }
 
     private static void Sparkline(SKCanvas c, SKRect r, IReadOnlyList<double> history)
@@ -293,13 +388,46 @@ public static class TurzxDashboard
             }
         }
 
+        using (var area = new SKPath(path))
+        {
+            area.LineTo(r.Right, r.Bottom);
+            area.LineTo(r.Left, r.Bottom);
+            area.Close();
+            using var under = new SKPaint { Color = Accent.WithAlpha(40), IsAntialias = true };
+            c.DrawPath(area, under);
+        }
+
         using var shader = SKShader.CreateLinearGradient(new SKPoint(r.Left, 0), new SKPoint(r.Right, 0),
             [Cool, Warm, Accent], [0f, 0.5f, 1f], SKShaderTileMode.Clamp);
-        using var stroke = new SKPaint { Shader = shader, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3, StrokeJoin = SKStrokeJoin.Round };
+        using var stroke = new SKPaint { Shader = shader, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4, StrokeJoin = SKStrokeJoin.Round };
         c.DrawPath(path, stroke);
     }
 
-    /// <summary>Draws text and returns its width.</summary>
+    /// <summary>Draws text shrunk (down to 60 %) and then ellipsised to fit <paramref name="maxWidth"/>.</summary>
+    private static void FitLabel(SKCanvas c, string text, float x, float y, float size, float maxWidth, SKColor color,
+        bool bold = false, SKTextAlign align = SKTextAlign.Left)
+    {
+        var s = size;
+        while (s > size * 0.6f && Measure(text, s, bold) > maxWidth)
+        {
+            s -= 1;
+        }
+
+        while (text.Length > 2 && Measure(text, s, bold) > maxWidth)
+        {
+            text = text[..^2] + "…";
+        }
+
+        Label(c, text, x, y, s, color, bold, align);
+    }
+
+    private static float Measure(string text, float size, bool bold)
+    {
+        using var paint = new SKPaint { TextSize = size, Typeface = bold ? Bold : Regular };
+        return paint.MeasureText(text);
+    }
+
+/// <summary>Draws text and returns its width.</summary>
     private static float Label(SKCanvas c, string text, float x, float y, float size, SKColor color, bool bold = false, SKTextAlign align = SKTextAlign.Left)
     {
         using var paint = new SKPaint
@@ -322,6 +450,14 @@ public static class TurzxDashboard
         "prefill" or "prefilling" or "reading" => "Reading",
         "offline" => "Offline",
         var other => Fit(Title(other), 9),
+    };
+
+    /// <summary>The one-word slot label: Read, Write or Idle (pills are narrow).</summary>
+    public static string SlotWord(string state) => StateWord(state) switch
+    {
+        "Writing" => "Write",
+        "Reading" => "Read",
+        var other => other,
     };
 
     private static SKColor StateColor(string state) => state switch
@@ -362,8 +498,14 @@ public static class TurzxDashboard
     public static string ShortCpu(string name) =>
         Fit(System.Text.RegularExpressions.Regex.Replace(name.Replace("AMD ", "").Replace("Intel(R) ", "").Replace("(TM)", ""), @"\s+\d+-Core Processor", "").Trim(), 30);
 
-    /// <summary>12345 → "12.3K".</summary>
-    public static string Tokens(int n) => n >= 1000 ? (n / 1000.0).ToString(n >= 100_000 ? "0" : "0.#", CultureInfo.InvariantCulture) + "K" : n.ToString(CultureInfo.InvariantCulture);
+    /// <summary>12345 → "12.3K", 1240000 → "1.24M".</summary>
+    public static string Tokens(long n) => n switch
+    {
+        >= 1_000_000_000 => (n / 1e9).ToString("0.##", CultureInfo.InvariantCulture) + "B",
+        >= 1_000_000 => (n / 1e6).ToString(n >= 100_000_000 ? "0" : n >= 10_000_000 ? "0.#" : "0.##", CultureInfo.InvariantCulture) + "M",
+        >= 1000 => (n / 1000.0).ToString(n >= 100_000 ? "0" : "0.#", CultureInfo.InvariantCulture) + "K",
+        _ => n.ToString(CultureInfo.InvariantCulture),
+    };
 
     private static string Title(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 

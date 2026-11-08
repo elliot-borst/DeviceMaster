@@ -12,7 +12,7 @@ designed to run in a Docker container on a server.
 | Pump / radiator LCD (JPEG frames, brightness) | yes | **yes** (same HID session) |
 | GPU RGB via ENE controller (ASUS boards, i2c 0x67) | yes | **yes** (raw i2c-dev, repeated starts) |
 | CPU/GPU temperature | LHM / nvidia | kernel hwmon (k10temp/coretemp) + nvidia-smi |
-| Turzx 8.8" screen (system dashboard: CPU, GPU, RAM, cooling, local LLM) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
+| Turzx 8.8" screen (system dashboard: local LLM, GPU, CPU + RAM + cooler, temperature history) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
 | ASUS AURA mainboard LED controller (static / rainbow) | yes | **yes** (HidSharp → hidraw) |
 | Motherboard fan headers (Nuvoton NCT67xx Super I/O) | yes (LHM) | **yes** (hwmon `pwmN`; only headers spinning at start-up; never below 30 %; BIOS curve restored on stop / mode Off) |
 | Local LLM status (Strata `/metrics`, read-only) | — | **yes** (model, live speed, slots; also the GPU figures) |
