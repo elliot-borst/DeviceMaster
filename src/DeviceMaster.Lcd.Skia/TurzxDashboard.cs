@@ -187,7 +187,7 @@ public static class TurzxDashboard
 
             Label(c, $"SLOT {i + 1}", sr.Left + 16, sr.Top + 34, 18, Faint, bold: true);
             Label(c, StateWord(slots[i].State), sr.Left + 16, sr.Top + 72, 24, active ? tint : Dim, bold: active);
-            Label(c, SlotDetail(active, busy, d.LlmTokPerSec, slots[i].HeldTokens), sr.Left + 16, sr.Top + 106, 18, active ? Dim : Faint);
+            Label(c, slots[i].HeldTokens > 0 ? Tokens(slots[i].HeldTokens) + " ctx" : "", sr.Left + 16, sr.Top + 106, 18, Faint);
         }
 
         // above the slot pills: how many conversations are being worked on, and model calls since the server started
@@ -312,24 +312,6 @@ public static class TurzxDashboard
         };
         c.DrawText(text, x, y, paint);
         return paint.MeasureText(text);
-    }
-
-    /// <summary>
-    /// A busy slot's speed line. The server reports one combined tok/s: one busy conversation gets
-    /// it exactly; several share it evenly, marked "~" because that split is an estimate.
-    /// </summary>
-    public static string SlotDetail(bool active, int busy, double? totalTokPerSec, int heldTokens)
-    {
-        var context = heldTokens > 0 ? Tokens(heldTokens) + " ctx" : "";
-        if (!active || totalTokPerSec is not > 0)
-        {
-            return context;
-        }
-
-        var speed = busy <= 1
-            ? $"{totalTokPerSec.Value:0} tok/s"
-            : $"~{totalTokPerSec.Value / busy:0} tok/s";
-        return context.Length > 0 ? $"{speed} · {context}" : speed;
     }
 
     /// <summary>Server state → the short word the bar shows (writing = generating tokens, reading = prefill).</summary>

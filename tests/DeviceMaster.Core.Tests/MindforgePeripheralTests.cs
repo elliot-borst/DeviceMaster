@@ -172,14 +172,6 @@ public class TurzxDashboardTests
     [InlineData("qwen3.8-27b", "qwen3.8 27b")]
     public void ModelNamesAreShortened(string model, string expected) => Assert.Equal(expected, TurzxDashboard.ShortModel(model));
 
-    [Theory]
-    [InlineData(true, 1, 82.4, 0, "82 tok/s")]
-    [InlineData(true, 2, 120.0, 12_400, "~60 tok/s · 12.4K ctx")]
-    [InlineData(false, 2, 120.0, 0, "")]
-    [InlineData(true, 1, 0.0, 3_000, "3K ctx")]
-    public void SlotSpeedIsExactAloneAndAnEstimateWhenShared(bool active, int busy, double total, int held, string expected) =>
-        Assert.Equal(expected, TurzxDashboard.SlotDetail(active, busy, total, held));
-
     [Fact]
     public void IdleIsCapitalised() => Assert.Equal("Idle", TurzxDashboard.StateWord("idle"));
 
