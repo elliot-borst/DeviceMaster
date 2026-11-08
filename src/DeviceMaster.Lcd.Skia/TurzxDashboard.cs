@@ -15,6 +15,12 @@ public sealed record TurzxDashboardData
     public bool HasLlm { get; init; }
     public string LlmModel { get; init; } = "";
     public string LlmState { get; init; } = "";
+
+    /// <summary>What the model is doing right now ("thinking", "writing a tool call: terminal", …).</summary>
+    public string? LlmPhase { get; init; }
+
+    /// <summary>Conversations being worked on, including ones the server runs outside its batch slots.</summary>
+    public int LlmRunning { get; init; }
     public double? LlmTokPerSec { get; init; }
     public IReadOnlyList<double> LlmTokHistory { get; init; } = [];
     public IReadOnlyList<DashboardSlot> LlmSlots { get; init; } = [];
@@ -133,12 +139,26 @@ public static class TurzxDashboard
     private static void DrawLlm(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
         CardShell(c, r, "LOCAL AI", ShortModel(d.LlmModel));
-        var busy = d.LlmSlots.Count(s => s.State != "idle");
-        var (stateText, stateColor) = !d.LlmReachable ? ("OFFLINE", Danger) : (StateWord(d.LlmState).ToUpperInvariant(), StateColor(d.LlmState));
-        Label(c, stateText, r.Left + 24, r.Top + 108, 26, stateColor, bold: true);
-        if (d.LlmQueued > 0)
+        // a lone conversation runs outside the batch slots (the slots all say idle):
+        // light the first idle pills for that work so the bar matches what's happening
+        var slots = d.LlmSlots.Count == 0 ? new List<DashboardSlot> { new("idle", 0) } : d.LlmSlots.ToList();
+        var extra = Math.Max(0, d.LlmRunning - slots.Count(s => s.State != "idle"));
+        for (var i = 0; i < slots.Count && extra > 0; i++)
         {
-            Label(c, $"+{d.LlmQueued} waiting", r.Left + 200, r.Top + 108, 22, Warn);
+            if (slots[i].State == "idle")
+            {
+                slots[i] = new DashboardSlot(d.LlmState, slots[i].HeldTokens);
+                extra--;
+            }
+        }
+
+        var busy = Math.Max(d.LlmRunning, slots.Count(s => s.State != "idle"));
+        var (stateText, stateColor) = !d.LlmReachable ? ("OFFLINE", Danger) : (StateWord(d.LlmState).ToUpperInvariant(), StateColor(d.LlmState));
+        var stateWidth = Label(c, stateText, r.Left + 24, r.Top + 108, 26, stateColor, bold: true);
+        var detail = d.LlmQueued > 0 ? $"+{d.LlmQueued} waiting" : d.LlmReachable && d.LlmPhase is { Length: > 0 } phase ? Fit(phase, 34) : "";
+        if (detail.Length > 0)
+        {
+            Label(c, detail, r.Left + 40 + stateWidth, r.Top + 108, 22, d.LlmQueued > 0 ? Warn : Dim);
         }
 
         // big speed + sparkline
@@ -148,7 +168,6 @@ public static class TurzxDashboard
         Sparkline(c, new SKRect(r.Left + 300, r.Top + 140, r.Right - 24, r.Top + 220), d.LlmTokHistory);
 
         // slots
-        IReadOnlyList<DashboardSlot> slots = d.LlmSlots.Count == 0 ? [new DashboardSlot("idle", 0)] : d.LlmSlots;
         var slotW = (r.Width - 48 - 12 * (slots.Count - 1)) / slots.Count;
         for (var i = 0; i < slots.Count; i++)
         {
@@ -171,7 +190,8 @@ public static class TurzxDashboard
             Label(c, slots[i].HeldTokens > 0 ? Tokens(slots[i].HeldTokens) + " ctx" : "", sr.Left + 16, sr.Top + 106, 18, Faint);
         }
 
-        Label(c, $"{busy}/{slots.Count} busy · {d.LlmRequests:N0} requests", r.Right - 24, r.Top + 108, 20, Faint, align: SKTextAlign.Right);
+        // above the slot pills: how many conversations are being worked on, and model calls since the server started
+        Label(c, $"{busy}/{slots.Count} busy · {d.LlmRequests:N0} model calls since start", r.Left + 24, r.Bottom - 162, 18, Faint);
     }
 
     private static void DrawGpu(SKCanvas c, SKRect r, TurzxDashboardData d)

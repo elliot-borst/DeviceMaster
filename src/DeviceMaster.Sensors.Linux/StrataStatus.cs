@@ -23,7 +23,11 @@ public sealed record LlmStatus(
     double? GpuMemUsedMb,
     double? GpuMemTotalMb,
     string? GpuName,
-    DateTime ReadAtUtc);
+    DateTime ReadAtUtc,
+    int Running = 0,          // conversations being worked on right now (slots + outside them)
+    int OutsideSlots = 0,     // single conversations run outside the batch slots (Strata's solo path)
+    string? Phase = null,     // what the model is doing: "thinking", "answering", "writing a tool call: …"
+    int? PromptTokens = null);
 
 /// <summary>
 /// Read-only client for a Strata (llama.cpp-style) server's JSON <c>/metrics</c>: model, live
@@ -122,7 +126,11 @@ public sealed class StrataStatus : IDisposable
             GpuMemUsedMb: hw is { } d && Num(d, "gpu_mem_used") is { } used ? used / 1048576.0 : null,
             GpuMemTotalMb: hw is { } f && Num(f, "gpu_mem_total") is { } total ? total / 1048576.0 : null,
             GpuName: hwStatic is { } g ? Str(g, "gpu_name") : null,
-            ReadAtUtc: nowUtc);
+            ReadAtUtc: nowUtc,
+            Running: (int)(live is { } l5 ? Num(l5, "running") ?? 0 : 0),
+            OutsideSlots: (int)(live is { } l6 ? Num(l6, "outside_slots") ?? 0 : 0),
+            Phase: live is { } l7 ? Str(l7, "phase") : null,
+            PromptTokens: live is { } l8 && (Num(l8, "prompt_total") ?? Num(l8, "prompt_tokens")) is { } pt ? (int)pt : null);
     }
 
     private static JsonElement? Obj(JsonElement e, string key) =>

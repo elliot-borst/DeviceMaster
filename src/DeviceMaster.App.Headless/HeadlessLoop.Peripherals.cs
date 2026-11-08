@@ -246,6 +246,8 @@ public sealed partial class HeadlessLoop
             LlmReachable = llm is not null,
             LlmModel = llm?.Model ?? "",
             LlmState = llm?.State ?? "offline",
+            LlmPhase = llm?.Phase,
+            LlmRunning = llm?.Running ?? 0,
             LlmTokPerSec = llm?.TokPerSec,
             LlmTokHistory = llm?.TokHistory ?? [],
             LlmSlots = llm?.Slots.Select(s => new DashboardSlot(s.State, s.HeldTokens)).ToList() ?? [],

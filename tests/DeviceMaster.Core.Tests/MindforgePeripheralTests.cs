@@ -67,7 +67,7 @@ public class StrataStatusTests
 {
     private const string Metrics = """
         {"engine": {"model": "qwen3.8-flash-next-unsloth-ud-iq3_xxs", "max_context": 262144},
-         "live": {"state": "generating", "queued": 1, "tok_s": 108.5, "waiting": 0,
+         "live": {"state": "generating", "phase": "thinking", "running": 1, "outside_slots": 1, "queued": 1, "tok_s": 108.5, "waiting": 0,
                   "slots": [{"slot": 0, "state": "generating", "held_tokens": 1200}, {"slot": 1, "state": "idle", "held_tokens": 0}]},
          "totals": {"requests": 42, "output_tokens": 9000},
          "hardware": {"gpu_util": 93, "gpu_mem_used": 25077088256, "gpu_mem_total": 25757220864, "gpu_temp": 66, "gpu_power": 301.5},
@@ -89,6 +89,9 @@ public class StrataStatusTests
         Assert.Equal(66, s.GpuTempC);
         Assert.Equal(23915.375, s.GpuMemUsedMb!.Value, 3); // 25077088256 bytes / 2^20
         Assert.Equal([0.0, 50.5, 108.5], s.TokHistory);
+        Assert.Equal(1, s.Running);
+        Assert.Equal(1, s.OutsideSlots);
+        Assert.Equal("thinking", s.Phase);
     }
 
     [Fact]

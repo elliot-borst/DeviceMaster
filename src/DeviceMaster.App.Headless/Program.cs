@@ -578,12 +578,12 @@ internal static class Program
             HasLlm = true,
             LlmModel = "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
             LlmState = busy ? "generating" : "idle",
+            LlmPhase = busy ? "writing a tool call: terminal" : null,
+            LlmRunning = busy ? 1 : 0,
             LlmTokPerSec = busy ? 108.4 : 0,
             LlmTokHistory = Enumerable.Range(0, 60).Select(i => busy ? 80 + 30 * Math.Sin(i / 6.0) : 0.0).ToList(),
-            LlmSlots = busy
-                ? [new("generating", 12_400), new("generating", 3_100), new("idle", 0), new("prefill", 88_000)]
-                : [new("idle", 0), new("idle", 0), new("idle", 0), new("idle", 0)],
-            LlmQueued = busy ? 1 : 0,
+            // one conversation, run outside the batch slots: every slot reports idle
+            LlmSlots = [new("idle", 0), new("idle", 0), new("idle", 0), new("idle", 0)],
             LlmRequests = 1_284,
             GpuName = "NVIDIA GeForce RTX 4090",
             GpuTempC = busy ? 67 : 45,
