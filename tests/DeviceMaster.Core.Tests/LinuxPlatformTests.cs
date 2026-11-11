@@ -171,6 +171,8 @@ public class LinuxPlatformTests : IDisposable
     [Fact]
     public void GpuI2cLocator_SubsystemVendor_ReadsTheBoardMaker()
     {
+        if (!OperatingSystem.IsLinux())
+            return; // sysfs PCI addresses contain ':' — not a legal Windows path component
         MakeDir("bus/pci/devices/0000:01:00.0");
         Write("bus/pci/devices/0000:01:00.0/subsystem_vendor", "0x1043\n");
         Assert.Equal(GpuI2cLocator.AsusSubsystemVendor, GpuI2cLocator.SubsystemVendor("1:00.0", _fixtureRoot));
