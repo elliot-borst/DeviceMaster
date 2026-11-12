@@ -341,7 +341,7 @@ public sealed partial class HeadlessLoop : IDisposable
                 _hubReceivedDuty[hub.SerialNumber] = duty;
                 if (failsafe || deepRepaint || refreshDue)
                 {
-                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written} channels)"
+                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written.Count} channels)"
                         + (failsafe ? " (FAILSAFE)" : ""));
                 }
             }
