@@ -11,21 +11,12 @@ public sealed record RamStick(string BusName, byte SpdAddress, string PartNumber
 /// <summary>
 /// Finds ENE RGB controllers on RGB DRAM (and the sticks' SPD identities) over the AMD FCH
 /// SMBus, using RAMSPDToolkit's transactions on top of LibreHardwareMonitor's PawnIO driver.
-/// Ported from OpenRGB's ENESMBusControllerDetect with one deliberate hardening: a device
-/// answering at 0x77 is READ-fingerprinted as ENE before the remap registers are written —
-/// the reference writes blindly to whatever sits at 0x77.
+/// The detection itself (fingerprint-before-write, 0x77 remap) is the shared
+/// <see cref="EneDramScan"/>.
 /// Requires administrator + PawnIO. All transactions hold the system SMBus mutex.
 /// </summary>
 public sealed class EneRamScanner : IDisposable
 {
-    /// <summary>Candidate ENE DRAM addresses, in the reference probe order.</summary>
-    private static readonly byte[] CandidateAddresses =
-    [
-        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
-        0x4F, 0x66, 0x67, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
-    ];
-
-    private const byte UnconfiguredAddress = 0x77;
     private const ushort AmdVendor = 0x1022;
 
     /// <summary>Cross-process SMBus arbitration mutex shared with BIOS/ACPI and other tools.</summary>
@@ -101,62 +92,11 @@ public sealed class EneRamScanner : IDisposable
         {
             foreach (var bus in AmdBuses())
             {
-                var smbus = new RamSpdSmBus(bus);
-                RemapUnconfigured(smbus);
-
-                foreach (var address in CandidateAddresses)
-                {
-                    if (smbus.ReadByte(address) < 0 && smbus.ReadByteData(address, 0x00) < 0)
-                    {
-                        continue; // nothing there
-                    }
-
-                    if (!EneRgbDevice.Fingerprint(smbus, address))
-                    {
-                        continue; // some other SMBus device — never touch it
-                    }
-
-                    var device = new EneRgbDevice(smbus, address);
-                    if (device.Initialize())
-                    {
-                        _log?.Invoke($"ENE RGB controller at 0x{address:X2} on {smbus.Name}: '{device.Version}', {device.LedCount} LEDs");
-                        devices.Add(device);
-                    }
-
-                    Thread.Sleep(1);
-                }
+                devices.AddRange(EneDramScan.FindControllers(new RamSpdSmBus(bus), _log));
             }
         });
 
         return devices;
-    }
-
-    private void RemapUnconfigured(RamSpdSmBus smbus)
-    {
-        for (byte slot = 0; slot < 8; slot++)
-        {
-            if (smbus.ReadByte(UnconfiguredAddress) < 0)
-            {
-                return; // nothing (left) at 0x77
-            }
-
-            if (!EneRgbDevice.Fingerprint(smbus, UnconfiguredAddress))
-            {
-                _log?.Invoke($"device at 0x77 on {smbus.Name} is not an ENE controller — leaving it alone");
-                return;
-            }
-
-            var free = CandidateAddresses.FirstOrDefault(
-                a => a != UnconfiguredAddress && smbus.ReadByte(a) < 0);
-            if (free == 0)
-            {
-                return; // no free address left
-            }
-
-            _log?.Invoke($"remapping ENE controller at 0x77 (slot {slot}) to 0x{free:X2} on {smbus.Name}");
-            new EneRgbDevice(smbus, UnconfiguredAddress).RemapAddress(slot, free);
-            Thread.Sleep(1);
-        }
     }
 
     private static void RunLocked(Action action)

@@ -27,6 +27,7 @@ public sealed partial class HeadlessLoop
     private AuraController? _aura;
     private string? _appliedAura;
     private long _auraRetryAt;
+    private string _auraSummary = "Aura: not opened yet";
 
     // Turzx dashboard (own thread: a frame push takes seconds)
     private Thread? _turzxThread;
@@ -147,12 +148,18 @@ public sealed partial class HeadlessLoop
                 {
                     _aura = AuraController.Open(device);
                     _appliedAura = null;
-                    _log($"headless: opened Aura controller '{_aura.FirmwareName}' ({_aura.Zones.Count} zones)");
+                    _auraSummary = _aura.Describe();
+                    _log($"headless: opened {_auraSummary}");
+                }
+                else
+                {
+                    _auraSummary = "Aura: no mainboard LED controller found (HID 0B05, 65-byte reports)";
                 }
             }
             catch (Exception ex)
             {
-                _log($"headless: Aura controller unavailable: {ex.Message}");
+                _auraSummary = $"Aura: controller unavailable: {ex.Message}";
+                _log($"headless: {_auraSummary}");
             }
 
             if (_aura is null)
@@ -181,14 +188,33 @@ public sealed partial class HeadlessLoop
             }
 
             _appliedAura = key;
+            _auraSummary = _aura.Describe();
             _log($"RGB applied on Aura ({_aura.Zones.Count} zones): {key}");
+            if (_aura.LastZoneErrors.Count > 0)
+            {
+                _log($"headless: Aura zone errors: {string.Join("; ", _aura.LastZoneErrors)}");
+            }
         }
         catch (Exception ex)
         {
+            _auraSummary = $"Aura: apply failed: {ex.Message} — {_aura.Describe()}";
             warnings.Add($"Aura RGB failed: {ex.Message}");
             _aura.Dispose();
             _aura = null; // reopen after the retry window
         }
+    }
+
+    private List<string> RgbDiagnostics()
+    {
+        var lines = new List<string>();
+        lines.Add(_auraSummary);
+        lines.Add(_ramRgbSummary);
+        if (_aura?.LastZoneErrors.Count > 0)
+        {
+            lines.Add($"Aura zone errors: {string.Join("; ", _aura.LastZoneErrors)}");
+        }
+
+        return lines;
     }
 
     // ---------- GPU fan RPM ----------
@@ -330,5 +356,6 @@ public sealed partial class HeadlessLoop
         }
 
         _aura = null;
+        ReleaseRamRgb();
     }
 }
