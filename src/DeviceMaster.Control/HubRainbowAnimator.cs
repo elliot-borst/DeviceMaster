@@ -52,14 +52,20 @@ public sealed class HubRainbowAnimator : IDisposable
                 var phase = RainbowEffect.PhaseAt(started, settings.Speed);
                 foreach (var hub in _hubs())
                 {
-                    if (started < _retryAt.GetValueOrDefault(hub.SerialNumber) || hub.TotalLeds == 0)
+                    if (started < _retryAt.GetValueOrDefault(hub.SerialNumber))
                     {
                         continue;
                     }
 
                     try
                     {
-                        hub.ApplyLedColors(RainbowEffect.Frame(hub.TotalLeds, phase, settings.Brightness));
+                        // TotalLeds is 0 until the hub's colour path is built (the first colour
+                        // write sizes it). Starting in Rainbow means no static colour ever went out,
+                        // so the hub was skipped forever and stayed dark — an empty write builds
+                        // the path (one black frame) and the next frame is the real one.
+                        hub.ApplyLedColors(hub.TotalLeds == 0
+                            ? ReadOnlySpan<byte>.Empty
+                            : RainbowEffect.Frame(hub.TotalLeds, phase, settings.Brightness));
                     }
                     catch (Exception ex)
                     {

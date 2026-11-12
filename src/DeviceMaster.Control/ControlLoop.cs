@@ -1097,6 +1097,14 @@ public sealed class ControlLoop : IDisposable
             // A rainbow on the air holds refreshes/confirmations back until it has landed, so
             // they never supersede it — a new setting (different key) still goes out at once.
             var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue && !(rainbow && Slv3UploadBusy);
+
+            // the fan-LCD heal burst asks for 8 re-sends — cheap for a static colour, but 8 rainbow
+            // uploads (~11 s each) kept the radio busy non-stop, since the screens refresh every
+            // minute. Each upload outlasts the deaf window by itself, so two are plenty.
+            if (rainbow && _slv3ConfirmSendsLeft > 1)
+            {
+                _slv3ConfirmSendsLeft = 1;
+            }
             var sentAny = false;
             var uploads = new List<(Slv3Device Device, List<byte[]> Payloads)>();
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))

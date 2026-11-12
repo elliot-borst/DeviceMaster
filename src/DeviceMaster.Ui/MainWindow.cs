@@ -555,7 +555,7 @@ public sealed class MainWindow : Window
     private UIElement BuildLightingPage()
     {
         var page = new StackPanel { MaxWidth = 860, HorizontalAlignment = HorizontalAlignment.Left };
-        page.Children.Add(PageTitle("Lighting", "one static color across every LED"));
+        page.Children.Add(PageTitle("Lighting", "static color or rainbow across every LED"));
         page.Children.Add(BuildRgbCard());
         return page;
     }
@@ -926,10 +926,19 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>A 0–100 brightness slider with a live "%" label, in an inset row.</summary>
-    private static Border BrightnessRow(int initial, Action<int> onChange)
+    /// <summary>Label column width shared by stacked slider rows, so their bars line up end to end.</summary>
+    private const double SliderLabelWidth = 76;
+
+    private static Border BrightnessRow(int initial, Action<int> onChange, double? labelWidth = null)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Theme.SmallLabel("Brightness"));
+        var caption = Theme.SmallLabel("Brightness");
+        if (labelWidth is { } w)
+        {
+            caption.Width = w;
+        }
+
+        panel.Children.Add(caption);
         var value = Math.Clamp(initial, 0, 100);
         var slider = new DmSlider(0, 100, value, 300);
         var label = new TextBlock
@@ -1032,11 +1041,13 @@ public sealed class MainWindow : Window
             OnControlSettingChanged();
         };
         var speedPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        speedPanel.Children.Add(Theme.SmallLabel("Speed"));
+        var speedCaption = Theme.SmallLabel("Speed");
+        speedCaption.Width = SliderLabelWidth; // same label column as Brightness: the bars line up
+        speedPanel.Children.Add(speedCaption);
         speedPanel.Children.Add(_rgbSpeedSlider);
         speedPanel.Children.Add(speedLabel);
         _rgbSpeedRow = Theme.InsetRow(speedPanel);
-        _rgbSpeedRow.Margin = new Thickness(0, 0, 0, 4);
+        _rgbSpeedRow.Margin = new Thickness(0, 14, 0, 4); // clear of the swatches above
         body.Children.Add(_rgbSpeedRow);
         RefreshRgbEffectUi();
 
@@ -1044,7 +1055,7 @@ public sealed class MainWindow : Window
         {
             _controlSettings.RgbBrightness = v;
             OnControlSettingChanged(); // saves + re-applies the (now dimmed) color to every LED
-        });
+        }, SliderLabelWidth);
         rgbBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the swatches above
         body.Children.Add(rgbBrightness);
         body.Children.Add(_rgbStatus);
