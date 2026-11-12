@@ -19,6 +19,9 @@ public sealed record DeviceReading(
 /// <summary>Immutable snapshot of the loop's last tick, safe to read from any thread.</summary>
 public sealed record ControlStatus
 {
+    /// <summary>The running build: informational version (with the source commit) and short commit.</summary>
+    public string Version { get; init; } = BuildInfo.Version;
+    public string? Commit { get; init; } = BuildInfo.Commit;
     public bool Running { get; init; }
     public ControlMode Mode { get; init; }
     public string SourceName { get; init; } = "";

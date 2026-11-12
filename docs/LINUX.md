@@ -36,6 +36,12 @@ All of it reuses the shared device sessions (`LinkHub`, `CorsairLcdDevice`, `Ene
 and safety code (`SafetyGuard`, `SensorValidity`, `KnownDeviceRegistry`) from the Windows
 projects — no protocol code is duplicated.
 
+## Which build is running?
+
+`GET /status.json` carries `Version` (the informational version, with the source commit the
+SDK stamps in when building from a git checkout, e.g. `1.0.0+e92828b…`) and `Commit` (short
+sha); the startup log line repeats it. Build from a git clone so the commit is recorded.
+
 ## Building
 
 ```sh
