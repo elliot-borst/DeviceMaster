@@ -121,7 +121,7 @@ public sealed partial class HeadlessLoop : IDisposable
             _thread = new Thread(() => Run(_cts.Token)) { IsBackground = true, Name = "DeviceMaster headless loop" };
             _thread.Start();
             StartPeripheralWorkers(_cts.Token);
-            _log("headless: control loop started");
+            _log($"headless: control loop started (DeviceMaster {Control.BuildInfo.Version})");
         }
     }
 
