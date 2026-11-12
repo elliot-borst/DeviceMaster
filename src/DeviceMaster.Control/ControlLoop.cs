@@ -379,7 +379,7 @@ public sealed class ControlLoop : IDisposable
     {
         var started = Environment.TickCount64;
         var sent = 0;
-        using var precise = Slv3Controller.PreciseTimerScope(); // real 2 ms gaps, not 15.6 ms
+        using var delay = new PreciseDelay(); // real 2 ms gaps, not 15.6 ms, window in view or not
         foreach (var (device, payloads) in job.Groups)
         {
             foreach (var payload in payloads)
@@ -410,7 +410,7 @@ public sealed class ControlLoop : IDisposable
 
                     try
                     {
-                        job.Controller.SendRgbPayload(device, payload);
+                        job.Controller.SendRgbPayload(device, payload, delay);
                     }
                     catch (Exception ex)
                     {
@@ -421,7 +421,7 @@ public sealed class ControlLoop : IDisposable
                 }
 
                 sent++;
-                Thread.Sleep(2);
+                delay.Wait(2);
             }
         }
 

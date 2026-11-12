@@ -437,8 +437,22 @@ public sealed class Slv3Controller : IDisposable
             device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: RainbowFrames, intervalMs: intervalMs);
     }
 
-    /// <summary>Sends one RGB effect payload (4 USB packets) to a group; atomic against keepalive sends.</summary>
-    public void SendRgbPayload(Slv3Device device, byte[] payload) => SendRfChunks(payload, device.Channel, device.RxType);
+    /// <summary>
+    /// Sends one RGB effect payload (4 USB packets) to a group; atomic against keepalive sends.
+    /// The 2 ms packet gaps use <paramref name="delay"/> (a high-resolution timer), so they are
+    /// really 2 ms rather than the 15.6 ms a plain <c>Thread.Sleep(2)</c> gives on Windows.
+    /// </summary>
+    public void SendRgbPayload(Slv3Device device, byte[] payload, PreciseDelay delay)
+    {
+        lock (_txGate)
+        {
+            foreach (var packet in Slv3Protocol.ChunkRfData(payload, device.Channel, device.RxType))
+            {
+                _tx.Write(packet);
+                delay.Wait(2);
+            }
+        }
+    }
 
     /// <summary>
     /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
@@ -466,32 +480,6 @@ public sealed class Slv3Controller : IDisposable
         _trace?.Invoke($"RGB #{r:X2}{g:X2}{b:X2} -> {device.MacText} ({ledCount} LEDs, {compressed.Length}B compressed)");
     }
 
-    /// <summary>
-    /// Raises the process timer resolution to 1 ms for the returned scope. At the Windows default
-    /// (15.6 ms) every <c>Thread.Sleep(2)</c> gap in an RF send really lasts ~15.6 ms, which turns
-    /// a rainbow upload into ~30 s of airtime instead of the reference's few seconds.
-    /// </summary>
-    public static IDisposable PreciseTimerScope() => new TimerResolutionScope();
-
-    private sealed class TimerResolutionScope : IDisposable
-    {
-        private bool _active = OperatingSystem.IsWindows() && TimeBeginPeriod(1) == 0;
-
-        public void Dispose()
-        {
-            if (_active)
-            {
-                _active = false;
-                TimeEndPeriod(1);
-            }
-        }
-
-        [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
-        private static extern uint TimeBeginPeriod(uint milliseconds);
-
-        [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
-        private static extern uint TimeEndPeriod(uint milliseconds);
-    }
 
     /// <summary>
     /// Re-pairs a group to this dongle: bind packets (6× per attempt), telemetry-verified
