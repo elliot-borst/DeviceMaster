@@ -215,6 +215,11 @@ public sealed class ControlLoop : IDisposable
             _keepaliveThread = new Thread(() => RunKeepalive(_cts.Token)) { IsBackground = true, Name = "DeviceMaster SL V3 keepalive" };
             _keepaliveThread.Start();
 
+            // SL V3 rainbow loops are ~100 RF payloads per group — far too long to send on the
+            // tick (it stalled fan/pump control ~30 s, #28); a worker sends them gate-per-payload
+            _slv3UploadThread = new Thread(() => RunSlv3Upload(_cts.Token)) { IsBackground = true, Name = "DeviceMaster SL V3 RGB upload" };
+            _slv3UploadThread.Start();
+
             // the Turzx screen gets its own worker: a full 480×1920 serial frame takes seconds
             // to push, which must never stall the 1 Hz fan/pump tick.
             _turzxThread = new Thread(() => RunTurzx(_cts.Token)) { IsBackground = true, Name = "DeviceMaster Turzx screen" };
@@ -227,6 +232,7 @@ public sealed class ControlLoop : IDisposable
         Thread? thread;
         Thread? keepalive;
         Thread? turzx;
+        Thread? upload;
         lock (_gate)
         {
             if (_thread is null)
@@ -238,15 +244,23 @@ public sealed class ControlLoop : IDisposable
             thread = _thread;
             keepalive = _keepaliveThread;
             turzx = _turzxThread;
+            upload = _slv3UploadThread;
             _thread = null;
             _keepaliveThread = null;
             _turzxThread = null;
+            _slv3UploadThread = null;
         }
 
         _turzxWake.Set(); // wake the Turzx worker so it sees the cancel promptly
         thread.Join(TimeSpan.FromSeconds(10));
         _rainbow?.Dispose(); // no more frames before the hubs go back to hardware mode
         _rainbow = null;
+        upload?.Join(TimeSpan.FromSeconds(5)); // checks the token between payloads
+        lock (_slv3UploadLock)
+        {
+            _slv3UploadPending = null;
+        }
+
         keepalive?.Join(TimeSpan.FromSeconds(5));
         turzx?.Join(TimeSpan.FromSeconds(25)); // may be mid-frame (a full serial push is seconds)
         ReleaseHardware();
@@ -283,6 +297,127 @@ public sealed class ControlLoop : IDisposable
     }
 
     public void Dispose() => Stop();
+
+    // ---- SL V3 rainbow upload worker (#28) ----
+
+    private sealed record Slv3UploadJob(Slv3Controller Controller, string Key, List<(Slv3Device Device, List<byte[]> Payloads)> Groups);
+
+    private Thread? _slv3UploadThread;
+    private readonly object _slv3UploadLock = new();
+    private readonly AutoResetEvent _slv3UploadWake = new(false);
+    private Slv3UploadJob? _slv3UploadPending;
+    private bool _slv3UploadRunning;
+
+    /// <summary>True while a rainbow upload is queued or on the air (refreshes and flash saves wait).</summary>
+    private bool Slv3UploadBusy
+    {
+        get
+        {
+            lock (_slv3UploadLock)
+            {
+                return _slv3UploadRunning || _slv3UploadPending is not null;
+            }
+        }
+    }
+
+    /// <summary>Queues an upload; it replaces anything still queued, and aborts an in-flight one for a different setting.</summary>
+    private void QueueSlv3Upload(Slv3UploadJob job)
+    {
+        lock (_slv3UploadLock)
+        {
+            _slv3UploadPending = job;
+        }
+
+        _slv3UploadWake.Set();
+    }
+
+    private void RunSlv3Upload(CancellationToken token)
+    {
+        while (WaitHandle.WaitAny([token.WaitHandle, _slv3UploadWake]) != 0)
+        {
+            Slv3UploadJob? job;
+            lock (_slv3UploadLock)
+            {
+                job = _slv3UploadPending;
+                _slv3UploadPending = null;
+                _slv3UploadRunning = job is not null;
+            }
+
+            if (job is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                SendSlv3Upload(job, token);
+            }
+            finally
+            {
+                lock (_slv3UploadLock)
+                {
+                    _slv3UploadRunning = false;
+                    if (_slv3UploadPending is not null)
+                    {
+                        _slv3UploadWake.Set(); // a newer job arrived mid-upload
+                    }
+                }
+            }
+        }
+    }
+
+    private void SendSlv3Upload(Slv3UploadJob job, CancellationToken token)
+    {
+        var started = Environment.TickCount64;
+        var sent = 0;
+        using var precise = Slv3Controller.PreciseTimerScope(); // real 2 ms gaps, not 15.6 ms
+        foreach (var (device, payloads) in job.Groups)
+        {
+            foreach (var payload in payloads)
+            {
+                lock (_slv3UploadLock)
+                {
+                    if (_slv3UploadPending is { } next && next.Key != job.Key)
+                    {
+                        _log?.Invoke($"SL V3 rainbow upload superseded after {sent} payloads (setting changed)");
+                        return;
+                    }
+                }
+
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // the gate per payload, never per upload: the keepalive must get in between
+                lock (_slv3Gate)
+                {
+                    if (!ReferenceEquals(_slv3, job.Controller) || _slv3Dead)
+                    {
+                        _log?.Invoke("SL V3 rainbow upload abandoned: the dongle session was reopened (re-sent on the next refresh)");
+                        Interlocked.Exchange(ref _slv3RgbRefreshDue, 0);
+                        return;
+                    }
+
+                    try
+                    {
+                        job.Controller.SendRgbPayload(device, payload);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log?.Invoke($"SL V3 rainbow upload to {device.MacText[..4]} failed: {ex.Message} — re-sending on the next tick");
+                        Interlocked.Exchange(ref _slv3RgbRefreshDue, 0);
+                        return;
+                    }
+                }
+
+                sent++;
+                Thread.Sleep(2);
+            }
+        }
+
+        _log?.Invoke($"SL V3 rainbow uploaded to {job.Groups.Count} group(s): {sent} payloads in {Environment.TickCount64 - started} ms");
+    }
 
     private void Run(CancellationToken token)
     {
@@ -908,7 +1043,8 @@ public sealed class ControlLoop : IDisposable
 
         // once every surface carries the current color and it has settled, persist it so it
         // survives power cycles (Aura commit + ENE flash saves — one write per color, total)
-        if (_persistedRgb != key && _appliedChipRgb == key && (_aura is null || _appliedAuraRgb == key))
+        // (and never mid rainbow upload: SaveConfig would store the fans' half-received effect)
+        if (_persistedRgb != key && _appliedChipRgb == key && (_aura is null || _appliedAuraRgb == key) && !Slv3UploadBusy)
         {
             if (_rgbPersistArmedFor != key)
             {
@@ -957,9 +1093,12 @@ public sealed class ControlLoop : IDisposable
                 return;
             }
 
-            // wireless effects live in fan firmware; refresh periodically in case a group resets
-            var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue;
+            // wireless effects live in fan firmware; refresh periodically in case a group resets.
+            // A rainbow on the air holds refreshes/confirmations back until it has landed, so
+            // they never supersede it — a new setting (different key) still goes out at once.
+            var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue && !(rainbow && Slv3UploadBusy);
             var sentAny = false;
+            var uploads = new List<(Slv3Device Device, List<byte[]> Payloads)>();
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
             {
                 if (!refreshDue && _appliedSlv3Rgb.GetValueOrDefault(device.MacText) == key)
@@ -973,7 +1112,8 @@ public sealed class ControlLoop : IDisposable
                     var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
                     if (rainbow)
                     {
-                        _slv3.ApplyRainbow(device, settings.RgbSpeed, bright, effectIndex);
+                        // queued below, sent by the upload worker (#28)
+                        uploads.Add((device, _slv3.BuildRainbowPayloads(device, settings.RgbSpeed, bright, effectIndex)));
                     }
                     else
                     {
@@ -989,13 +1129,20 @@ public sealed class ControlLoop : IDisposable
                 }
             }
 
+            if (uploads.Count > 0)
+            {
+                QueueSlv3Upload(new Slv3UploadJob(_slv3, key, uploads));
+            }
+
             // The RF uplink is fire-and-forget and drops roughly one group per few changes —
             // a group that missed chunks shows its rainbow fallback. Every fresh upload is
             // followed by TWO confirmation re-sends ~1.5 s apart (a fixed, finite burst —
             // never a continuous re-send loop: that flooded the RF network in v17).
             if (sentAny && !refreshDue)
             {
-                _slv3ConfirmSendsLeft = 2;
+                // a rainbow is ~100 payloads per group: just the one confirmation upload (the
+                // refresh below, once the first has landed), not the static colour's burst
+                _slv3ConfirmSendsLeft = rainbow ? 0 : 2;
                 _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 1_500);
             }
             else if (refreshDue)

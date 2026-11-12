@@ -418,33 +418,32 @@ public sealed class Slv3Controller : IDisposable
         return pwm[0];
     }
 
-    /// <summary>
-    /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
-    /// and loops the effect, so this is sent once per color change, not per frame.
-    /// </summary>
     /// <summary>Frames in an uploaded rainbow loop: smooth enough at every speed, at most ~35 KB per group.</summary>
     public const int RainbowFrames = 60;
 
     /// <summary>
-    /// Uploads a whole rainbow cycle that the fans' firmware stores and loops by itself (the same
-    /// effect upload as a static colour, just with many frames) — no per-frame radio traffic.
+    /// The RF payloads of a whole rainbow cycle that the fans' firmware stores and loops by itself
+    /// (the same effect upload as a static colour, just with many frames). The TinyUZ stream is
+    /// literal-only, so this is ~110 payloads for a 3-fan group: send them with
+    /// <see cref="SendRgbPayload"/> from a worker, never inline on a time-critical thread.
     /// </summary>
-    public void ApplyRainbow(Slv3Device device, int speed, int brightness, ReadOnlySpan<byte> effectIndex)
+    public List<byte[]> BuildRainbowPayloads(Slv3Device device, int speed, int brightness, ReadOnlySpan<byte> effectIndex)
     {
         var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
         var raw = DeviceMaster.Core.Lighting.RainbowEffect.Cycle(ledCount, RainbowFrames, brightness);
         var compressed = TinyUz.Compress(raw);
         var intervalMs = (ushort)Math.Clamp(DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(speed) * 1000 / RainbowFrames, 10, 60_000);
-        foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
-            device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: RainbowFrames, intervalMs: intervalMs))
-        {
-            SendRfChunks(payload, device.Channel, device.RxType);
-            Thread.Sleep(2);
-        }
-
-        _trace?.Invoke($"RGB rainbow -> {device.MacText} ({ledCount} LEDs × {RainbowFrames} frames @ {intervalMs} ms, {compressed.Length}B compressed)");
+        return Slv3Protocol.BuildRgbRfPayloads(
+            device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: RainbowFrames, intervalMs: intervalMs);
     }
 
+    /// <summary>Sends one RGB effect payload (4 USB packets) to a group; atomic against keepalive sends.</summary>
+    public void SendRgbPayload(Slv3Device device, byte[] payload) => SendRfChunks(payload, device.Channel, device.RxType);
+
+    /// <summary>
+    /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
+    /// and loops the effect, so this is sent once per color change, not per frame.
+    /// </summary>
     public void ApplyStaticColor(Slv3Device device, byte r, byte g, byte b, ReadOnlySpan<byte> effectIndex)
     {
         var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
@@ -465,6 +464,33 @@ public sealed class Slv3Controller : IDisposable
         }
 
         _trace?.Invoke($"RGB #{r:X2}{g:X2}{b:X2} -> {device.MacText} ({ledCount} LEDs, {compressed.Length}B compressed)");
+    }
+
+    /// <summary>
+    /// Raises the process timer resolution to 1 ms for the returned scope. At the Windows default
+    /// (15.6 ms) every <c>Thread.Sleep(2)</c> gap in an RF send really lasts ~15.6 ms, which turns
+    /// a rainbow upload into ~30 s of airtime instead of the reference's few seconds.
+    /// </summary>
+    public static IDisposable PreciseTimerScope() => new TimerResolutionScope();
+
+    private sealed class TimerResolutionScope : IDisposable
+    {
+        private bool _active = OperatingSystem.IsWindows() && TimeBeginPeriod(1) == 0;
+
+        public void Dispose()
+        {
+            if (_active)
+            {
+                _active = false;
+                TimeEndPeriod(1);
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+        private static extern uint TimeBeginPeriod(uint milliseconds);
+
+        [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+        private static extern uint TimeEndPeriod(uint milliseconds);
     }
 
     /// <summary>
