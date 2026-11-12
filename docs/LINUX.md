@@ -15,7 +15,8 @@ designed to run in a Docker container on a server.
 | Turzx 8.8" screen (system dashboard: GPU + fans, CPU + RAM + cooler) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
 | ASUS AURA mainboard LED controller (static / rainbow) | yes | **yes** (HidSharp → hidraw) |
 | Motherboard fan headers (Nuvoton NCT67xx Super I/O) | yes (LHM) | **yes** (hwmon `pwmN`; only headers spinning at start-up; never below 30 %; BIOS curve restored on stop / mode Off) |
-| Lian Li SL V3 / RAM ENE RGB / PresentMon | yes | not ported |
+| RGB DRAM via ENE controllers (chipset SMBus) | yes | **yes** (`/dev/i2c-N` SMBus ioctls on PIIX4/I801 adapters) |
+| Lian Li SL V3 / PresentMon | yes | not ported |
 
 ## Projects
 

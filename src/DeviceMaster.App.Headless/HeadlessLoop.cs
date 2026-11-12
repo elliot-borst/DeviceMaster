@@ -224,6 +224,7 @@ public sealed partial class HeadlessLoop : IDisposable
 
         EnsureHubs(cfg, warnings);
         EnsureGpuRgb(cfg, warnings);
+        EnsureRamRgb(cfg);
         EnsureLcd(cfg, warnings);
 
         var readings = new List<DeviceReading>();
@@ -340,7 +341,7 @@ public sealed partial class HeadlessLoop : IDisposable
                 _hubReceivedDuty[hub.SerialNumber] = duty;
                 if (failsafe || deepRepaint || refreshDue)
                 {
-                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written} channels)"
+                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written.Count} channels)"
                         + (failsafe ? " (FAILSAFE)" : ""));
                 }
             }
@@ -402,6 +403,7 @@ public sealed partial class HeadlessLoop : IDisposable
         }
 
         ApplyGpuRgb(cfg, warnings);
+        ApplyRamRgb(cfg, warnings);
         ApplyAura(cfg, warnings);
 
         // ---- pump LCD ----
@@ -459,6 +461,7 @@ public sealed partial class HeadlessLoop : IDisposable
             FailsafeActive = failsafe,
             Devices = readings,
             Warnings = warnings,
+            RgbDiagnostics = RgbDiagnostics(),
         };
 
         UpdateDashboard(_status);

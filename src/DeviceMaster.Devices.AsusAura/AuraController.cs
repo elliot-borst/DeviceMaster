@@ -28,6 +28,10 @@ public sealed class AuraController : IDisposable
     public UsbId UsbId { get; }
     public string FirmwareName { get; private set; } = "?";
     public IReadOnlyList<AuraZone> Zones { get; private set; } = [];
+    public byte[] ConfigTable { get; private set; } = [];
+
+    /// <summary>Per-zone errors from the last apply (empty = every zone accepted its packets).</summary>
+    public IReadOnlyList<string> LastZoneErrors { get; private set; } = [];
     public int TotalEffectLeds => Zones.Sum(z => z.LedCount);
 
     /// <summary>All Aura mainboard controllers present (65-byte report interface).</summary>
@@ -77,7 +81,8 @@ public sealed class AuraController : IDisposable
         FirmwareName = AuraUsbProtocol.ParseFirmwareName(firmware);
 
         var config = Request(AuraUsbProtocol.BuildConfigTableRequest(), replyMarker: 0x30);
-        Zones = AuraUsbProtocol.ParseZones(AuraUsbProtocol.ParseConfigTable(config));
+        ConfigTable = AuraUsbProtocol.ParseConfigTable(config);
+        Zones = AuraUsbProtocol.ParseZones(ConfigTable, FirmwareName);
         if (Zones.Count == 0)
         {
             throw new InvalidOperationException("Aura controller reports no LED zones in its config table.");
@@ -95,12 +100,29 @@ public sealed class AuraController : IDisposable
     {
         lock (_ioLock)
         {
+            var errors = new List<string>();
             var startLed = 0;
             foreach (var zone in Zones)
             {
-                Write(AuraUsbProtocol.BuildEffect(zone.EffectChannel, AuraUsbProtocol.ModeStatic));
-                Write(AuraUsbProtocol.BuildEffectColor(startLed, zone.LedCount, r, g, b));
+                // each zone on its own: one zone the packet format can't address must not
+                // leave the remaining headers unpainted
+                try
+                {
+                    Write(AuraUsbProtocol.BuildEffect(zone.EffectChannel, AuraUsbProtocol.ModeStatic));
+                    Write(AuraUsbProtocol.BuildEffectColor(startLed, zone.LedCount, r, g, b));
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    errors.Add($"{ZoneName(zone)}: {ex.Message}");
+                }
+
                 startLed += zone.LedCount;
+            }
+
+            LastZoneErrors = errors;
+            if (errors.Count == Zones.Count)
+            {
+                throw new InvalidOperationException($"no Aura zone accepted the color: {string.Join("; ", errors)}");
             }
         }
     }
@@ -114,8 +136,20 @@ public sealed class AuraController : IDisposable
             {
                 Write(AuraUsbProtocol.BuildEffect(zone.EffectChannel, AuraUsbProtocol.ModeRainbow));
             }
+
+            LastZoneErrors = [];
         }
     }
+
+    /// <summary>One-line description for diagnostics: firmware, config table, zone map.</summary>
+    public string Describe()
+    {
+        var zones = string.Join(", ", Zones.Select(z => $"{ZoneName(z)}[eff {z.EffectChannel}, dir 0x{z.DirectChannel:X2}, {z.LedCount} slot(s)]"));
+        var text = $"Aura '{FirmwareName}': {AuraUsbProtocol.DescribeConfigTable(ConfigTable)}; zones: {zones}";
+        return LastZoneErrors.Count == 0 ? text : $"{text}; zone errors: {string.Join("; ", LastZoneErrors)}";
+    }
+
+    private static string ZoneName(AuraZone zone) => zone.IsAddressable ? $"ARGB header {zone.DirectChannel + 1}" : "onboard";
 
     /// <summary>Persists the currently applied configuration across reboots (0x3F 0x55).</summary>
     public void Commit()

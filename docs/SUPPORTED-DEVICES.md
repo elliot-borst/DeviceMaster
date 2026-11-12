@@ -101,6 +101,12 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   (20 LEDs/packet, `0x80` apply bit), commit `0x3F 0x55` (persists across reboot).
 - Boards without onboard LEDs (config `[0x1B]` = 0) still use the mainboard protocol —
   never the `0x3B` addressable-only variant, even when only ARGB headers exist.
+- Effect channels (`0x35`): onboard zone first, then one per ARGB header — except on
+  `AULA3-AR32` firmware, where headers take channels `0..n-1` and onboard takes `n` (OpenRGB).
+- The `0x36` effect-color mask is 16 bits: at most 16 effect slots (onboard LEDs + one per
+  header) are addressable; zones beyond that are reported, not silently dropped.
+- The headless daemon publishes the firmware name, raw config table and zone map in
+  `/status.json` (`RgbDiagnostics`) — start there when a header doesn't light.
 
 ## RGB DRAM (ENE controllers — Klevv/Essencore, GSkill, Geil, …)
 
@@ -115,6 +121,10 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - Transport: RAMSPDToolkit's SMBus transactions over LibreHardwareMonitor's PawnIO driver
   (AMD FCH exposes two ports; both are scanned). SPD EEPROM addresses are never written.
   All transactions hold the `Global\Access_SMBUS.HTP.Method` mutex.
+- Linux (headless): kernel SMBus ioctls (`I2C_SLAVE` + `I2C_SMBUS`) on the chipset adapters
+  (`SMBus PIIX4 adapter …` / `SMBus I801 adapter …`) — these drivers are SMBus-only and reject
+  `I2C_RDWR`. Plain `I2C_SLAVE` (never `_FORCE`), so addresses bound by `ee1004`/`spd5118`
+  (the SPD EEPROMs) are refused by the kernel. Detection is the shared `EneDramScan`.
 
 ## NVIDIA GPU RGB (board-partner controllers)
 

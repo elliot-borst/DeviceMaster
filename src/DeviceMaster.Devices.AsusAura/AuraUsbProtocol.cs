@@ -54,21 +54,29 @@ public static class AuraUsbProtocol
     /// <summary>Config reply (marker 0x30): the 60-byte config table lives at [4..64].</summary>
     public static byte[] ParseConfigTable(ReadOnlySpan<byte> response) => response.Slice(4, 60).ToArray();
 
+    /// <summary>The 0x36 effect-color mask is 16 bits wide: effect slots beyond it cannot be addressed.</summary>
+    public const int MaxEffectSlots = 16;
+
     /// <summary>
     /// Builds the zone list from the config table: an onboard fixed zone when
-    /// config[0x1B] &gt; 0 (effect channel 0, direct channel 0x04), then one zone per
-    /// addressable header (config[0x02] of them, direct channel = header index).
+    /// config[0x1B] &gt; 0 (direct channel 0x04), then one zone per addressable header
+    /// (config[0x02] of them, direct channel = header index). Effect channels follow the
+    /// reference (OpenRGB AuraMainboardController): onboard first, headers after — except on
+    /// "AULA3-AR32" firmware, where headers take effect channels 0..n-1 and the onboard zone
+    /// takes channel n.
     /// </summary>
-    public static IReadOnlyList<AuraZone> ParseZones(ReadOnlySpan<byte> configTable)
+    public static IReadOnlyList<AuraZone> ParseZones(ReadOnlySpan<byte> configTable, string? firmwareName = null)
     {
         var zones = new List<AuraZone>();
         int onboardLeds = configTable[0x1B];
         int addressableHeaders = configTable[0x02];
+        var headersFromZero = firmwareName?.StartsWith("AULA3-AR32", StringComparison.Ordinal) == true;
 
         byte effectChannel = 0;
         if (onboardLeds > 0)
         {
-            zones.Add(new AuraZone(effectChannel++, DirectChannel: 0x04, onboardLeds, IsAddressable: false));
+            var onboardChannel = headersFromZero ? (byte)addressableHeaders : effectChannel++;
+            zones.Add(new AuraZone(onboardChannel, DirectChannel: 0x04, onboardLeds, IsAddressable: false));
         }
 
         for (byte i = 0; i < addressableHeaders; i++)
@@ -78,6 +86,11 @@ public static class AuraUsbProtocol
 
         return zones;
     }
+
+    /// <summary>Hex dump of a config table for diagnostics ("1B=08 1D=02 02=03 | 00 01 …").</summary>
+    public static string DescribeConfigTable(ReadOnlySpan<byte> configTable) =>
+        $"onboard(1B)={configTable[0x1B]} rgb12v(1D)={configTable[0x1D]} argb(02)={configTable[0x02]} | "
+        + Convert.ToHexString(configTable);
 
     /// <summary>Effect select (0x35): EC 35 &lt;effectChannel&gt; 00 &lt;shutdown&gt; &lt;mode&gt;.</summary>
     public static byte[] BuildEffect(byte effectChannel, byte mode, bool shutdownEffect = false)
@@ -96,6 +109,12 @@ public static class AuraUsbProtocol
     /// </summary>
     public static byte[] BuildEffectColor(int startLed, int ledCount, byte r, byte g, byte b, bool shutdownEffect = false)
     {
+        if (startLed < 0 || ledCount <= 0 || startLed + ledCount > MaxEffectSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ledCount),
+                $"effect slots {startLed}..{startLed + ledCount - 1} exceed the {MaxEffectSlots}-slot effect-color mask");
+        }
+
         var mask = ((1 << ledCount) - 1) << startLed;
         var packet = Packet(0x36);
         packet[2] = (byte)(mask >> 8);

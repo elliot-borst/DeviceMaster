@@ -62,6 +62,12 @@ public sealed record ControlStatus
 
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// What each chip-level RGB controller reported (firmware, config/zone map, scan results),
+    /// so a device that doesn't light can be diagnosed from the status endpoint alone.
+    /// </summary>
+    public IReadOnlyList<string> RgbDiagnostics { get; init; } = [];
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.Now;
 }
 

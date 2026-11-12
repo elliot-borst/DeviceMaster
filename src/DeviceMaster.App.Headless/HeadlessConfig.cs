@@ -47,6 +47,9 @@ public sealed class HeadlessConfig
     /// <summary>Drive the motherboard's spinning fan headers (Nuvoton Super I/O via hwmon) with the fan duty.</summary>
     public bool MotherboardFans { get; set; } = true;
 
+    /// <summary>Drive ENE RGB controllers on RAM sticks over the chipset SMBus (static colour / rainbow).</summary>
+    public bool RamRgbEnabled { get; set; } = true;
+
     /// <summary>Drive the ASUS Aura mainboard LED controller (static colour / rainbow).</summary>
     public bool AuraEnabled { get; set; } = true;
 
