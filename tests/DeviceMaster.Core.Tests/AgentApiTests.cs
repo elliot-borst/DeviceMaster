@@ -159,3 +159,101 @@ public sealed class AgentApiTests : IDisposable
         _listener.Close();
     }
 }
+
+public sealed class AgentUpdateCheckTests : IDisposable
+{
+    private const string Token = "abcdefabcdefabcdefabcdefabcdefab";
+
+    private sealed class Host(bool selfUpdating) : IAgentHost
+    {
+        public int Requests;
+        public ControlStatus Status { get; } = new();
+        public FleetProfile ReadProfile() => new();
+        public bool ApplyProfile(FleetProfile profile) => false;
+        public bool RequestUpdateCheck()
+        {
+            Requests++;
+            return selfUpdating;
+        }
+    }
+
+    private sealed class LinuxHost : IAgentHost // relies on the interface default
+    {
+        public ControlStatus Status { get; } = new();
+        public FleetProfile ReadProfile() => new();
+        public bool ApplyProfile(FleetProfile profile) => false;
+    }
+
+    private readonly List<System.Net.HttpListener> _listeners = [];
+    private readonly HttpClient _client = new();
+
+    private string Serve(IAgentHost host)
+    {
+        var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Start();
+        _listeners.Add(listener);
+        var api = new AgentApi(host, Token);
+        new Thread(() =>
+        {
+            while (listener.IsListening)
+            {
+                try
+                {
+                    api.TryHandle(listener.GetContext());
+                }
+                catch
+                {
+                    break;
+                }
+            }
+        }) { IsBackground = true }.Start();
+        return $"http://localhost:{port}{AgentApi.Prefix}update-check";
+    }
+
+    private Task<HttpResponseMessage> Post(string url, string? token = Token)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        if (token is not null)
+        {
+            request.Headers.Authorization = new("Bearer", token);
+        }
+
+        return _client.SendAsync(request);
+    }
+
+    [Fact]
+    public async Task StartsACheckOnASelfUpdatingMachine()
+    {
+        var host = new Host(selfUpdating: true);
+        var response = await Post(Serve(host));
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(1, host.Requests);
+    }
+
+    [Fact]
+    public async Task ContainersSayItIsNotForThem() =>
+        Assert.Equal(System.Net.HttpStatusCode.NotImplemented, (await Post(Serve(new LinuxHost()))).StatusCode);
+
+    [Fact]
+    public async Task NeedsTheToken()
+    {
+        var host = new Host(selfUpdating: true);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await Post(Serve(host), token: null)).StatusCode);
+        Assert.Equal(0, host.Requests);
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        foreach (var l in _listeners)
+        {
+            l.Stop();
+            l.Close();
+        }
+    }
+}

@@ -17,6 +17,12 @@ public interface IAgentHost
 
     /// <summary>Applies and persists a profile through the local clamps; true when anything changed.</summary>
     bool ApplyProfile(FleetProfile profile);
+
+    /// <summary>
+    /// Starts an update check now, as the app's own periodic check does (it still waits while the
+    /// machine is busy gaming). False when this app updates some other way (the Linux containers).
+    /// </summary>
+    bool RequestUpdateCheck() => false;
 }
 
 /// <summary>
@@ -29,6 +35,7 @@ public interface IAgentHost
 /// <item><c>GET /api/v1/status</c> — the loop status</item>
 /// <item><c>GET /api/v1/profile</c> — the profile in force, with its revision</item>
 /// <item><c>PUT /api/v1/profile</c> — apply a whole profile; answers with the profile now in force</item>
+/// <item><c>POST /api/v1/update-check</c> — check for (and install) a new release now; 501 where the app isn't self-updating</item>
 /// </list>
 /// </summary>
 public sealed class AgentApi
@@ -96,6 +103,18 @@ public sealed class AgentApi
                 case ("GET", "profile"):
                     var profile = _host.ReadProfile();
                     Respond(ctx, 200, new { revision = Revision(profile), profile });
+                    break;
+                case ("POST", "update-check"):
+                    if (_host.RequestUpdateCheck())
+                    {
+                        _log?.Invoke("agent api: update check requested");
+                        Respond(ctx, 202, new { started = true });
+                    }
+                    else
+                    {
+                        Respond(ctx, 501, new { error = "this machine is updated by redeploying its container, not in place" });
+                    }
+
                     break;
                 case ("PUT", "profile"):
                     HandlePut(ctx);
