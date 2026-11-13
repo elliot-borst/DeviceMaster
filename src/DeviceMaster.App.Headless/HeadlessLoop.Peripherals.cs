@@ -279,6 +279,33 @@ public sealed partial class HeadlessLoop
         };
     }
 
+    // whether a Turzx screen is attached (open, or found by a once-a-minute probe while unmanaged)
+    private volatile bool _turzxOpen;
+    private bool _turzxSeen;
+    private long _turzxProbeDue;
+
+    private bool TurzxPresent()
+    {
+        if (_turzxOpen)
+        {
+            _turzxSeen = true;
+        }
+        else if (Environment.TickCount64 >= _turzxProbeDue)
+        {
+            _turzxProbeDue = Environment.TickCount64 + 60_000;
+            try
+            {
+                _turzxSeen = TurzxScreen.FindLinuxDataPort() is not null;
+            }
+            catch
+            {
+                // leave the last answer
+            }
+        }
+
+        return _turzxSeen;
+    }
+
     private void RunTurzx(CancellationToken token)
     {
         TurzxScreen? screen = null;
@@ -336,10 +363,12 @@ public sealed partial class HeadlessLoop
                 }
             }
 
+            _turzxOpen = screen is not null;
             _turzxWake.WaitOne(TurzxFrameMs);
         }
 
         screen?.Dispose(); // the panel keeps showing the last frame
+        _turzxOpen = false;
     }
 
     private void ReleasePeripherals()

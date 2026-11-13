@@ -459,6 +459,21 @@ public sealed partial class HeadlessLoop : IDisposable
             TargetDutyPercent = duty,
             PumpDutyPercent = pumpDuty,
             FailsafeActive = failsafe,
+            Capabilities = new MachineCapabilities
+            {
+                Pump = readings.Any(r => r.IsPump),
+                CorsairHubs = _hubs.Count > 0,
+                MotherboardFans = _mbFans is { Controlled.Count: > 0 },
+                MotherboardRgb = _aura is not null,
+                RamRgb = _ramRgb.Count > 0,
+                GpuRgb = _gpuRgb is not null,
+                FanRgb = _hubs.Count > 0,
+                PumpLcd = _lcd is not null,
+                Turzx = TurzxPresent(),
+                CpuTemperature = SensorValidity.IsPlausibleTemperature(cpu),
+                GpuTemperature = SensorValidity.IsPlausibleTemperature(gpu?.TemperatureC),
+                CoolantTemperature = SensorValidity.IsPlausibleTemperature(coolant),
+            },
             Devices = readings,
             Warnings = warnings,
             RgbDiagnostics = RgbDiagnostics(),
@@ -613,8 +628,21 @@ public sealed partial class HeadlessLoop : IDisposable
             CurveSource.Coolant => TryReadCoolant(null),
             CurveSource.Cpu => Hwmon.CpuTemperatureC(),
             CurveSource.Gpu => ReadGpu(cfg)?.TemperatureC,
+            CurveSource.Hottest => ReadHottest(cfg),
             _ => null,
         };
+    }
+
+    // CurveSource.Hottest: spike smoothing, and whether this machine has shown a GPU temperature
+    private readonly TemperatureSmoother _hottestSmoother = new();
+    private bool _gpuTempSeen;
+
+    private double? ReadHottest(HeadlessConfig cfg)
+    {
+        var cpu = Hwmon.CpuTemperatureC();
+        var gpu = ReadGpu(cfg)?.TemperatureC;
+        _gpuTempSeen |= SensorValidity.IsPlausibleTemperature(gpu); // once seen, a GPU must keep reporting
+        return _hottestSmoother.Next(HottestTemperature.Combine(cpu, gpu, _gpuTempSeen), Environment.TickCount64);
     }
 
     private readonly CpuStats _cpuStats = new(); // load/power are rates: keeps the previous tick's counters

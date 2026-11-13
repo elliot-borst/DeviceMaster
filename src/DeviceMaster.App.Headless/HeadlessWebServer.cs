@@ -512,14 +512,14 @@ function toast(msg, err=false){
 
 /* ---- config load / apply ---- */
 /* config.json stores enums by name ("Curve"); the controls work in numbers */
-const ENUMS = { RgbEffect:["Static","Rainbow"], Mode:["Off","Manual","Curve"], Source:["Coolant","Cpu","Gpu"], LcdScreens:["Unmanaged","Off","Black","White","Metrics"],
+const ENUMS = { RgbEffect:["Static","Rainbow"], Mode:["Off","Manual","Curve"], Source:["Coolant","Cpu","Gpu","Hottest"], LcdScreens:["Unmanaged","Off","Black","White","Metrics"],
   PumpScreenMetric:["Coolant","CpuTemp","GpuTemp","CpuLoad","GpuLoad","Clock","RamLoad","PumpRpm","FanDuty","Date","VramLoad","FanRpm","PumpDuty","GpuPower","CpuPower","GpuClock","VramTemp"] };
 function normalize(c){
   for (const [k, names] of Object.entries(ENUMS)) if (typeof c.Control[k] === "string") c.Control[k] = Math.max(0, names.indexOf(c.Control[k]));
   return c;
 }
-const SOURCES = [["Coolant",0],["CPU",1],["GPU",2]];
-const sourceLabel = n => ({Coolant:"Coolant",Cpu:"CPU",Gpu:"GPU"})[n] || n;
+const SOURCES = [["Coolant",0],["CPU",1],["GPU",2],["CPU/GPU",3]];
+const sourceLabel = n => ({Coolant:"Coolant",Cpu:"CPU",Gpu:"GPU",Hottest:"CPU/GPU"})[n] || n;
 const hx = h => ("0"+h.toString(16)).slice(-2);
 function initControls(){
   syncControls();
@@ -673,7 +673,7 @@ function renderFanMode(){
   $("dutyRow").style.display = curve ? "none" : "";
   $("sourceRow").style.display = curve ? "" : "none";
   $("fanSub").textContent = curve ? `curve on ${src[0].toLowerCase()} · every fan in the system` : "one fixed duty · every fan in the system";
-  $("curveSub").textContent = `${src[0]} temperature → fan duty · drag a point to change it` + (curve ? "" : " · used when Mode is Curve");
+  $("curveSub").textContent = `${c.Source === 3 ? "Hotter of CPU and GPU" : src[0]} temperature → fan duty · drag a point to change it` + (curve ? "" : " · used when Mode is Curve");
   $("curveCard").className = "card" + (curve ? "" : " idle");
   $("rgbOnEcho").textContent = c.RgbEnabled ? "on" : "off";
   if (!curveDrag) drawCurve();
@@ -793,7 +793,7 @@ function tick(){
     $("fanLine").className = "fanline" + (reporting === fans.length ? " ok" : "");
     $("curveReadout").textContent = s.Mode === 2 && s.SourceTemperatureC != null ? `${s.SourceTemperatureC.toFixed(1)} °C → ${s.TargetDutyPercent}%` : "";
     // the "now" marker shows in Fixed mode too: where the curve would put the fans right now
-    const srcTemp = cfg ? [s.CoolantTemperatureC, s.CpuTemperatureC, s.GpuTemperatureC][cfg.Control.Source] : null;
+    const srcTemp = cfg ? (cfg.Control.Source === 3 ? (s.SourceTemperatureC ?? ((s.CpuTemperatureC ?? s.GpuTemperatureC) == null ? null : Math.max(s.CpuTemperatureC ?? 0, s.GpuTemperatureC ?? 0))) : [s.CoolantTemperatureC, s.CpuTemperatureC, s.GpuTemperatureC][cfg.Control.Source]) : null;
     const srcDuty = s.Mode === 2 ? s.TargetDutyPercent
       : srcTemp != null && cfg ? curveDuty(twoPoints(cfg.Control), srcTemp) : null;
     liveCurve = !s.FailsafeActive && srcTemp != null && srcDuty != null ? [srcTemp, srcDuty] : null;

@@ -63,6 +63,9 @@ public sealed record ControlStatus
     /// <summary>Turzx 8.8" screen connection state for the UI ("Connected · COM3", "Not detected", …); null = not managed.</summary>
     public string? TurzxInfo { get; init; }
 
+    /// <summary>What this machine can be controlled through right now (fleet UI, #33).</summary>
+    public MachineCapabilities Capabilities { get; init; } = new();
+
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
@@ -562,8 +565,52 @@ public sealed class ControlLoop : IDisposable
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
+            Capabilities = BuildCapabilities(readings, coolant),
             Devices = readings,
             Warnings = warnings,
+        };
+    }
+
+    // a Turzx screen nobody manages is never opened: probe for it now and then so the fleet UI knows it exists
+    private bool _turzxSeen;
+    private long _turzxProbeDue;
+
+    private MachineCapabilities BuildCapabilities(IReadOnlyList<DeviceReading> readings, double? coolant)
+    {
+        if (_turzx is not null)
+        {
+            _turzxSeen = true;
+        }
+        else if (Environment.TickCount64 >= _turzxProbeDue)
+        {
+            _turzxProbeDue = Environment.TickCount64 + 60_000;
+            try
+            {
+                _turzxSeen = TurzxScreen.Find().Count > 0;
+            }
+            catch
+            {
+                // leave the last answer
+            }
+        }
+
+        var lianLi = _slv3 is { } slv3 && !_slv3Dead && slv3.Devices.Count > 0;
+        return new MachineCapabilities
+        {
+            Pump = readings.Any(r => r.IsPump),
+            CorsairHubs = _hubs.Count > 0,
+            LianLiFans = lianLi,
+            MotherboardFans = _headers is not null,
+            MotherboardRgb = _aura is not null,
+            RamRgb = _ramRgb.Count > 0,
+            GpuRgb = _gpuRgb.Any(g => g.Ene is not null),
+            FanRgb = _hubs.Count > 0 || lianLi,
+            PumpLcd = _corsairLcd is not null,
+            FanLcds = _lcdNodes.Count > 0,
+            Turzx = _turzxSeen,
+            CpuTemperature = SensorValidity.IsPlausibleTemperature(_dashCpuTemp),
+            GpuTemperature = SensorValidity.IsPlausibleTemperature(_dashGpuTemp),
+            CoolantTemperature = SensorValidity.IsPlausibleTemperature(coolant),
         };
     }
 
@@ -2161,6 +2208,10 @@ public sealed class ControlLoop : IDisposable
         return _lhm;
     }
 
+    // CurveSource.Hottest: spike smoothing, and whether this machine has shown a GPU temperature
+    private readonly TemperatureSmoother _hottestSmoother = new();
+    private bool _gpuTempSeen;
+
     private double? ReadSourceTemperature(CurveSource source, List<string> warnings)
     {
         if (source == CurveSource.Coolant)
@@ -2187,11 +2238,20 @@ public sealed class ControlLoop : IDisposable
         try
         {
             var readings = Lhm().Read(refresh: false);
-            var wanted = source == CurveSource.Cpu ? "cpu" : "gpu";
-            return readings
+            double? Hottest(string wanted) => readings
                 .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains(wanted, StringComparison.OrdinalIgnoreCase))
                 .Select(r => (double?)r.Value)
                 .Max();
+
+            if (source == CurveSource.Hottest)
+            {
+                var cpu = Hottest("cpu");
+                var gpu = Hottest("gpu");
+                _gpuTempSeen |= SensorValidity.IsPlausibleTemperature(gpu); // once seen, a GPU must keep reporting
+                return _hottestSmoother.Next(HottestTemperature.Combine(cpu, gpu, _gpuTempSeen), Environment.TickCount64);
+            }
+
+            return Hottest(source == CurveSource.Cpu ? "cpu" : "gpu");
         }
         catch (Exception ex)
         {

@@ -19,6 +19,12 @@ public enum CurveSource
     Coolant = 0,
     Cpu,
     Gpu,
+
+    /// <summary>
+    /// The hotter of CPU and GPU (smoothed) — the fleet-wide default (#33): fans ramp when either
+    /// works hard. A machine with a GPU whose reading fails goes to failsafe, never CPU-only.
+    /// </summary>
+    Hottest,
 }
 
 public enum LcdMode
