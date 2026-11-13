@@ -44,6 +44,20 @@ public sealed class HwmonFanControl : IDisposable
     /// <summary>Handback attempts before a header is set to full speed instead.</summary>
     public const int RestoreAttempts = 3;
 
+    /// <summary>
+    /// Wait before a dropped header is taken back, by how many times it has been retaken in a row:
+    /// 1 min, 2 min, 5 min, then every 10 min. Some drivers reject a configuration now and then
+    /// (nct6687: "rejected new configuration as invalid" / EIO) and a header that worked for hours
+    /// gets dropped — it is on the BIOS curve meanwhile (safe), but it should come back by itself.
+    /// </summary>
+    public static readonly IReadOnlyList<int> RetakeDelaysMs = [60_000, 120_000, 300_000, 600_000];
+
+    /// <summary>
+    /// Retakes for a header that has never held a duty (e.g. board headers the EC owns) before it
+    /// is left on the BIOS curve for good. A header that once held a duty is retaken indefinitely.
+    /// </summary>
+    public const int MaxRetakesNeverHeld = 2;
+
     /// <summary>Read-back tolerance: drivers round the duty to the chip's own resolution.</summary>
     private const int PwmTolerance = 3;
 
@@ -60,6 +74,9 @@ public sealed class HwmonFanControl : IDisposable
     private readonly Dictionary<int, Handback> _handbacks = [];
     private readonly Dictionary<int, string> _stuck = [];
     private readonly Dictionary<int, long> _lastDutyWrite = [];
+    private readonly HashSet<int> _everHeld = [];                 // a duty verified at least once
+    private readonly Dictionary<int, long> _retakeAt = [];        // dropped header → when to take it back
+    private readonly Dictionary<int, int> _retakes = [];          // retakes in a row without a verified duty
 
     private sealed class Handback
     {
@@ -109,6 +126,12 @@ public sealed class HwmonFanControl : IDisposable
 
     /// <summary>Headers that would not go back to the BIOS and were set to full speed instead.</summary>
     public IReadOnlyDictionary<int, string> Stuck => _stuck;
+
+    /// <summary>Headers that have held a duty at least once (so a drop of one of these is a loss worth a warning).</summary>
+    public IReadOnlySet<int> EverHeld => _everHeld;
+
+    /// <summary>Dropped headers waiting to be taken back, with when (clock ms).</summary>
+    public IReadOnlyDictionary<int, long> RetakeAt => _retakeAt;
 
     /// <summary>
     /// The Super I/O fan controller with its spinning headers, or null when no supported chip is
@@ -186,13 +209,34 @@ public sealed class HwmonFanControl : IDisposable
             if (readBack is { } r && Math.Abs(r - wrote) <= PwmTolerance)
             {
                 _failures.Remove(index);
+                _retakes.Remove(index); // holding again: a later loss starts from the short delay
+                if (_everHeld.Add(index) && _dropped.Remove(index))
+                {
+                    _log?.Invoke($"motherboard fans: pwm{index} is under control again");
+                }
+
+                _dropped.Remove(index);
                 continue;
             }
 
             Fail(index, $"wrote {wrote}, reads back {readBack?.ToString(CultureInfo.InvariantCulture) ?? "nothing"} after {VerifyAfterMs / 1000.0:0.#} s", warnings, now);
         }
 
-        // 2) duty writes
+        // 2) take back dropped headers whose wait is over (once their handback has finished)
+        foreach (var (index, at) in _retakeAt.ToList())
+        {
+            if (now < at || _handbacks.ContainsKey(index) || _stuck.ContainsKey(index))
+            {
+                continue;
+            }
+
+            _retakeAt.Remove(index);
+            _failures.Remove(index);
+            _controlled.Add(index);
+            _log?.Invoke($"motherboard fans: taking pwm{index} back (retake {_retakes.GetValueOrDefault(index)})");
+        }
+
+        // 3) duty writes
         foreach (var index in _controlled.ToList())
         {
             if (!refresh && _written.GetValueOrDefault(index, -1) == raw)
@@ -216,7 +260,7 @@ public sealed class HwmonFanControl : IDisposable
             }
         }
 
-        // 3) handbacks of dropped headers
+        // 4) handbacks of dropped headers
         AdvanceHandbacks(now);
         warnings.AddRange(_stuck.Select(s => $"pwm{s.Key}: {s.Value}"));
         return warnings;
@@ -329,7 +373,19 @@ public sealed class HwmonFanControl : IDisposable
         _failures.Remove(index);
         _dropped[index] = $"{failures} failed writes in a row (last: {problem})";
         _handbacks[index] = new Handback { WriteAt = _lastDutyWrite.GetValueOrDefault(index, now) + SettleMs };
-        _log?.Invoke($"motherboard fans: pwm{index} does not take a duty ({_dropped[index]}) — handing it back to the BIOS");
+
+        // come back for it later: always for a header that has worked, a couple of times for one that never has
+        var retakes = _retakes.GetValueOrDefault(index);
+        var retakeNote = "";
+        if (_everHeld.Contains(index) || retakes < MaxRetakesNeverHeld)
+        {
+            var delay = RetakeDelaysMs[Math.Min(retakes, RetakeDelaysMs.Count - 1)];
+            _retakeAt[index] = now + delay;
+            _retakes[index] = retakes + 1;
+            retakeNote = $"; trying again in {delay / 1000} s";
+        }
+
+        _log?.Invoke($"motherboard fans: pwm{index} does not take a duty ({_dropped[index]}) — handing it back to the BIOS{retakeNote}");
     }
 
     private void AdvanceHandbacks(long now)
