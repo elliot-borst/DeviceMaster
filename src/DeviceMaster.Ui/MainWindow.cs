@@ -2191,6 +2191,13 @@ public sealed class MainWindow : Window
         public FleetProfile ReadProfile() => window.Dispatcher.Invoke(() => FleetProfile.From(window._controlSettings));
 
         public bool ApplyProfile(FleetProfile profile) => window.Dispatcher.Invoke(() => window.ApplyRemoteProfile(profile));
+
+        // same path as the 15-minute check: installs silently, but waits while a game runs
+        public bool RequestUpdateCheck()
+        {
+            _ = window.Dispatcher.InvokeAsync(() => window.CheckForUpdatesAsync(auto: true));
+            return true;
+        }
     }
 
     private void StartAgentApi()
