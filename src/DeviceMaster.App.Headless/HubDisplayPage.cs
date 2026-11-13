@@ -5,7 +5,7 @@ namespace DeviceMaster.App.Headless;
 /// storage across the fleet, containers and downloads. Built for a spare screen running a kiosk
 /// browser; everything scales with the viewport.
 /// </summary>
-internal static class HubDisplayPage
+public static class HubDisplayPage
 {
     public const string Html = """
 <!doctype html>
@@ -61,7 +61,10 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
 .btn.danger { color:#fca5a5; border-color:#5b1d20; } .btn.go { color:var(--good); border-color:#1f5a46; }
 .pw { margin-left:auto; font-size:1.6vh; padding:.6vh 1vw; }
 .lights { display:flex; align-items:center; gap:.6vw; margin-left:2vw; }
-.sw { width:3.4vh; height:3.4vh; border-radius:1vh; border:2px solid transparent; cursor:pointer; } .sw.on { border-color:#fff; }
+.bri { display:inline-flex; align-items:center; gap:.4vw; color:var(--dim); font-size:2vh; margin-left:.6vw; }
+.bri input { width:11vw; accent-color:var(--a2); height:3vh; } .bri b { font-size:1.6vh; min-width:3.2em; color:var(--text); }
+.sw { width:3.4vh; height:3.4vh; border-radius:1vh; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:2.2vh; line-height:1; }
+.sw.on { box-shadow:0 0 0 3px var(--bg), 0 0 0 6px var(--text); transform:scale(1.15); } /* selected: a tick + a white ring, visible on every colour */
 .modal { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index:9; }
 .modal .box { background:var(--card); border:1px solid var(--line); border-radius:2vh; padding:3vh 3vw; min-width:34vw; text-align:center; }
 .modal h3 { font-size:3vh; margin-bottom:1vh; } .modal p { font-size:1.8vh; color:var(--dim); margin-bottom:3vh; }
@@ -80,6 +83,8 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
   <div class="card"><h2>Downloads</h2><div id="sab" style="display:flex;flex-direction:column;flex:1;min-height:0"></div></div>
 </section>
 <div class="stale" id="stale">hub not answering</div>
+<div class="modal" id="menu"><div class="box"><h3 id="menuTitle"></h3><p>A clean shutdown or restart, the same as from its own menu.</p>
+  <div class="btns"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn" id="menuReboot">↻ Reboot</button><button class="btn danger" id="menuOff">⏻ Shut down</button></div></div></div>
 <div class="modal" id="modal"><div class="box"><h3 id="mTitle"></h3><p id="mText"></p>
   <div class="btns"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" id="mGo">Confirm</button></div></div></div>
 <div class="toast" id="toast"></div>
@@ -97,32 +102,45 @@ const busy = {};
 function powerButton(m){
   const n = JSON.stringify(m.Name).replace(/'/g, "&#39;");
   if (busy[m.Name]) return `<span class="btn pw" style="cursor:default">${busy[m.Name]}</span>`;
-  if (m.Online) return `<button class="btn pw danger" onclick='askPower(${n}, "off")'>⏻ Off</button>`;
+  if (m.Online) return `<button class="btn pw" onclick='powerMenu(${n})'>⏻ Power</button>`;
   return m.CanWake ? `<button class="btn pw go" onclick='askPower(${n}, "on")'>⏻ On</button>` : "";
 }
-function closeModal(){ $("modal").style.display = "none"; }
+function closeModal(){ $("modal").style.display = "none"; $("menu").style.display = "none"; }
 function toast(text){ const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 6000); }
+function powerMenu(name){
+  $("menuTitle").textContent = `Power · ${name}`;
+  $("menuOff").onclick = () => { closeModal(); askPower(name, "off"); };
+  $("menuReboot").onclick = () => { closeModal(); askPower(name, "reboot"); };
+  $("menu").style.display = "flex";
+}
+const ACTIONS = {
+  off:    { title: n => `Shut down ${n}?`, text: "A clean shutdown, the same as from its own menu. Fans hand back to the BIOS first.", go: "⏻ Shut down", cls: "danger", busy: "shutting down…", done: "shutting down" },
+  reboot: { title: n => `Reboot ${n}?`, text: "A clean restart, the same as from its own menu. It comes back on its own.", go: "↻ Reboot", cls: "danger", busy: "rebooting…", done: "rebooting" },
+  on:     { title: n => `Power on ${n}?`, text: "Sends a Wake-on-LAN packet across the network.", go: "⏻ Power on", cls: "go", busy: "waking…", done: "wake packet sent" },
+};
 function askPower(name, action){
-  $("mTitle").textContent = action === "off" ? `Shut down ${name}?` : `Power on ${name}?`;
-  $("mText").textContent = action === "off" ? "A clean shutdown, the same as from its own menu. Fans hand back to the BIOS first." : "Sends a Wake-on-LAN packet across the network.";
-  $("mGo").textContent = action === "off" ? "Shut down" : "Power on";
-  $("mGo").className = "btn " + (action === "off" ? "danger" : "go");
+  const a = ACTIONS[action];
+  $("mTitle").textContent = a.title(name);
+  $("mText").textContent = a.text;
+  $("mGo").textContent = a.go;
+  $("mGo").className = "btn " + a.cls;
   $("mGo").onclick = () => { closeModal(); power(name, action); };
   $("modal").style.display = "flex";
 }
 async function power(name, action){
-  busy[name] = action === "off" ? "shutting down…" : "waking…";
+  const a = ACTIONS[action];
+  busy[name] = a.busy;
   try {
     const r = await fetch(`/api/fleet/machines/${encodeURIComponent(name)}/power`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ action }) });
     const b = await r.json().catch(() => ({}));
-    toast(r.ok ? `${name}: ${action === "off" ? (b.how || "shutting down") : "wake packet sent"}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
+    toast(r.ok ? `${name}: ${b.how || a.done}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
     if (!r.ok) delete busy[name];
   } catch { delete busy[name]; toast(`${name}: hub not answering`); }
   setTimeout(() => delete busy[name], 120000); // the card shows the real state again within 2 min
   refresh();
 }
-const SWATCHES = [["ffffff","White"],["ff2222","Red"],["ff8800","Orange"],["00ff66","Green"],["00e5ff","Cyan"],["0066ff","Blue"],["8000ff","Purple"],["ff00ff","Magenta"]];
-let lighting = null;
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
+let lighting = null, briBusy = false;
 async function setLights(patch){
   const body = Object.assign({ RgbEnabled:true, RgbOff:false, RgbEffect:"Static", RgbR:128, RgbG:0, RgbB:255, RgbBrightness:100, RgbSpeed:3, Blackout:false },
     lighting || {}, patch, { managed:true });
@@ -137,10 +155,15 @@ async function loadLights(){
     lighting = p ? { RgbEnabled:p.RgbEnabled, RgbOff:p.RgbOff, RgbEffect:p.RgbEffect, RgbR:p.RgbR, RgbG:p.RgbG, RgbB:p.RgbB, RgbBrightness:p.RgbBrightness, RgbSpeed:p.RgbSpeed, Blackout:p.Blackout } : null;
     const L = lighting || {}, cur = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Static" ? [L.RgbR, L.RgbG, L.RgbB].map(v => (v ?? 0).toString(16).padStart(2, "0")).join("") : "";
     const rainbow = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Rainbow", off = managed && (L.RgbOff || L.Blackout);
-    $("lights").innerHTML = SWATCHES.map(([h, n]) => `<span class="sw${h === cur ? " on" : ""}" title="${n}" style="background:#${h}"
-        onclick='setLights({RgbEffect:"Static",RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)}})'></span>`).join("")
-      + `<button class="btn${rainbow ? " on" : ""}" onclick='setLights({RgbEffect:"Rainbow"})'>Rainbow</button>`
-      + `<button class="btn${off ? " on" : ""}" onclick='setLights({RgbOff:true})'>Off</button>`;
+    if (briBusy) return; // don't rebuild the bar under a finger on the brightness slider
+    const bri = L.RgbBrightness ?? 100;
+    $("lights").innerHTML = SWATCHES.map(([h, n, ink]) => `<span class="sw${h === cur ? " on" : ""}" title="${n}" style="background:#${h};color:#${ink}"
+        onclick='setLights({RgbEffect:"Static",RgbOff:false,Blackout:false,RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)}})'>${h === cur ? "✓" : ""}</span>`).join("")
+      + `<button class="btn${rainbow ? " on" : ""}" onclick='setLights({RgbEffect:"Rainbow",RgbOff:false,Blackout:false})'>Rainbow</button>`
+      + `<button class="btn${off ? " on" : ""}" onclick='setLights({RgbOff:true})'>Off</button>`
+      + `<span class="bri" title="Brightness">☀<input type="range" min="0" max="100" step="5" value="${bri}"
+          onpointerdown="briBusy=true" oninput='this.nextElementSibling.textContent=this.value+"%"'
+          onchange='briBusy=false; setLights({RgbBrightness:+this.value})'><b>${bri}%</b></span>`;
   } catch { /* the bar just stays as it was */ }
 }
 function machine(m){
@@ -193,7 +216,7 @@ async function refresh(){
 }
 tick(); setInterval(tick, 1000);
 refresh(); setInterval(refresh, 5000);
-loadLights(); setInterval(loadLights, 30000);
+loadLights(); setInterval(loadLights, 5000); // a colour/brightness picked on any machine shows here within seconds
 </script>
 </body>
 </html>

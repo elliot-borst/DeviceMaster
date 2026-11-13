@@ -120,3 +120,57 @@ public class HubPowerTests
         Assert.False(withVia.CanWake("A")); // the waking machine can't wake itself
     }
 }
+
+public class RebootRequestTests
+{
+    [Fact]
+    public void ARebootRequestUsesItsOwnFileAndCancelClearsEither()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dm-reboot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.True(ShutdownRequest.Write(dir, "t", reboot: true));
+            Assert.True(File.Exists(Path.Combine(dir, ShutdownRequest.RebootFileName)));
+            Assert.False(File.Exists(Path.Combine(dir, ShutdownRequest.FileName)));
+            Assert.True(ShutdownRequest.Cancel(dir));
+            Assert.False(File.Exists(Path.Combine(dir, ShutdownRequest.RebootFileName)));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TheHubKnowsReboot()
+    {
+        using var hub = new FleetHub(new HubConfig { Agents = [new HubAgent { Name = "A", Url = "http://localhost:1", TokenFile = "missing" }] });
+        Assert.Equal(502, (await hub.PowerAsync("A", "reboot", "t")).Status); // forwarded (agent unreachable), not rejected as unknown
+    }
+}
+
+public class ColorPaletteTests
+{
+    public static TheoryData<string> Pages() =>
+        [DeviceMaster.App.Headless.HeadlessWebServer.DashboardHtml, DeviceMaster.App.Headless.HubWebServer.Page, DeviceMaster.App.Headless.HubDisplayPage.Html];
+
+    [Fact]
+    public void TheOwnersColoursAreVividAndNamed()
+    {
+        var names = DeviceMaster.Core.Lighting.ColorPalette.All.Select(c => c.Name).ToList();
+        Assert.Equal(["White", "Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Purple", "Pink"], names);
+        Assert.Equal("ff0000", DeviceMaster.Core.Lighting.ColorPalette.All.Single(c => c.Name == "Red").Hex); // pure red, not a dull mix
+    }
+
+    [Theory]
+    [MemberData(nameof(Pages))]
+    public void EveryPageGetsTheOnePaletteAndNoColourPicker(string page)
+    {
+        Assert.Contains(DeviceMaster.Core.Lighting.ColorPalette.Placeholder, page); // filled when served, never hard-coded
+        var served = DeviceMaster.Core.Lighting.ColorPalette.Inject(page);
+        Assert.Contains("[\"ff0000\",\"Red\",\"fff\"]", served); // white tick on red: the selection shows on every colour
+        Assert.DoesNotContain("type=\"color\"", served);
+        Assert.DoesNotContain("ff2222", served); // the old dull "red"
+    }
+}

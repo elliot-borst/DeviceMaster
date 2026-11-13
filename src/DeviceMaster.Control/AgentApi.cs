@@ -40,7 +40,10 @@ public interface IAgentHost
     /// <summary>Starts a clean shutdown (#49). Returns a short description, or null when this machine can't.</summary>
     string? RequestShutdown(string reason) => null;
 
-    /// <summary>Withdraws a pending shutdown. True when one was cancelled.</summary>
+    /// <summary>Starts a clean reboot (#52). Returns a short description, or null when this machine can't.</summary>
+    string? RequestReboot(string reason) => null;
+
+    /// <summary>Withdraws a pending shutdown or reboot. True when one was cancelled.</summary>
     bool CancelShutdown() => false;
 }
 
@@ -54,6 +57,7 @@ public interface IAgentHost
 /// <item><c>GET /api/v1/status</c> — the loop status</item>
 /// <item><c>GET /api/v1/profile</c> — the profile in force, with its revision</item>
 /// <item><c>PUT /api/v1/profile</c> — apply a whole profile; answers with the profile now in force</item>
+/// <item><c>POST /api/v1/power/shutdown|reboot|cancel|wake</c> — clean shutdown / reboot (cancellable), Wake-on-LAN</item>
 /// <item><c>POST /api/v1/update-check</c> — check for (and install) a new release now; 501 where the app isn't self-updating</item>
 /// </list>
 /// </summary>
@@ -146,6 +150,18 @@ public sealed class AgentApi
                     else
                     {
                         Respond(ctx, 501, new { error = "this machine has no shutdown path set up" });
+                    }
+
+                    break;
+                case ("POST", "power/reboot"):
+                    if (_host.RequestReboot(ctx.Request.Headers["X-DeviceMaster-Reason"] ?? "fleet hub") is { } rebootHow)
+                    {
+                        _log?.Invoke($"agent api: reboot requested ({rebootHow})");
+                        Respond(ctx, 202, new { started = true, how = rebootHow });
+                    }
+                    else
+                    {
+                        Respond(ctx, 501, new { error = "this machine has no reboot path set up" });
                     }
 
                     break;

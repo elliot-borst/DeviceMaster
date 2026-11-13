@@ -34,6 +34,11 @@ public sealed class HeadlessWebServer : IDisposable
                 ? "host shutdown helper"
                 : null;
 
+        public string? RequestReboot(string reason) =>
+            HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Write(dir, reason, reboot: true)
+                ? "host reboot helper"
+                : null;
+
         public bool CancelShutdown() =>
             HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Cancel(dir);
 
@@ -148,7 +153,7 @@ public sealed class HeadlessWebServer : IDisposable
             case ("GET", "/") or ("GET", "/index.html"):
                 ctx.Response.StatusCode = 200;
                 ctx.Response.AddHeader("Cache-Control", "no-store");
-                Write(ctx, "text/html; charset=utf-8", DashboardHtml);
+                Write(ctx, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(DashboardHtml));
                 handled = true;
                 break;
             case ("GET", "/status.json"):
@@ -255,7 +260,7 @@ public sealed class HeadlessWebServer : IDisposable
 
     /// <summary>Single-page dashboard (side-menu layout mirroring the Windows UI): live status + config controls.</summary>
     /// <remarks>Also served by the fleet hub for each server at /m/{name}/: every request is relative.</remarks>
-    internal const string DashboardHtml = """
+    public const string DashboardHtml = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -386,8 +391,8 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .note { font-size:12px; color:var(--faint); margin-top:8px; line-height:1.5; }
 /* swatches */
 .swatches { display:flex; gap:8px; flex-wrap:wrap; }
-.swatch { width:30px; height:30px; border-radius:8px; border:2px solid var(--line2); cursor:pointer; }
-.swatch.sel { border-color:var(--text); }
+.swatch { width:30px; height:30px; border-radius:8px; border:1px solid var(--line2); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:18px; line-height:1; }
+.swatch.sel { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 .preview { width:52px; height:34px; border-radius:9px; background:#8000ff; border:1px solid var(--line2); }
 .preview.rainbow { background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
 @keyframes rb { to { background-position:200% 0; } }
@@ -488,22 +493,22 @@ td.dim { color:var(--dim); }
 
   <!-- ============ LIGHTING ============ -->
   <section class="page" id="page-lighting">
-    <h1>Lighting<span class="sub">Hub RGB (70 addressable LEDs across both hubs).</span></h1>
+    <h1>Lighting<span class="sub">one colour or rainbow across every LED</span></h1>
     <div class="card">
-      <div class="cardhead"><div class="tile">◈</div><div><div class="cardtitle">Hub RGB</div><div class="cardsub">applies to every LED on both hubs</div></div></div>
+      <div class="cardhead"><div class="tile">◈</div><div><div class="cardtitle">Lighting</div><div class="cardsub">applies to every LED this machine drives</div></div></div>
       <div class="row"><label>Enabled</label>
         <span class="toggle"><input type="checkbox" id="rgbOn"><span class="tk"></span></span>
         <span class="val" id="rgbOnEcho"></span></div>
       <div class="row"><label>Effect</label><div class="chips" id="effectChips"></div></div>
-      <div class="row" id="colourRow"><label for="rgbColor">Colour</label>
-        <input type="color" id="rgbColor">
+      <div class="row" id="colourRow"><label>Colour</label>
+        <input type="hidden" id="rgbColor" value="#000000"><!-- palette only: no free colour picker (ColorPalette) -->
         <div class="swatches" id="swatches"></div></div>
       <div class="row" id="speedRow"><label for="rgbSpeed">Speed</label>
         <input type="range" class="gslider" id="rgbSpeed" min="1" max="5" step="1" style="max-width:300px"><span class="pct" id="rgbSpeedVal">—</span></div>
       <div class="row"><label for="rgbBright">Brightness</label>
         <input type="range" id="rgbBright" min="0" max="100" step="5"><span class="val" id="rgbBrightVal">—</span></div>
       <div class="row"><label>Preview</label><div class="preview" id="rgbPreview"></div><span class="val mono" id="rgbHex"></span></div>
-      <div class="note">Rainbow streams about 15 frames a second to both hubs (the same effect and speeds as the Windows app).</div>
+      <div class="note">Rainbow runs on every lighting device this machine drives (the same effect and speeds as the Windows app).</div>
     </div>
     <div class="card">
       <div class="cardhead"><div class="tile">▣</div><div><div class="cardtitle">GPU RGB (ENE)</div><div class="cardsub">4090 Strix</div></div></div>
@@ -544,7 +549,7 @@ td.dim { color:var(--dim); }
 
   <!-- ============ DEVICES ============ -->
   <section class="page" id="page-devices">
-    <h1>Devices<span class="sub"><span id="devCount2">…</span> — raw channel telemetry from both hubs.</span></h1>
+    <h1>Devices<span class="sub"><span id="devCount2">…</span> — every fan, pump and screen this machine reports.</span></h1>
     <div class="card">
       <table><thead><tr><th>Hub</th><th>Channel</th><th>Device</th><th>RPM</th><th>Duty</th><th>Type</th></tr></thead>
       <tbody id="devices2"></tbody></table>
@@ -602,6 +607,7 @@ function syncControls(){
   if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
   if (!busy("rgbSpeed")) { $("rgbSpeed").value = c.RgbSpeed || 3; paintSlider($("rgbSpeed")); }
   renderEffect();
+  markSwatch();
   if (!busy("rgbBright")) { $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %"; }
   if (!busy("lcdMode")) $("lcdMode").value = c.LcdScreens;
   if (!busy("lcdMetric")) $("lcdMetric").value = c.PumpScreenMetric;
@@ -672,10 +678,15 @@ $("lcdBright").onchange = e => apply({lcdBrightness: +e.target.value});
 $("lcdBright").oninput  = e => $("lcdBrightVal").textContent = e.target.value + " %";
 
 /* ---- swatches ---- */
-const SWATCHES = [["8000ff","Purple"],["ff00ff","Magenta"],["0066ff","Blue"],["00e5ff","Cyan"],["00ff66","Green"],["ff8800","Orange"],["ff2222","Red"],["ffffff","White"]];
-SWATCHES.forEach(([hex,name]) => {
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
+function markSwatch(){ // tick + ring on the colour that's running (static colour only)
+  if (!cfg) return;
+  const c = cfg.Control, cur = !c.RgbOff && c.RgbEffect === 0 ? hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB) : "";
+  [...$("swatches").children].forEach(d => { const on = d.dataset.hex === cur; d.classList.toggle("sel", on); d.textContent = on ? "✓" : ""; });
+}
+SWATCHES.forEach(([hex,name,ink]) => {
   const d = document.createElement("div");
-  d.className = "swatch"; d.style.background = "#"+hex; d.title = name;
+  d.className = "swatch"; d.style.background = "#"+hex; d.style.color = "#"+ink; d.title = name; d.dataset.hex = hex;
   d.onclick = () => { $("rgbColor").value = "#"+hex;
     apply({rgbEffect: 0, rgbR: parseInt(hex.slice(0,2),16), rgbG: parseInt(hex.slice(2,4),16), rgbB: parseInt(hex.slice(4,6),16)}); };
   $("swatches").appendChild(d);

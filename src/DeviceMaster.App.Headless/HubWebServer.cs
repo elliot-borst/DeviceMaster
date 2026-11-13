@@ -147,15 +147,15 @@ public sealed class HubWebServer : IDisposable
         var now = DateTime.UtcNow;
         if (path is "/" or "/index.html")
         {
-            Send(ctx, 200, "text/html; charset=utf-8", Page);
+            Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(Page));
         }
         else if (path == "/api/fleet/machines")
         {
-            Json(ctx, 200, _hub.Machines.Select(m => m.Summarize(now)));
+            Json(ctx, 200, _hub.Machines.Select(m => m.Summarize(now) with { CanWake = _hub.CanWake(m.Name) }));
         }
         else if (path is "/display" or "/display/")
         {
-            Send(ctx, 200, "text/html; charset=utf-8", HubDisplayPage.Html);
+            Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(HubDisplayPage.Html));
         }
         else if (path == "/api/fleet/home")
         {
@@ -200,7 +200,7 @@ public sealed class HubWebServer : IDisposable
         switch ((method, rest))
         {
             case ("GET", "" or "index.html"):
-                Send(ctx, 200, "text/html; charset=utf-8", HeadlessWebServer.DashboardHtml);
+                Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(HeadlessWebServer.DashboardHtml));
                 return;
 
             case ("GET", "status.json"):
@@ -439,7 +439,7 @@ public sealed class HubWebServer : IDisposable
     }
 
     /// <summary>The fleet page: a Servers menu on the left, the chosen machine (or all of them) on the right.</summary>
-    private const string Page = """
+    public const string Page = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -498,8 +498,8 @@ th { color:var(--faint); font-weight:600; font-size:11px; text-transform:upperca
 .seg button { background:var(--inset); border:1px solid var(--line2); color:var(--dim); font:13px "Segoe UI",sans-serif; padding:6px 14px; border-radius:99px; cursor:pointer; }
 .openfull { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); color:#fff; font-weight:600; padding:7px 16px; border-radius:99px; text-decoration:none; font-size:13px; }
 .seg button.on { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); border-color:transparent; color:#fff; font-weight:600; }
-.sw { width:30px; height:30px; border-radius:9px; border:2px solid transparent; cursor:pointer; }
-.sw.on { border-color:#fff; }
+.sw { width:30px; height:30px; border-radius:9px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:18px; line-height:1; }
+.sw.on { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 input[type=range] { width:min(220px, 52vw); accent-color:var(--accent); }
 input[type=number] { background:var(--inset); color:var(--text); border:1px solid var(--line2); border-radius:8px; padding:4px 6px; font:13px "Segoe UI",sans-serif; }
 .val { font-size:13px; font-weight:600; color:var(--accent2); min-width:44px; }
@@ -565,7 +565,7 @@ function banners(m){
 }
 /* ---- fleet lighting (phase 4): one setting for every server, or a server's own ---- */
 let settings = null, editing = false;
-const SWATCHES = [["8000ff","Purple"],["ff00ff","Magenta"],["0066ff","Blue"],["00e5ff","Cyan"],["00ff66","Green"],["ff8800","Orange"],["ff2222","Red"],["ffffff","White"]];
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
 const LIGHT_KEYS = ["RgbEnabled","RgbOff","RgbR","RgbG","RgbB","RgbBrightness","RgbEffect","RgbSpeed","Blackout"];
 const SPEEDS = ["","Slowest","Slow","Medium","Fast","Fastest"];
 const hex2 = n => n.toString(16).padStart(2,"0");
@@ -597,9 +597,9 @@ function lightControls(scope, L){
       <button class="${md==="rainbow"?"on":""}" onclick='${set(`{RgbEffect:"Rainbow",RgbOff:false,Blackout:false}`)}'>Rainbow</button>
       <button class="${md==="off"?"on":""}" onclick='${set(`{RgbOff:true,Blackout:false}`)}'>Lights out</button>
       <button class="${md==="blackout"?"on":""}" onclick='${set(`{Blackout:true}`)}'>Blackout</button></div></div>
-    ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h}"
-        onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>`).join("")}
-        <input type="color" value="#${cur}" onchange='const v=this.value;${set(`{RgbR:parseInt(v.slice(1,3),16),RgbG:parseInt(v.slice(3,5),16),RgbB:parseInt(v.slice(5,7),16),RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>` : ""}
+    ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n,ink]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h};color:#${ink}"
+        onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'>${h===cur?"✓":""}</div>`).join("")}
+        </div>` : ""}
     ${md === "rainbow" ? `<div class="ctl"><label>Speed</label><input type="range" min="1" max="5" step="1" value="${L.RgbSpeed ?? 3}"
         oninput='document.getElementById("${id}-spd").textContent=${JSON.stringify(SPEEDS)}[this.value]' onchange='${set(`{RgbSpeed:+this.value}`)}'><span class="val" id="${id}-spd">${SPEEDS[L.RgbSpeed ?? 3]}</span></div>` : ""}
     ${md === "colour" || md === "rainbow" ? `<div class="ctl"><label>Brightness</label><input type="range" min="0" max="100" value="${L.RgbBrightness ?? 100}"
@@ -711,7 +711,8 @@ function machinePage(m){
   const d = detail && detail.summary && detail.summary.Name === m.Name ? detail.status : null;
   const meta = [m.MachineName, m.Platform, m.Version && m.Version.split("+")[0] && `v${m.Version.split("+")[0].split(".")[0]}`].filter(Boolean).join(" · ");
   let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
-    ${m.Online ? `<div class="seg" style="margin:0 0 14px 2px"><a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a></div>` : ""}
+    <div class="seg" style="margin:0 0 14px 2px">${m.Online ? `<a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a>
+      <button onclick='powerAct(${JSON.stringify(m.Name)}, "reboot")'>↻ Reboot</button><button onclick='powerAct(${JSON.stringify(m.Name)}, "off")'>⏻ Shut down</button>` : (m.CanWake ? `<button onclick='powerAct(${JSON.stringify(m.Name)}, "on")'>⏻ Power on</button>` : "")}</div>
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
       ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;
@@ -719,6 +720,14 @@ function machinePage(m){
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
   return html;
+}
+async function powerAct(name, action){
+  const words = { off: "Shut down", reboot: "Reboot", on: "Power on" };
+  if (!confirm(`${words[action]} ${name}?`)) return;
+  const r = await fetch(`/api/fleet/machines/${encodeURIComponent(name)}/power`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ action }) });
+  const b = await r.json().catch(() => ({}));
+  alert(r.ok ? `${name}: ${b.how || (action === "on" ? "wake packet sent" : "done")}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
+  refresh();
 }
 function render(){
   sidebar();

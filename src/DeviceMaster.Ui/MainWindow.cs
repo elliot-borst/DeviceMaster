@@ -1020,11 +1020,51 @@ public sealed class MainWindow : Window
     private readonly TextBlock _rgbStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
     // fully saturated primaries — pastel tones look washed out on LEDs
-    private static readonly (byte R, byte G, byte B)[] SwatchColors =
-    [
-        (255, 255, 255), (255, 0, 0), (255, 70, 0), (255, 170, 0), (0, 255, 0),
-        (0, 255, 255), (0, 60, 255), (150, 0, 255), (255, 0, 110),
-    ];
+    // the one shared colour list (Core ColorPalette): the same colours on every DeviceMaster surface
+    private static readonly IReadOnlyList<DeviceMaster.Core.Lighting.NamedColor> SwatchColors =
+        DeviceMaster.Core.Lighting.ColorPalette.All;
+
+    /// <summary>
+    /// One lighting swatch. Selected = a tick in contrasting ink plus a white ring with a gap, so it
+    /// shows on every colour (a coloured border vanished on red). Same footprint either way, so the
+    /// row doesn't shift when the selection moves.
+    /// </summary>
+    private static Border Swatch(Brush fill, bool selected, Brush ink, string idleGlyph, string tooltip, Action onPick)
+    {
+        var tile = new Border
+        {
+            Width = 26,
+            Height = 26,
+            CornerRadius = new CornerRadius(7),
+            Background = fill,
+            BorderBrush = selected ? Brushes.Transparent : Theme.Line2,
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock
+            {
+                Text = selected ? "✓" : idleGlyph,
+                FontSize = selected ? 16 : 13,
+                FontWeight = selected ? FontWeights.Black : FontWeights.Normal,
+                Foreground = selected ? ink : Theme.Dim,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        var ring = new Border
+        {
+            Width = 34,
+            Height = 34,
+            CornerRadius = new CornerRadius(10),
+            BorderBrush = selected ? Theme.Text : Brushes.Transparent,
+            BorderThickness = new Thickness(2),
+            Padding = new Thickness(2),
+            Margin = new Thickness(0, 0, 4, 0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = tooltip,
+            Child = tile,
+        };
+        ring.MouseLeftButtonUp += (_, _) => onPick();
+        return ring;
+    }
 
     private Border BuildRgbCard()
     {
@@ -1120,64 +1160,34 @@ public sealed class MainWindow : Window
 
         // "lights out" tile — actively paints every LED black (≠ the toggle, which stops
         // writing and lets devices fall back to their own effects)
-        var offSwatch = new Border
-        {
-            Width = 26,
-            Height = 26,
-            CornerRadius = new CornerRadius(7),
-            Background = new SolidColorBrush(Color.FromRgb(10, 10, 14)),
-            BorderBrush = _controlSettings.RgbOff ? Theme.Accent : Theme.Line2,
-            BorderThickness = new Thickness(_controlSettings.RgbOff ? 2 : 1),
-            Margin = new Thickness(0, 0, 8, 0),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            ToolTip = "Lights out — every LED off",
-            Child = new TextBlock
+        _swatchPanel.Children.Add(Swatch(
+            new SolidColorBrush(Color.FromRgb(10, 10, 14)), _controlSettings.RgbOff, Theme.Text, "⊘",
+            "Lights out — every LED off", () =>
             {
-                Text = "⊘",
-                FontSize = 13,
-                Foreground = _controlSettings.RgbOff ? Theme.Accent2 : Theme.Dim,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
-        offSwatch.MouseLeftButtonUp += (_, _) =>
-        {
-            _controlSettings.RgbOff = true;
-            _controlSettings.RgbEffect = RgbEffect.Static;
-            RefreshRgbEffectUi();
-            RebuildSwatches();
-            OnControlSettingChanged();
-        };
-        _swatchPanel.Children.Add(offSwatch);
-
-        foreach (var (r, g, b) in SwatchColors)
-        {
-            var selected = !_controlSettings.RgbOff && _controlSettings.RgbEffect == RgbEffect.Static
-                && _controlSettings.RgbR == r && _controlSettings.RgbG == g && _controlSettings.RgbB == b;
-            var swatch = new Border
-            {
-                Width = 26,
-                Height = 26,
-                CornerRadius = new CornerRadius(7),
-                Background = new SolidColorBrush(Color.FromRgb(r, g, b)),
-                BorderBrush = selected ? Theme.Accent : Theme.Line2,
-                BorderThickness = new Thickness(selected ? 2 : 1),
-                Margin = new Thickness(0, 0, 8, 0),
-                Cursor = System.Windows.Input.Cursors.Hand,
-            };
-            var (cr, cg, cb) = (r, g, b);
-            swatch.MouseLeftButtonUp += (_, _) =>
-            {
-                _controlSettings.RgbOff = false;
-                _controlSettings.RgbEffect = RgbEffect.Static; // picking a colour means a static colour
+                _controlSettings.RgbOff = true;
+                _controlSettings.RgbEffect = RgbEffect.Static;
                 RefreshRgbEffectUi();
-                _controlSettings.RgbR = cr;
-                _controlSettings.RgbG = cg;
-                _controlSettings.RgbB = cb;
                 RebuildSwatches();
                 OnControlSettingChanged();
-            };
-            _swatchPanel.Children.Add(swatch);
+            }));
+
+        foreach (var c in SwatchColors)
+        {
+            var selected = !_controlSettings.RgbOff && _controlSettings.RgbEffect == RgbEffect.Static
+                && _controlSettings.RgbR == c.R && _controlSettings.RgbG == c.G && _controlSettings.RgbB == c.B;
+            _swatchPanel.Children.Add(Swatch(
+                new SolidColorBrush(Color.FromRgb(c.R, c.G, c.B)), selected, c.DarkInk ? Brushes.Black : Brushes.White, "",
+                c.Name, () =>
+                {
+                    _controlSettings.RgbOff = false;
+                    _controlSettings.RgbEffect = RgbEffect.Static; // picking a colour means a static colour
+                    RefreshRgbEffectUi();
+                    _controlSettings.RgbR = c.R;
+                    _controlSettings.RgbG = c.G;
+                    _controlSettings.RgbB = c.B;
+                    RebuildSwatches();
+                    OnControlSettingChanged();
+                }));
         }
     }
 
@@ -2197,6 +2207,13 @@ public sealed class MainWindow : Window
         {
             LogLine($"fleet: shutdown requested ({reason}) — Windows shuts down in 60 s");
             return RunShutdown($"/s /t 60 /c \"DeviceMaster fleet: shutting down in 60 seconds ({reason.Replace("\"", "'")})\"") ? "Windows shutdown in 60 s" : null;
+        }
+
+        // a fleet "reboot": Windows' own clean restart after the same 60 s grace (cancellable)
+        public string? RequestReboot(string reason)
+        {
+            LogLine($"fleet: reboot requested ({reason}) — Windows restarts in 60 s");
+            return RunShutdown($"/r /t 60 /c \"DeviceMaster fleet: restarting in 60 seconds ({reason.Replace("\"", "'")})\"") ? "Windows restart in 60 s" : null;
         }
 
         public bool CancelShutdown() => RunShutdown("/a");

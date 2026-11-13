@@ -159,18 +159,76 @@ public sealed class FleetPushTests : IDisposable
         await _hub.PollOnce();
         Assert.Equal(1, _agent.Applies); // no change, no push
 
-        // a local change on the machine is not fought over — it shows as differing
-        _agent.Settings.RgbEffect = RgbEffect.Static;
-        await _hub.PollOnce();
-        Assert.Equal(1, _agent.Applies);
-        Assert.False(_hub.Machine("A")!.InSync);
-
         // the next fleet change goes out again
         _store.Update(s => s with { Profile = s.Profile with { RgbSpeed = 2 } }, "t", "t");
         await _hub.PollOnce();
         Assert.Equal(2, _agent.Applies);
         Assert.Equal(RgbEffect.Rainbow, _agent.Settings.RgbEffect);
         Assert.Equal(2, _agent.Settings.RgbSpeed);
+    }
+
+    [Fact]
+    public async Task AColourPickedOnAMachineBecomesTheFleetsColour()
+    {
+        _store.Update(s => s with { Managed = [FleetSection.Lighting], Profile = s.Profile with { RgbEffect = RgbEffect.Rainbow } }, "t", "t");
+        await _hub.PollOnce();
+        Assert.Equal(1, _agent.Applies);
+
+        // picked on the machine (its Windows app / its own page): red at 40 %
+        _agent.Settings.RgbEffect = RgbEffect.Static;
+        _agent.Settings.RgbR = 255;
+        _agent.Settings.RgbG = 0;
+        _agent.Settings.RgbB = 0;
+        _agent.Settings.RgbBrightness = 40;
+        await _hub.PollOnce();
+
+        var fleet = _store.State.Profile;
+        Assert.Equal(RgbEffect.Static, fleet.RgbEffect);   // now the fleet's, so every other surface shows it
+        Assert.Equal((255, 0, 0), (fleet.RgbR, fleet.RgbG, fleet.RgbB));
+        Assert.Equal(40, fleet.RgbBrightness);
+        Assert.True(_hub.Machine("A")!.InSync);
+        Assert.Equal(1, _agent.Applies);                     // not pushed back at the machine that made it
+        Assert.Contains("synced to the fleet", _store.RecentAudit(1).Single());
+
+        await _hub.PollOnce();
+        Assert.Equal(1, _agent.Applies);                     // and settles: no loop
+    }
+
+    [Fact]
+    public async Task AMachineWithItsOwnLightingKeepsItsChangeToItself()
+    {
+        _store.Update(s => s with
+        {
+            Managed = [FleetSection.Lighting],
+            Profile = s.Profile with { RgbEffect = RgbEffect.Rainbow },
+            Overrides = new Dictionary<string, FleetOverride> { ["A"] = new() { RgbEffect = RgbEffect.Static, RgbR = 0, RgbG = 255, RgbB = 0 } },
+        }, "t", "t");
+        await _hub.PollOnce();
+
+        _agent.Settings.RgbBrightness = 30;
+        await _hub.PollOnce();
+
+        Assert.Equal(RgbEffect.Rainbow, _store.State.Profile.RgbEffect); // the fleet is untouched
+        Assert.NotEqual(30, _store.State.Profile.RgbBrightness);
+        Assert.Equal(30, _store.State.Overrides["A"].RgbBrightness);    // the machine's own setting follows it
+    }
+
+    [Fact]
+    public async Task ALocalCoolingChangeIsNotAdopted()
+    {
+        _store.Update(s => s with
+        {
+            Managed = [FleetSection.Cooling],
+            Profile = FleetOverrides.SanitizeCooling(s.Profile with { CurvePoints = [new(20, 0), new(80, 100)] })!,
+        }, "t", "t");
+        await _hub.PollOnce();
+
+        _agent.Settings.ManualDutyPercent = 15;
+        _agent.Settings.Mode = ControlMode.Manual;
+        await _hub.PollOnce();
+
+        Assert.Equal(ControlMode.Curve, _store.State.Profile.Mode);   // fleet cooling stays as the owner set it
+        Assert.False(_hub.Machine("A")!.InSync);                       // and the machine shows as differing
     }
 
     [Fact]

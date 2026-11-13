@@ -48,6 +48,33 @@ public sealed record FleetState
         AgentApi.Revision(Managed.Distinct().OrderBy(s => s).Aggregate(new FleetProfile(), (p, s) => Take(s, p, profile)))
         + ":" + string.Join(",", Managed.Distinct().OrderBy(s => s));
 
+    /// <summary>
+    /// Sections where a change made on one machine (its Windows app or its own web page) becomes the
+    /// fleet's — so a colour or brightness picked anywhere shows everywhere. Cooling is not adopted:
+    /// fleet cooling is sanitized and a machine's own fan tweaks stay a visible "differs".
+    /// </summary>
+    public static readonly IReadOnlyList<FleetSection> Adoptable = [FleetSection.Lighting, FleetSection.Screens];
+
+    /// <summary>A fingerprint of one section of a profile.</summary>
+    public static string SectionKey(FleetSection section, FleetProfile profile) =>
+        AgentApi.Revision(Take(section, new FleetProfile(), profile));
+
+    /// <summary>
+    /// The state after one machine's own change to a managed section is adopted: into that machine's
+    /// override when it has its own values for the section, otherwise into the fleet profile.
+    /// </summary>
+    public FleetState Adopt(string machine, FleetSection section, FleetProfile own)
+    {
+        var current = Overrides.GetValueOrDefault(machine);
+        if (FleetOverrides.Has(current, section))
+        {
+            var overrides = new Dictionary<string, FleetOverride>(Overrides) { [machine] = FleetOverrides.Set(current!, section, own) };
+            return this with { Overrides = overrides };
+        }
+
+        return this with { Profile = Take(section, Profile, own) };
+    }
+
     /// <summary><paramref name="target"/> with one section copied from <paramref name="source"/>.</summary>
     public static FleetProfile Take(FleetSection section, FleetProfile target, FleetProfile source) => section switch
     {
