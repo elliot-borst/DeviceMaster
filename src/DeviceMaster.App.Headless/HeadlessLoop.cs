@@ -457,7 +457,7 @@ public sealed partial class HeadlessLoop : IDisposable
             GpuFanPercent = gpu?.FanPercent,
             GpuFanRpm = gpu is not null ? _gpuFanRpm : null,
             TargetDutyPercent = duty,
-            PumpDutyPercent = pumpDuty,
+            PumpDutyPercent = readings.Any(r => r.IsPump) ? pumpDuty : null, // no pump on this machine: nothing to report
             FailsafeActive = failsafe,
             Capabilities = new MachineCapabilities
             {

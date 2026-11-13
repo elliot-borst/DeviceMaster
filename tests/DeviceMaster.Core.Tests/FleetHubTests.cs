@@ -145,3 +145,20 @@ public sealed class FleetHubTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 }
+
+public class HubClientRuleTests
+{
+    private static readonly HashSet<System.Net.IPAddress> LoopbackOnly = [System.Net.IPAddress.Loopback];
+
+    [Theory]
+    [InlineData("127.0.0.1", true)]   // tailscale serve, same namespace
+    [InlineData("::1", true)]
+    [InlineData("100.82.31.23", false)] // a tailnet peer straight to the port
+    [InlineData("172.17.0.5", false)]   // another container on the bridge
+    public void ALoopbackBindOnlyServesLocalClients(string client, bool allowed) =>
+        Assert.Equal(allowed, DeviceMaster.App.Headless.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse(client), LoopbackOnly));
+
+    [Fact]
+    public void NoBindRuleServesEveryone() =>
+        Assert.True(DeviceMaster.App.Headless.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse("100.82.31.23"), null));
+}
