@@ -104,10 +104,9 @@ public sealed partial class HeadlessLoop
                     .Select(w => $"motherboard fan write failed: {w}"));
             }
 
-            foreach (var (index, reason) in _mbFans.Dropped)
-            {
-                warnings.Add($"motherboard fan pwm{index} handed back to the BIOS: it does not take a duty ({reason})");
-            }
+            // a header that won't take a duty is back on the BIOS curve — settled and safe, so it's a
+            // note (MotherboardFanNotes), not a standing orange warning. A header that won't go back
+            // to the BIOS is still a warning (it's set to full speed: see HandBack/FullSpeed).
 
             foreach (var header in _mbFans.Headers().Where(h => _mbFans.Controlled.Contains(h.Index)))
             {
@@ -120,6 +119,13 @@ public sealed partial class HeadlessLoop
             warnings.Add($"motherboard fan write failed: {ex.Message}");
         }
     }
+
+    /// <summary>Headers the board won't let software drive, left on its own BIOS curve.</summary>
+    private List<string> MotherboardFanNotes() =>
+        _mbFans is null || _mbFans.Dropped.Count == 0
+            ? []
+            : [$"Fan header{(_mbFans.Dropped.Count > 1 ? "s" : "")} {string.Join(", ", _mbFans.Dropped.Keys.Order().Select(i => $"pwm{i}"))} "
+                + "run on the board's own BIOS curve (the board doesn't accept software speed control on them)"];
 
     private void HandBackMotherboardFans(List<string> warnings)
     {
