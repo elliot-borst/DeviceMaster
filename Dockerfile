@@ -34,8 +34,10 @@ RUN dotnet publish src/DeviceMaster.App.Headless/DeviceMaster.App.Headless.cspro
 FROM debian:bookworm-slim
 # libfontconfig1/libfreetype6/fonts-dejavu-core: SkiaSharp (the LCD frame renderer)
 # resolves fonts through fontconfig; the image has no fonts otherwise.
+# libssl3: .NET crypto, used by the fleet agent API and the hub. Without it the process dies at
+# start-up (before the fan loop runs) with "No usable version of libssl was found".
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libfontconfig1 libfreetype6 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends libfontconfig1 libfreetype6 fonts-dejavu-core libssl3 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /publish/ ./

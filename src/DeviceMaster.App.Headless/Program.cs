@@ -56,6 +56,7 @@ internal static class Program
                 "lcd" => RunLcd(rest, trace),
                 "loop" => RunLoop(rest, trace),
                 "web" => RunWeb(rest, trace),
+                "hub" => RunHub(rest),
                 "dashboard-preview" => RunDashboardPreview(rest),
                 "help" or "--help" or "-h" => PrintUsageAnd(0),
                 _ => UnknownCommand(command),
@@ -86,6 +87,7 @@ internal static class Program
                   [--hold SECONDS] [--brightness PERCENT]
               loop [--config PATH]              run the 1 Hz control loop
               web [--config PATH] --port 27004  control loop + web dashboard (/, /status.json)
+              hub [--config /config/hub.json] [--port 27080] [--bind ADDR]  fleet hub: Servers overview of every agent (no hardware)
 
             Global: --trace (packet-level hub traffic)
             Config: DEVICEMASTER_CONFIG env var or --config (defaults to /config/config.json)
@@ -594,6 +596,52 @@ internal static class Program
         File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
         var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);
         Console.WriteLine($"wrote {output} (landscape 1920×480); native frame {native.Length} bytes");
+        return 0;
+    }
+
+    /// <summary>
+    /// Fleet hub (#33 phase 3): watches every agent listed in hub.json and serves the Servers
+    /// overview. Touches no hardware, so it can run anywhere on the tailnet (normally its own
+    /// container beside an agent, fronted by tailscale serve).
+    /// </summary>
+    private static int RunHub(List<string> args)
+    {
+        var configPath = GetOption(args, "--config") ?? "/config/hub.json";
+        var portText = GetOption(args, "--port") ?? "27080";
+        if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
+        {
+            Console.WriteLine("hub: --port must be a number in 1-65535");
+            return 1;
+        }
+
+        var binds = new List<string>();
+        for (var i = 0; i < args.Count - 1; i++)
+        {
+            if (args[i] == "--bind")
+            {
+                binds.Add(args[i + 1]);
+            }
+        }
+
+        if (!File.Exists(configPath))
+        {
+            Console.WriteLine($"hub: {configPath} not found. Example:\n"
+                + """{ "Agents": [ { "Name": "Gaming PC", "Url": "http://100.x.y.z:27004", "TokenFile": "/tokens/gaming-pc" } ] }""");
+            return 1;
+        }
+
+        var log = (Action<string>)(msg => Log.Information("{msg}", msg));
+        using var hub = new FleetHub(HubConfig.Load(configPath), log);
+        using var web = new HubWebServer(hub, port, log, binds);
+        SignalWatcher.Install();
+        hub.Start();
+        web.Start();
+        while (!SignalWatcher.StopRequested)
+        {
+            Thread.Sleep(500);
+        }
+
+        Log.Information("hub: stopping");
         return 0;
     }
 

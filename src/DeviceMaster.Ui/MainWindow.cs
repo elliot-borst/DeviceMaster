@@ -187,6 +187,7 @@ public sealed class MainWindow : Window
     // ---------- layout: left sidebar navigation + visibility-switched pages ----------
 
     private readonly Dictionary<string, UIElement> _pages = [];
+    private ServersPage _serversPage = null!;
     private readonly Dictionary<string, Border> _navButtons = [];
     private string _activePage = "dashboard";
 
@@ -284,6 +285,14 @@ public sealed class MainWindow : Window
             nav.Children.Add(button);
         }
 
+        // fleet (#33): every DeviceMaster machine, straight under the page buttons
+        _serversPage = new ServersPage(
+            () => _controlSettings.HubUrl,
+            url => { _controlSettings.HubUrl = url; TrySaveSettings(); },
+            () => SelectPage("servers"),
+            Dispatcher);
+        nav.Children.Add(_serversPage.SidebarList);
+
         side.Children.Add(nav);
         sidebar.Child = side;
         DockPanel.SetDock(sidebar, Dock.Left);
@@ -299,6 +308,7 @@ public sealed class MainWindow : Window
         _pages["buttonart"] = WrapPage(_buttonArtPage.Build());
 
         _pages["devices"] = WrapPage(BuildDevicesPage());
+        _pages["servers"] = WrapPage(_serversPage.Build());
         foreach (var (key, page) in _pages)
         {
             page.Visibility = key == _activePage ? Visibility.Visible : Visibility.Collapsed;

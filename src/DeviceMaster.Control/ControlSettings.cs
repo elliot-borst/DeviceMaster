@@ -252,6 +252,9 @@ public sealed class ControlSettings
         return config;
     }
 
+    /// <summary>Fleet hub address for the Servers page (#33), e.g. https://devicemaster.&lt;tailnet&gt;.ts.net. Machine-only.</summary>
+    public string HubUrl { get; set; } = "";
+
     /// <summary>Every fan device id ever seen — the expected set behind the "N/N fans" roll-up.</summary>
     public List<string> SeenFanIds { get; set; } = [];
 

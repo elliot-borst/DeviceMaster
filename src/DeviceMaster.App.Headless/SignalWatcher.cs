@@ -35,6 +35,17 @@ internal static class SignalWatcher
 
     public static void Install()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            // the hub (no hardware) also runs on Windows: Ctrl-C there instead of libc signals
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                StopRequested = true;
+            };
+            return;
+        }
+
         SignalHandler handler = OnSignal; // explicit delegate type — no method-group conversion ambiguity
         _handlerHandle = GCHandle.Alloc(handler);
         var pointer = Marshal.GetFunctionPointerForDelegate(handler);
