@@ -21,17 +21,41 @@ public sealed class HubWebServer : IDisposable
     private readonly Action<string> _log;
     private readonly Thread _thread;
 
+    /// <summary>Only connections from these addresses are served (null = anyone who can reach the port).</summary>
+    private readonly HashSet<IPAddress>? _allowedClients;
+
     public HubWebServer(FleetHub hub, int port, Action<string> log, IReadOnlyList<string> binds)
     {
         _hub = hub;
         _log = log;
-        foreach (var host in binds.Count > 0 ? binds : ["127.0.0.1"])
+        var hosts = binds.Count > 0 ? binds : ["127.0.0.1"];
+        if (OperatingSystem.IsWindows())
         {
-            _listener.Prefixes.Add($"http://{host}:{port}/");
+            foreach (var host in hosts)
+            {
+                _listener.Prefixes.Add($"http://{host}:{port}/");
+            }
+        }
+        else
+        {
+            // A host-specific prefix makes HttpListener 404 every request whose Host header differs
+            // — and tailscale serve forwards the public name (devicemaster.<tailnet>.ts.net). So
+            // accept any Host, and enforce --bind by the client address instead: with the default
+            // 127.0.0.1 only serve (same namespace) is answered, never the tailnet or LAN directly.
+            _listener.Prefixes.Add($"http://+:{port}/");
+            _allowedClients = hosts.Any(h => h is "+" or "*" or "0.0.0.0")
+                ? null
+                : hosts.Select(h => h == "localhost" ? IPAddress.Loopback : IPAddress.Parse(h)).ToHashSet();
         }
 
         _thread = new Thread(Run) { IsBackground = true, Name = "hub web" };
     }
+
+    /// <summary>Whether a client may be served under the --bind rule (loopback binds admit any loopback client).</summary>
+    public static bool ClientAllowed(IPAddress client, IReadOnlySet<IPAddress>? allowed) =>
+        allowed is null
+        || allowed.Contains(client)
+        || (IPAddress.IsLoopback(client) && allowed.Any(IPAddress.IsLoopback));
 
     public void Start()
     {
@@ -77,6 +101,12 @@ public sealed class HubWebServer : IDisposable
     private void Handle(HttpListenerContext ctx)
     {
         var path = ctx.Request.Url?.AbsolutePath ?? "/";
+        if (!ClientAllowed(ctx.Request.RemoteEndPoint.Address, _allowedClients))
+        {
+            Send(ctx, 403, "text/plain; charset=utf-8", "forbidden");
+            return;
+        }
+
         if (ctx.Request.HttpMethod != "GET")
         {
             Send(ctx, 405, "text/plain; charset=utf-8", "read-only");
