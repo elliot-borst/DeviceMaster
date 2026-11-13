@@ -133,8 +133,9 @@ public sealed record MachineSummary
 /// <para>
 /// With a <see cref="FleetStore"/>, it also pushes the fleet's managed sections to each machine —
 /// only when what the fleet wants for that machine changed since its last successful push (a
-/// machine that was offline gets it when it comes back). A change made locally on a machine is
-/// not overwritten until the next fleet change; the overview marks that machine "differs".
+/// machine that was offline gets it when it comes back). A lighting or screens change made on a
+/// machine itself is adopted as the fleet's and pushed to the others (two-way sync); a local
+/// cooling change is not overwritten until the next fleet change, and shows as "differs".
 /// </para>
 /// </summary>
 public sealed class FleetHub : IDisposable
@@ -151,6 +152,7 @@ public sealed class FleetHub : IDisposable
     private readonly Dictionary<string, MachineSnapshot> _machines = [];
     private readonly Dictionary<string, bool> _wasOnline = [];
     private readonly Dictionary<string, string> _pushed = []; // machine -> managed key last pushed successfully
+    private readonly Dictionary<(string Machine, FleetSection Section), string> _baseline = []; // section as the machine ran it after the last push
     private Thread? _thread;
 
     public FleetHub(HubConfig config, Action<string>? log = null, HttpMessageHandler? handler = null, FleetStore? store = null)
@@ -318,6 +320,7 @@ public sealed class FleetHub : IDisposable
 
             if (_store?.State is { Managed.Count: > 0 } state && profile is not null)
             {
+                state = AdoptLocalChanges(agent.Name, state, profile);
                 var desired = state.DesiredFor(agent.Name, profile);
                 var key = state.ManagedKey(desired);
                 bool due;
@@ -334,6 +337,7 @@ public sealed class FleetHub : IDisposable
                         lock (_gate)
                         {
                             _pushed[agent.Name] = key;
+                            RememberBaseline(agent.Name, state, profile); // what it runs after its own clamps
                         }
 
                         _log?.Invoke($"fleet hub: {agent.Name}: fleet settings applied (version {state.Version}, {string.Join(", ", state.Managed)})");
@@ -374,6 +378,52 @@ public sealed class FleetHub : IDisposable
         if (changed)
         {
             _log?.Invoke(online ? $"fleet hub: {agent.Name} is online" : $"fleet hub: {agent.Name} went offline ({error})");
+        }
+    }
+
+    /// <summary>
+    /// Two-way sync: a managed, adoptable section (lighting, screens) that a machine changed itself —
+    /// on its Windows app or its own page — since the hub last pushed to it becomes the fleet's
+    /// (or that machine's override, if it has one), and the next round pushes it to the others.
+    /// "Changed itself" = different from what it ran right after the last push AND from what the
+    /// fleet wants; the first keeps a machine whose clamps reshape a value from re-adopting it forever.
+    /// </summary>
+    private FleetState AdoptLocalChanges(string machine, FleetState state, FleetProfile reported)
+    {
+        foreach (var section in state.Managed.Intersect(FleetState.Adoptable))
+        {
+            var now = FleetState.SectionKey(section, reported);
+            string? baseline;
+            lock (_gate)
+            {
+                baseline = _baseline.GetValueOrDefault((machine, section));
+            }
+
+            if (baseline is null || now == baseline || now == FleetState.SectionKey(section, state.DesiredFor(machine, reported)))
+            {
+                continue;
+            }
+
+            state = _store!.Update(s => s.Adopt(machine, section, reported), $"{machine} (set on the machine)",
+                $"{section} changed on {machine} — synced to the fleet");
+            lock (_gate)
+            {
+                _baseline[(machine, section)] = now;
+                _pushed[machine] = state.ManagedKey(state.DesiredFor(machine, reported)); // it already runs this
+            }
+
+            _log?.Invoke($"fleet hub: {machine}: {section} changed on the machine — adopted as the fleet's (version {state.Version})");
+            _wake.Set(); // push it to the others now, not in a poll interval
+        }
+
+        return state;
+    }
+
+    private void RememberBaseline(string machine, FleetState state, FleetProfile running)
+    {
+        foreach (var section in state.Managed.Intersect(FleetState.Adoptable))
+        {
+            _baseline[(machine, section)] = FleetState.SectionKey(section, running);
         }
     }
 

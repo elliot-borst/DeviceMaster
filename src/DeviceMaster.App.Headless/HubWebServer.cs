@@ -498,8 +498,8 @@ th { color:var(--faint); font-weight:600; font-size:11px; text-transform:upperca
 .seg button { background:var(--inset); border:1px solid var(--line2); color:var(--dim); font:13px "Segoe UI",sans-serif; padding:6px 14px; border-radius:99px; cursor:pointer; }
 .openfull { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); color:#fff; font-weight:600; padding:7px 16px; border-radius:99px; text-decoration:none; font-size:13px; }
 .seg button.on { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); border-color:transparent; color:#fff; font-weight:600; }
-.sw { width:30px; height:30px; border-radius:9px; border:2px solid transparent; cursor:pointer; }
-.sw.on { border-color:#fff; }
+.sw { width:30px; height:30px; border-radius:9px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:18px; line-height:1; }
+.sw.on { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 input[type=range] { width:min(220px, 52vw); accent-color:var(--accent); }
 input[type=number] { background:var(--inset); color:var(--text); border:1px solid var(--line2); border-radius:8px; padding:4px 6px; font:13px "Segoe UI",sans-serif; }
 .val { font-size:13px; font-weight:600; color:var(--accent2); min-width:44px; }
@@ -597,8 +597,8 @@ function lightControls(scope, L){
       <button class="${md==="rainbow"?"on":""}" onclick='${set(`{RgbEffect:"Rainbow",RgbOff:false,Blackout:false}`)}'>Rainbow</button>
       <button class="${md==="off"?"on":""}" onclick='${set(`{RgbOff:true,Blackout:false}`)}'>Lights out</button>
       <button class="${md==="blackout"?"on":""}" onclick='${set(`{Blackout:true}`)}'>Blackout</button></div></div>
-    ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h}"
-        onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>`).join("")}
+    ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n,ink]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h};color:#${ink}"
+        onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'>${h===cur?"✓":""}</div>`).join("")}
         </div>` : ""}
     ${md === "rainbow" ? `<div class="ctl"><label>Speed</label><input type="range" min="1" max="5" step="1" value="${L.RgbSpeed ?? 3}"
         oninput='document.getElementById("${id}-spd").textContent=${JSON.stringify(SPEEDS)}[this.value]' onchange='${set(`{RgbSpeed:+this.value}`)}'><span class="val" id="${id}-spd">${SPEEDS[L.RgbSpeed ?? 3]}</span></div>` : ""}

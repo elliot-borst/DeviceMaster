@@ -4,6 +4,12 @@ namespace DeviceMaster.Core.Lighting;
 public sealed record NamedColor(string Name, byte R, byte G, byte B)
 {
     public string Hex => $"{R:x2}{G:x2}{B:x2}";
+
+    /// <summary>Whether the "selected" tick drawn on this colour should be dark rather than white.</summary>
+    public bool DarkInk => 0.299 * R + 0.587 * G + 0.114 * B > 140;
+
+    /// <summary>The tick colour on this swatch: "000" on light colours, "fff" on dark ones.</summary>
+    public string Ink => DarkInk ? "000" : "fff";
 }
 
 /// <summary>
@@ -27,9 +33,9 @@ public static class ColorPalette
         new("Pink", 255, 0, 110),
     ];
 
-    /// <summary>The palette as the web pages use it: [["ff0000","Red"], …].</summary>
+    /// <summary>The palette as the web pages use it: [["ff0000","Red","fff"], …] (hex, name, tick ink).</summary>
     public static string JsArray() =>
-        "[" + string.Join(",", All.Select(c => $"[\"{c.Hex}\",\"{c.Name}\"]")) + "]";
+        "[" + string.Join(",", All.Select(c => $"[\"{c.Hex}\",\"{c.Name}\",\"{c.Ink}\"]")) + "]";
 
     /// <summary>Placeholder the web pages carry where the palette goes; servers replace it when serving.</summary>
     public const string Placeholder = "/*PALETTE*/[]";

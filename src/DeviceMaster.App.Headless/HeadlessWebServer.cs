@@ -391,8 +391,8 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .note { font-size:12px; color:var(--faint); margin-top:8px; line-height:1.5; }
 /* swatches */
 .swatches { display:flex; gap:8px; flex-wrap:wrap; }
-.swatch { width:30px; height:30px; border-radius:8px; border:2px solid var(--line2); cursor:pointer; }
-.swatch.sel { border-color:var(--text); }
+.swatch { width:30px; height:30px; border-radius:8px; border:1px solid var(--line2); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:18px; line-height:1; }
+.swatch.sel { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 .preview { width:52px; height:34px; border-radius:9px; background:#8000ff; border:1px solid var(--line2); }
 .preview.rainbow { background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
 @keyframes rb { to { background-position:200% 0; } }
@@ -607,6 +607,7 @@ function syncControls(){
   if (!busy("rgbColor")) $("rgbColor").value = "#"+hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB);
   if (!busy("rgbSpeed")) { $("rgbSpeed").value = c.RgbSpeed || 3; paintSlider($("rgbSpeed")); }
   renderEffect();
+  markSwatch();
   if (!busy("rgbBright")) { $("rgbBright").value = c.RgbBrightness; $("rgbBrightVal").textContent = c.RgbBrightness + " %"; }
   if (!busy("lcdMode")) $("lcdMode").value = c.LcdScreens;
   if (!busy("lcdMetric")) $("lcdMetric").value = c.PumpScreenMetric;
@@ -678,9 +679,14 @@ $("lcdBright").oninput  = e => $("lcdBrightVal").textContent = e.target.value + 
 
 /* ---- swatches ---- */
 const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
-SWATCHES.forEach(([hex,name]) => {
+function markSwatch(){ // tick + ring on the colour that's running (static colour only)
+  if (!cfg) return;
+  const c = cfg.Control, cur = !c.RgbOff && c.RgbEffect === 0 ? hx(c.RgbR)+hx(c.RgbG)+hx(c.RgbB) : "";
+  [...$("swatches").children].forEach(d => { const on = d.dataset.hex === cur; d.classList.toggle("sel", on); d.textContent = on ? "✓" : ""; });
+}
+SWATCHES.forEach(([hex,name,ink]) => {
   const d = document.createElement("div");
-  d.className = "swatch"; d.style.background = "#"+hex; d.title = name;
+  d.className = "swatch"; d.style.background = "#"+hex; d.style.color = "#"+ink; d.title = name; d.dataset.hex = hex;
   d.onclick = () => { $("rgbColor").value = "#"+hex;
     apply({rgbEffect: 0, rgbR: parseInt(hex.slice(0,2),16), rgbG: parseInt(hex.slice(2,4),16), rgbB: parseInt(hex.slice(4,6),16)}); };
   $("swatches").appendChild(d);

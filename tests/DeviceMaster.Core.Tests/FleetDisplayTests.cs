@@ -169,7 +169,7 @@ public class ColorPaletteTests
     {
         Assert.Contains(DeviceMaster.Core.Lighting.ColorPalette.Placeholder, page); // filled when served, never hard-coded
         var served = DeviceMaster.Core.Lighting.ColorPalette.Inject(page);
-        Assert.Contains("[\"ff0000\",\"Red\"]", served);
+        Assert.Contains("[\"ff0000\",\"Red\",\"fff\"]", served); // white tick on red: the selection shows on every colour
         Assert.DoesNotContain("type=\"color\"", served);
         Assert.DoesNotContain("ff2222", served); // the old dull "red"
     }
