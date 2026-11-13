@@ -302,6 +302,7 @@ public sealed class HubWebServer : IDisposable
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeviceMaster Fleet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='1' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%234f8cff'/%3E%3Cstop offset='.5' stop-color='%23d06cd8'/%3E%3Cstop offset='1' stop-color='%23ff7a45'/%3E%3C/linearGradient%3E%3CclipPath id='d'%3E%3Cpath d='M11.5 12H32.50A20.0 20.0 0 0 1 32.50 52H11.5Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect x='2' y='2' width='60' height='60' rx='14' fill='url(%23g)'/%3E%3Cg clip-path='url(%23d)' fill='%230f1115'%3E%3Crect x='11.50' y='12' width='8.00' height='40' rx='2.40'/%3E%3Crect x='22.50' y='12' width='8.00' height='40' rx='2.40'/%3E%3Crect x='33.50' y='12' width='8.00' height='40' rx='2.40'/%3E%3Crect x='44.50' y='12' width='8.00' height='40' rx='2.40'/%3E%3C/g%3E%3C/svg%3E">
 <style>
 :root {
   --bg:#0f1115; --card:#171a20; --card2:#1d2129; --line:#2a2f39; --line2:#3c4351;
