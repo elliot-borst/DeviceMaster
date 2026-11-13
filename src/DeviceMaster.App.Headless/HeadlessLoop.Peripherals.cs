@@ -64,7 +64,7 @@ public sealed partial class HeadlessLoop
     {
         if (!cfg.MotherboardFans)
         {
-            ReleaseMotherboardFans();
+            HandBackMotherboardFans(warnings); // non-blocking: over the next few ticks
             return;
         }
 
@@ -95,7 +95,7 @@ public sealed partial class HeadlessLoop
         {
             if (off)
             {
-                warnings.AddRange(_mbFans.Release().Select(p => $"motherboard fans: {p}")); // BIOS curve back in charge
+                warnings.AddRange(_mbFans.HandBack().Select(p => $"motherboard fans: {p}")); // BIOS curve back in charge, non-blocking
             }
             else
             {
@@ -120,6 +120,22 @@ public sealed partial class HeadlessLoop
         }
     }
 
+    private void HandBackMotherboardFans(List<string> warnings)
+    {
+        try
+        {
+            if (_mbFans is not null)
+            {
+                warnings.AddRange(_mbFans.HandBack().Select(p => $"motherboard fans: {p}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"motherboard fan handback failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Shutdown: blocking, verified handback of every header (#35, #37).</summary>
     private void ReleaseMotherboardFans()
     {
         try
