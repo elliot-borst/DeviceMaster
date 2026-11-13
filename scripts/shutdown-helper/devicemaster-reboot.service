@@ -1,0 +1,7 @@
+# Runs only this host's own clean reboot; nothing else. See devicemaster-reboot.path.
+[Unit]
+Description=Clean reboot requested by the DeviceMaster fleet
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'logger -t devicemaster "fleet reboot: $(cat /srv/devicemaster/power/reboot-request 2>/dev/null)"; rm -f /srv/devicemaster/power/reboot-request; exec systemctl reboot'

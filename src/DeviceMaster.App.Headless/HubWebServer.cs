@@ -151,7 +151,7 @@ public sealed class HubWebServer : IDisposable
         }
         else if (path == "/api/fleet/machines")
         {
-            Json(ctx, 200, _hub.Machines.Select(m => m.Summarize(now)));
+            Json(ctx, 200, _hub.Machines.Select(m => m.Summarize(now) with { CanWake = _hub.CanWake(m.Name) }));
         }
         else if (path is "/display" or "/display/")
         {
@@ -711,7 +711,8 @@ function machinePage(m){
   const d = detail && detail.summary && detail.summary.Name === m.Name ? detail.status : null;
   const meta = [m.MachineName, m.Platform, m.Version && m.Version.split("+")[0] && `v${m.Version.split("+")[0].split(".")[0]}`].filter(Boolean).join(" · ");
   let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
-    ${m.Online ? `<div class="seg" style="margin:0 0 14px 2px"><a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a></div>` : ""}
+    <div class="seg" style="margin:0 0 14px 2px">${m.Online ? `<a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a>
+      <button onclick='powerAct(${JSON.stringify(m.Name)}, "reboot")'>↻ Reboot</button><button onclick='powerAct(${JSON.stringify(m.Name)}, "off")'>⏻ Shut down</button>` : (m.CanWake ? `<button onclick='powerAct(${JSON.stringify(m.Name)}, "on")'>⏻ Power on</button>` : "")}</div>
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
       ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;
@@ -719,6 +720,14 @@ function machinePage(m){
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
   return html;
+}
+async function powerAct(name, action){
+  const words = { off: "Shut down", reboot: "Reboot", on: "Power on" };
+  if (!confirm(`${words[action]} ${name}?`)) return;
+  const r = await fetch(`/api/fleet/machines/${encodeURIComponent(name)}/power`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ action }) });
+  const b = await r.json().catch(() => ({}));
+  alert(r.ok ? `${name}: ${b.how || (action === "on" ? "wake packet sent" : "done")}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
+  refresh();
 }
 function render(){
   sidebar();

@@ -120,3 +120,32 @@ public class HubPowerTests
         Assert.False(withVia.CanWake("A")); // the waking machine can't wake itself
     }
 }
+
+public class RebootRequestTests
+{
+    [Fact]
+    public void ARebootRequestUsesItsOwnFileAndCancelClearsEither()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dm-reboot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.True(ShutdownRequest.Write(dir, "t", reboot: true));
+            Assert.True(File.Exists(Path.Combine(dir, ShutdownRequest.RebootFileName)));
+            Assert.False(File.Exists(Path.Combine(dir, ShutdownRequest.FileName)));
+            Assert.True(ShutdownRequest.Cancel(dir));
+            Assert.False(File.Exists(Path.Combine(dir, ShutdownRequest.RebootFileName)));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TheHubKnowsReboot()
+    {
+        using var hub = new FleetHub(new HubConfig { Agents = [new HubAgent { Name = "A", Url = "http://localhost:1", TokenFile = "missing" }] });
+        Assert.Equal(502, (await hub.PowerAsync("A", "reboot", "t")).Status); // forwarded (agent unreachable), not rejected as unknown
+    }
+}

@@ -2199,6 +2199,13 @@ public sealed class MainWindow : Window
             return RunShutdown($"/s /t 60 /c \"DeviceMaster fleet: shutting down in 60 seconds ({reason.Replace("\"", "'")})\"") ? "Windows shutdown in 60 s" : null;
         }
 
+        // a fleet "reboot": Windows' own clean restart after the same 60 s grace (cancellable)
+        public string? RequestReboot(string reason)
+        {
+            LogLine($"fleet: reboot requested ({reason}) — Windows restarts in 60 s");
+            return RunShutdown($"/r /t 60 /c \"DeviceMaster fleet: restarting in 60 seconds ({reason.Replace("\"", "'")})\"") ? "Windows restart in 60 s" : null;
+        }
+
         public bool CancelShutdown() => RunShutdown("/a");
 
         private static bool RunShutdown(string args)

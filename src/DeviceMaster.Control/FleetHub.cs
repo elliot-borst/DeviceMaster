@@ -203,11 +203,12 @@ public sealed class FleetHub : IDisposable
     public Task<(int Status, string Body)> PowerAsync(string name, string action, string who) => action switch
     {
         "off" => ForwardAsync(name, HttpMethod.Post, "power/shutdown", headers: new() { ["X-DeviceMaster-Reason"] = $"fleet hub, {who}" }),
+        "reboot" => ForwardAsync(name, HttpMethod.Post, "power/reboot", headers: new() { ["X-DeviceMaster-Reason"] = $"fleet hub, {who}" }),
         "cancel" => ForwardAsync(name, HttpMethod.Post, "power/cancel"),
         "on" when CanWake(name) => ForwardAsync(_config.WakeVia!, HttpMethod.Post, "power/wake",
             JsonSerializer.Serialize(new { mac = _config.Agents.First(a => a.Name == name).Mac })),
         "on" => Task.FromResult((409, """{"error":"no MAC address or waking machine set up for this server"}""")),
-        _ => Task.FromResult((400, """{"error":"action must be on, off or cancel"}""")),
+        _ => Task.FromResult((400, """{"error":"action must be on, off, reboot or cancel"}""")),
     };
 
     /// <summary>

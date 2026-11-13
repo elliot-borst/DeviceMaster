@@ -80,6 +80,8 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
   <div class="card"><h2>Downloads</h2><div id="sab" style="display:flex;flex-direction:column;flex:1;min-height:0"></div></div>
 </section>
 <div class="stale" id="stale">hub not answering</div>
+<div class="modal" id="menu"><div class="box"><h3 id="menuTitle"></h3><p>A clean shutdown or restart, the same as from its own menu.</p>
+  <div class="btns"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn" id="menuReboot">↻ Reboot</button><button class="btn danger" id="menuOff">⏻ Shut down</button></div></div></div>
 <div class="modal" id="modal"><div class="box"><h3 id="mTitle"></h3><p id="mText"></p>
   <div class="btns"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" id="mGo">Confirm</button></div></div></div>
 <div class="toast" id="toast"></div>
@@ -97,25 +99,38 @@ const busy = {};
 function powerButton(m){
   const n = JSON.stringify(m.Name).replace(/'/g, "&#39;");
   if (busy[m.Name]) return `<span class="btn pw" style="cursor:default">${busy[m.Name]}</span>`;
-  if (m.Online) return `<button class="btn pw danger" onclick='askPower(${n}, "off")'>⏻ Off</button>`;
+  if (m.Online) return `<button class="btn pw" onclick='powerMenu(${n})'>⏻ Power</button>`;
   return m.CanWake ? `<button class="btn pw go" onclick='askPower(${n}, "on")'>⏻ On</button>` : "";
 }
-function closeModal(){ $("modal").style.display = "none"; }
+function closeModal(){ $("modal").style.display = "none"; $("menu").style.display = "none"; }
 function toast(text){ const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 6000); }
+function powerMenu(name){
+  $("menuTitle").textContent = `Power · ${name}`;
+  $("menuOff").onclick = () => { closeModal(); askPower(name, "off"); };
+  $("menuReboot").onclick = () => { closeModal(); askPower(name, "reboot"); };
+  $("menu").style.display = "flex";
+}
+const ACTIONS = {
+  off:    { title: n => `Shut down ${n}?`, text: "A clean shutdown, the same as from its own menu. Fans hand back to the BIOS first.", go: "⏻ Shut down", cls: "danger", busy: "shutting down…", done: "shutting down" },
+  reboot: { title: n => `Reboot ${n}?`, text: "A clean restart, the same as from its own menu. It comes back on its own.", go: "↻ Reboot", cls: "danger", busy: "rebooting…", done: "rebooting" },
+  on:     { title: n => `Power on ${n}?`, text: "Sends a Wake-on-LAN packet across the network.", go: "⏻ Power on", cls: "go", busy: "waking…", done: "wake packet sent" },
+};
 function askPower(name, action){
-  $("mTitle").textContent = action === "off" ? `Shut down ${name}?` : `Power on ${name}?`;
-  $("mText").textContent = action === "off" ? "A clean shutdown, the same as from its own menu. Fans hand back to the BIOS first." : "Sends a Wake-on-LAN packet across the network.";
-  $("mGo").textContent = action === "off" ? "Shut down" : "Power on";
-  $("mGo").className = "btn " + (action === "off" ? "danger" : "go");
+  const a = ACTIONS[action];
+  $("mTitle").textContent = a.title(name);
+  $("mText").textContent = a.text;
+  $("mGo").textContent = a.go;
+  $("mGo").className = "btn " + a.cls;
   $("mGo").onclick = () => { closeModal(); power(name, action); };
   $("modal").style.display = "flex";
 }
 async function power(name, action){
-  busy[name] = action === "off" ? "shutting down…" : "waking…";
+  const a = ACTIONS[action];
+  busy[name] = a.busy;
   try {
     const r = await fetch(`/api/fleet/machines/${encodeURIComponent(name)}/power`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ action }) });
     const b = await r.json().catch(() => ({}));
-    toast(r.ok ? `${name}: ${action === "off" ? (b.how || "shutting down") : "wake packet sent"}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
+    toast(r.ok ? `${name}: ${b.how || a.done}` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
     if (!r.ok) delete busy[name];
   } catch { delete busy[name]; toast(`${name}: hub not answering`); }
   setTimeout(() => delete busy[name], 120000); // the card shows the real state again within 2 min

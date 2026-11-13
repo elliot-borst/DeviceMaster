@@ -1,0 +1,12 @@
+# DeviceMaster fleet reboot helper (#52), systemd hosts — the reboot twin of
+# devicemaster-shutdown.path, watching <dir>/reboot-request in the same directory.
+#   systemctl daemon-reload && systemctl enable --now devicemaster-reboot.path
+[Unit]
+Description=Watch for a DeviceMaster fleet reboot request
+
+[Path]
+PathExists=/srv/devicemaster/power/reboot-request
+Unit=devicemaster-reboot.service
+
+[Install]
+WantedBy=multi-user.target

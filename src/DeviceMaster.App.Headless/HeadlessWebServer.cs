@@ -34,6 +34,11 @@ public sealed class HeadlessWebServer : IDisposable
                 ? "host shutdown helper"
                 : null;
 
+        public string? RequestReboot(string reason) =>
+            HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Write(dir, reason, reboot: true)
+                ? "host reboot helper"
+                : null;
+
         public bool CancelShutdown() =>
             HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Cancel(dir);
 

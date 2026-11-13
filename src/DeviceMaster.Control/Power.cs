@@ -58,30 +58,37 @@ public static class ShutdownRequest
 {
     public const string FileName = "shutdown-request";
 
+    /// <summary>The reboot request (#52): same folder, same helper pattern, the host's own clean reboot.</summary>
+    public const string RebootFileName = "reboot-request";
+
     /// <summary>Writes the request (who, when); the helper deletes it when it acts. Returns false if the folder isn't there.</summary>
-    public static bool Write(string directory, string reason)
+    public static bool Write(string directory, string reason, bool reboot = false)
     {
         if (!Directory.Exists(directory))
         {
             return false;
         }
 
-        var path = Path.Combine(directory, FileName);
+        var path = Path.Combine(directory, reboot ? RebootFileName : FileName);
         File.WriteAllText(path + ".tmp", $"{DateTime.UtcNow:O} {reason}\n");
         File.Move(path + ".tmp", path, overwrite: true);
         return true;
     }
 
-    /// <summary>Withdraws a request the helper hasn't acted on yet.</summary>
+    /// <summary>Withdraws a shutdown or reboot request the helper hasn't acted on yet.</summary>
     public static bool Cancel(string directory)
     {
-        var path = Path.Combine(directory, FileName);
-        if (!File.Exists(path))
+        var cancelled = false;
+        foreach (var name in new[] { FileName, RebootFileName })
         {
-            return false;
+            var path = Path.Combine(directory, name);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                cancelled = true;
+            }
         }
 
-        File.Delete(path);
-        return true;
+        return cancelled;
     }
 }
