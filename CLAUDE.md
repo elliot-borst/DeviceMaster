@@ -55,3 +55,10 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
 4. `gh release create v<N> dist\DeviceMaster-Setup.exe --title "DeviceMaster <N>" --notes ...`
    The release asset MUST be the setup exe (the in-app updater looks for an .exe asset with
    "setup" in the name); do not ship zips.
+## GitHub issues: assign the owner
+
+Every issue created on this repo is **assigned to the owner, `elliot-borst`, the moment it is created**
+(owner rule, 2026-11-13), by every agent and every scheduled run: `gh issue create --assignee elliot-borst …`,
+or with the plain API put `"assignees":["elliot-borst"]` in the create body. If you pick up or reopen an
+issue that has no assignee, add it (`gh issue edit <n> --add-assignee elliot-borst`). A 10-minute sweep
+(ServerStack `tools/assign-issues-to-owner.sh`) catches any that slip through; don't rely on it.
