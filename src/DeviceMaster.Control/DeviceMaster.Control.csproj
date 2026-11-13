@@ -12,6 +12,7 @@
     <ProjectReference Include="..\DeviceMaster.Devices.LianLi\DeviceMaster.Devices.LianLi.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.AsusAura\DeviceMaster.Devices.AsusAura.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.MsiMysticLight\DeviceMaster.Devices.MsiMysticLight.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.Nvidia\DeviceMaster.Devices.Nvidia.csproj" />
   </ItemGroup>
 

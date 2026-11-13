@@ -405,6 +405,7 @@ public sealed partial class HeadlessLoop : IDisposable
         ApplyGpuRgb(cfg, warnings);
         ApplyRamRgb(cfg, warnings);
         ApplyAura(cfg, warnings);
+        ApplyMysticLight(cfg, warnings);
 
         // ---- pump LCD ----
         ApplyLcd(cfg, coolant, sourceTemp, duty, pumpDuty, readings, warnings);
@@ -467,7 +468,7 @@ public sealed partial class HeadlessLoop : IDisposable
                 Pump = readings.Any(r => r.IsPump),
                 CorsairHubs = _hubs.Count > 0,
                 MotherboardFans = _mbFans is { Controlled.Count: > 0 },
-                MotherboardRgb = _aura is not null,
+                MotherboardRgb = _aura is not null || _msi is not null,
                 RamRgb = _ramRgb.Count > 0,
                 GpuRgb = _gpuRgb is not null,
                 FanRgb = _hubs.Count > 0,
