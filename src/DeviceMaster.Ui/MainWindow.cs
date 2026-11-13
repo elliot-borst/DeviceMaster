@@ -161,6 +161,11 @@ public sealed class MainWindow : Window
             StartAgentApi();
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
+
+            // the app lives in the tray for days: keep checking, so a release lands without a restart
+            var updateTimer = new DispatcherTimer { Interval = AutoUpdateInterval };
+            updateTimer.Tick += async (_, _) => await CheckForUpdatesAsync(auto: true);
+            updateTimer.Start();
         });
 
         SourceInitialized += (_, _) =>
@@ -2658,9 +2663,17 @@ public sealed class MainWindow : Window
 
     // ---------- updates ----------
 
+    /// <summary>How often the running app looks for a new release (it installs them by itself).</summary>
+    private static readonly TimeSpan AutoUpdateInterval = TimeSpan.FromMinutes(15);
+
+    /// <summary>GPU load above which an automatic update waits (a game is running): the restart blips fans and lighting.</summary>
+    private const double AutoUpdateBusyGpuLoadPercent = 40;
+
+    private string? _deferredUpdateLogged;
+
     private async Task CheckForUpdatesAsync(bool auto)
     {
-        if (_checkBusy)
+        if (_checkBusy || _downloading)
         {
             return;
         }
@@ -2678,13 +2691,26 @@ public sealed class MainWindow : Window
         var current = WholeVersion.Parse(AppVersion);
         if (info is not null && WholeVersion.Compare(info.Version, current) > 0 && info.SetupUrl is not null)
         {
+            // an automatic install restarts the app (fans briefly to hardware control, lighting
+            // blips): never in the middle of a game — wait for the next check when the GPU is idle
+            if (auto && _loop?.Status.GpuLoadPercent is { } gpuLoad && gpuLoad >= AutoUpdateBusyGpuLoadPercent)
+            {
+                if (_deferredUpdateLogged != info.Tag)
+                {
+                    _deferredUpdateLogged = info.Tag;
+                    LogLine($"auto-update: {info.Tag} is available — waiting until the GPU is idle (now {gpuLoad:F0} %)");
+                }
+
+                return;
+            }
+
             // updates are hands-off: download and install silently, then relaunch in the
             // tray. Status shows INSIDE the pill — it keeps its place and look throughout.
             _pendingUpdate = info;
             _checkBusy = true;
             _checkButton.IsHitTestVisible = false;
             _checkLabel.Text = $"↻  Updating to {info.Tag}…";
-            await StartUpdateAsync();
+            await StartUpdateAsync(auto);
             return;
         }
 
@@ -2705,7 +2731,7 @@ public sealed class MainWindow : Window
         _checkLabel.Text = "↻  Check for Updates";
     }
 
-    private async Task StartUpdateAsync()
+    private async Task StartUpdateAsync(bool auto = false)
     {
         if (_downloading || _pendingUpdate?.SetupUrl is not { } setupUrl)
         {
@@ -2717,6 +2743,14 @@ public sealed class MainWindow : Window
         if (installerPath is null)
         {
             _downloading = false;
+            if (auto)
+            {
+                // background check: no browser popping up — just try again at the next one
+                LogLine($"auto-update: download of {_pendingUpdate.Tag} failed — retrying at the next check");
+                RestoreCheckButton();
+                return;
+            }
+
             _checkLabel.Text = "⚠  Download failed — opening releases page";
             Process.Start(new ProcessStartInfo(_pendingUpdate.PageUrl) { UseShellExecute = true });
             await Task.Delay(3000);
