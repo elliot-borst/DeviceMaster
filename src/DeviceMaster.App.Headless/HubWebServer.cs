@@ -717,6 +717,7 @@ function machinePage(m){
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
       ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;
   if (d && d.Warnings && d.Warnings.length) html += `<div class="card" style="margin-top:14px"><b>Warnings</b><ul class="warn">${d.Warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
+  if (d && d.Notes && d.Notes.length) html += `<div class="sub" style="margin-top:12px">${d.Notes.map(n => `ℹ ${esc(n)}`).join("<br>")}</div>`; // settled facts, not warnings
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
   return html;

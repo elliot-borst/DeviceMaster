@@ -480,6 +480,7 @@ public sealed partial class HeadlessLoop : IDisposable
             },
             Devices = readings,
             Warnings = warnings,
+            Notes = MotherboardFanNotes(),
             RgbDiagnostics = RgbDiagnostics(),
         };
 

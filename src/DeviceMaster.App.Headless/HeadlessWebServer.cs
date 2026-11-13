@@ -843,7 +843,8 @@ function tick(){
     $("fanGrid").innerHTML = fans.map(x => `<div class="fanpill"><span class="n">${family(x.Family)} · ${x.Name||"fan"}</span>`
       + `<span class="r${x.Rpm == null ? " none" : ""}">${x.Rpm == null ? "no rpm" : x.Rpm + " rpm"}</span></div>`).join("");
     $("dashWarnings").innerHTML = (s.Warnings||[]).filter(w => !String(w).includes("LED registry"))
-      .map(w => `<div class="dashwarn">⚠&nbsp; ${String(w).replace(/</g,"&lt;")}</div>`).join("");
+      .map(w => `<div class="dashwarn">⚠&nbsp; ${String(w).replace(/</g,"&lt;")}</div>`).join("")
+      + (s.Notes||[]).map(n => `<div style="color:var(--dim);font-size:12.5px;margin-top:6px">ℹ&nbsp; ${String(n).replace(/</g,"&lt;")}</div>`).join(""); // settled facts, not warnings
     // CPU and GPU sections: same figures and formatting as UpdateProcessorSections() on the desktop
     const pct = v => v == null ? "—" : Math.round(v) + "%", watts = v => v == null ? "—" : Math.round(v) + " W",
           gb = v => v == null ? "—" : v.toFixed(1) + " GB";

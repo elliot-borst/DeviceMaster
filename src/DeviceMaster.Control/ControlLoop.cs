@@ -80,6 +80,12 @@ public sealed record ControlStatus
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     /// <summary>
+    /// Settled, safe facts worth knowing but not acting on (e.g. fan headers the board won't let
+    /// software drive, left on the BIOS curve). Not warnings: they don't count or show orange.
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
+    /// <summary>
     /// What each chip-level RGB controller reported (firmware, config/zone map, scan results),
     /// so a device that doesn't light can be diagnosed from the status endpoint alone.
     /// </summary>
