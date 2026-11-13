@@ -39,6 +39,7 @@ public sealed class AgentApi
 
     public static readonly JsonSerializerOptions Json = new()
     {
+        PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter() },
     };
 

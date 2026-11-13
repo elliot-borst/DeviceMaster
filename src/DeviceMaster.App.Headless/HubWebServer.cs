@@ -107,9 +107,28 @@ public sealed class HubWebServer : IDisposable
             return;
         }
 
+        if (ctx.Request.HttpMethod == "PUT")
+        {
+            HandleWrite(ctx, path);
+            return;
+        }
+
         if (ctx.Request.HttpMethod != "GET")
         {
-            Send(ctx, 405, "text/plain; charset=utf-8", "read-only");
+            Send(ctx, 405, "text/plain; charset=utf-8", "GET or PUT");
+            return;
+        }
+
+        if (path == "/api/fleet/settings")
+        {
+            var state = _hub.Store?.State;
+            Json(ctx, 200, new
+            {
+                writable = _hub.Store is not null,
+                user = User(ctx),
+                state,
+                audit = _hub.Store?.RecentAudit(20) ?? [],
+            });
             return;
         }
 
@@ -132,6 +151,100 @@ public sealed class HubWebServer : IDisposable
             Send(ctx, 404, "text/plain; charset=utf-8", "not found");
         }
     }
+
+    /// <summary>The signed-in tailnet user, from the header tailscale serve adds (null when absent).</summary>
+    private static string? User(HttpListenerContext ctx) =>
+        ctx.Request.Headers["Tailscale-User-Login"] is { Length: > 0 } login ? login : null;
+
+    /// <summary>
+    /// Fleet settings writes (phase 4). Allowed only for a request that tailscale serve marked with
+    /// a tailnet user identity (tagged devices and anything else get 403); every change is audited.
+    /// <list type="bullet">
+    /// <item><c>PUT /api/fleet/settings/lighting</c> — body: the lighting fields plus <c>managed</c> (bool)</item>
+    /// <item><c>PUT /api/fleet/machines/{name}/lighting</c> — body: lighting fields for that machine, or <c>{"follow":true}</c></item>
+    /// </list>
+    /// </summary>
+    private void HandleWrite(HttpListenerContext ctx, string path)
+    {
+        if (_hub.Store is not { } store)
+        {
+            Json(ctx, 409, new { error = "this hub is read-only (no fleet state file)" });
+            return;
+        }
+
+        if (User(ctx) is not { } user)
+        {
+            Json(ctx, 403, new { error = "changes need a signed-in tailnet user (open the page through its tailnet address)" });
+            return;
+        }
+
+        string body;
+        using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+        {
+            body = reader.ReadToEnd();
+        }
+
+        if (body.Length > 32 * 1024)
+        {
+            Json(ctx, 413, new { error = "payload too large" });
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            FleetState next;
+            if (path == "/api/fleet/settings/lighting")
+            {
+                var incoming = root.Deserialize<FleetProfile>(AgentApi.Json) ?? new FleetProfile();
+                var managed = !root.TryGetProperty("managed", out var m) || m.ValueKind != JsonValueKind.False;
+                next = store.Update(s => s with
+                {
+                    Profile = FleetState.Take(FleetSection.Lighting, s.Profile, incoming),
+                    Managed = managed ? s.Managed.Union([FleetSection.Lighting]).ToList() : s.Managed.Where(x => x != FleetSection.Lighting).ToList(),
+                }, user, $"fleet lighting: {Describe(incoming)}{(managed ? "" : " (fleet stops managing lighting)")}");
+            }
+            else if (path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/lighting", StringComparison.Ordinal)
+                     && Uri.UnescapeDataString(path["/api/fleet/machines/".Length..^"/lighting".Length]) is var name && _hub.Knows(name))
+            {
+                var follow = root.TryGetProperty("follow", out var f) && f.ValueKind == JsonValueKind.True;
+                var lighting = follow ? null : root.Deserialize<FleetProfile>(AgentApi.Json) ?? new FleetProfile();
+                next = store.Update(s =>
+                {
+                    var overrides = new Dictionary<string, FleetOverride>(s.Overrides);
+                    var current = overrides.GetValueOrDefault(name) ?? new FleetOverride();
+                    current = lighting is null
+                        ? current with { RgbEnabled = null, RgbOff = null, RgbR = null, RgbG = null, RgbB = null, RgbBrightness = null, RgbEffect = null, RgbSpeed = null, Blackout = null }
+                        : current with
+                        {
+                            RgbEnabled = lighting.RgbEnabled, RgbOff = lighting.RgbOff, RgbR = lighting.RgbR, RgbG = lighting.RgbG, RgbB = lighting.RgbB,
+                            RgbBrightness = lighting.RgbBrightness, RgbEffect = lighting.RgbEffect, RgbSpeed = lighting.RgbSpeed, Blackout = lighting.Blackout,
+                        };
+                    overrides[name] = current;
+                    return s with { Overrides = overrides };
+                }, user, lighting is null ? $"{name}: lighting follows the fleet" : $"{name}: own lighting: {Describe(lighting)}");
+            }
+            else
+            {
+                Json(ctx, 404, new { error = "not found" });
+                return;
+            }
+
+            _log($"hub: {user} changed fleet settings (version {next.Version})");
+            _hub.Nudge(); // push now, not at the next poll
+            Json(ctx, 200, new { ok = true, version = next.Version });
+        }
+        catch (JsonException ex)
+        {
+            Json(ctx, 400, new { error = $"invalid settings: {ex.Message}" });
+        }
+    }
+
+    private static string Describe(FleetProfile p) =>
+        p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
+        : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Rainbow ? $"rainbow speed {p.RgbSpeed}, {p.RgbBrightness}%"
+        : $"#{p.RgbR:X2}{p.RgbG:X2}{p.RgbB:X2}, {p.RgbBrightness}%";
 
     private static void Json(HttpListenerContext ctx, int status, object body) =>
         Send(ctx, status, "application/json; charset=utf-8", JsonSerializer.Serialize(body, AgentApi.Json));
@@ -194,7 +307,7 @@ h1 { font-size:24px; font-weight:700; margin:0 0 4px 2px; }
 .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 18px; min-width:0; overflow-wrap:anywhere; }
 .card.click { cursor:pointer; } .card.click:hover { border-color:var(--line2); }
-.row { display:flex; align-items:center; gap:10px; }
+.row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .cname { font-size:15.5px; font-weight:600; }
 .cmeta { font-size:11.5px; color:var(--faint); margin-left:auto; }
 .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:12px; }
@@ -211,12 +324,30 @@ ul.warn { margin:12px 0 0 18px; color:var(--warn); font-size:12.5px; }
 table { width:100%; border-collapse:collapse; margin-top:12px; font-size:13px; }
 td,th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
 th { color:var(--faint); font-weight:600; font-size:11px; text-transform:uppercase; }
+/* ---- lighting controls (phase 4) ---- */
+.light { margin-top:14px; }
+.ctl { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.ctl > label { font-size:12px; color:var(--faint); min-width:76px; }
+.seg { display:flex; gap:6px; flex-wrap:wrap; }
+.seg button { background:var(--inset); border:1px solid var(--line2); color:var(--dim); font:13px "Segoe UI",sans-serif; padding:6px 14px; border-radius:99px; cursor:pointer; }
+.seg button.on { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); border-color:transparent; color:#fff; font-weight:600; }
+.sw { width:30px; height:30px; border-radius:9px; border:2px solid transparent; cursor:pointer; }
+.sw.on { border-color:#fff; }
+input[type=range] { width:min(220px, 52vw); accent-color:var(--accent); }
+.val { font-size:13px; font-weight:600; color:var(--accent2); min-width:44px; }
+.badge { font-size:11.5px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim); margin-left:8px; }
+.badge.sync { color:var(--good); border-color:#1f5a46; } .badge.differs { color:var(--warn); border-color:#5c4a14; }
+.audit { font-size:11.5px; color:var(--faint); margin-top:10px; }
+.note { font-size:12px; color:var(--faint); margin-top:10px; }
 @media (max-width:760px) {
   body { display:block; }
   aside { width:auto; height:auto; position:static; border-right:0; border-bottom:1px solid var(--line); padding:12px; }
   .brand { padding-bottom:8px; }
   main { padding:16px; }
   .stats { grid-template-columns:repeat(2,1fr); }
+  .ctl > label { min-width:0; width:100%; }
+  .cmeta { margin-left:0; }
+  body { overflow-x:hidden; }
 }
 </style>
 </head>
@@ -264,20 +395,83 @@ function banners(m){
   if (!m.Online) return `<div class="banner off">Not answering${m.Error ? ` — ${esc(m.Error)}` : ""}. It keeps running on its own settings.</div>`;
   return m.Failsafe ? `<div class="banner bad">Failsafe: fans at 100 % (temperature unreadable)</div>` : "";
 }
+/* ---- fleet lighting (phase 4): one setting for every server, or a server's own ---- */
+let settings = null, editing = false;
+const SWATCHES = [["8000ff","Purple"],["ff00ff","Magenta"],["0066ff","Blue"],["00e5ff","Cyan"],["00ff66","Green"],["ff8800","Orange"],["ff2222","Red"],["ffffff","White"]];
+const LIGHT_KEYS = ["RgbEnabled","RgbOff","RgbR","RgbG","RgbB","RgbBrightness","RgbEffect","RgbSpeed","Blackout"];
+const SPEEDS = ["","Slowest","Slow","Medium","Fast","Fastest"];
+const hex2 = n => n.toString(16).padStart(2,"0");
+const fleetManaged = () => !!(settings && settings.state && (settings.state.Managed || []).includes("Lighting"));
+function fleetLight(){ return settings && settings.state ? settings.state.Profile : null; }
+function ownLight(name){
+  const o = settings && settings.state && settings.state.Overrides ? settings.state.Overrides[name] : null;
+  return o && LIGHT_KEYS.some(k => o[k] != null) ? o : null;
+}
+function lightFor(name){ const f = fleetLight() || {}, o = ownLight(name) || {}; const r = {}; LIGHT_KEYS.forEach(k => r[k] = o[k] ?? f[k]); return r; }
+function badge(m){ return m.InSync === true ? `<span class="badge sync">in sync</span>` : m.InSync === false ? `<span class="badge differs">differs from fleet</span>` : ""; }
+function mode(L){ return L.Blackout ? "blackout" : L.RgbOff ? "off" : L.RgbEffect === "Rainbow" ? "rainbow" : "colour"; }
+async function put(url, body){
+  const r = await fetch(url, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || `Not saved (${r.status})`); }
+  await refresh();
+}
+function sendLight(scope, L){
+  return scope == null ? put("/api/fleet/settings/lighting", { ...L, RgbEnabled:true, managed:true })
+                       : put(`/api/fleet/machines/${encodeURIComponent(scope)}/lighting`, { ...L, RgbEnabled:true });
+}
+function lightControls(scope, L){
+  const id = scope == null ? "fleet" : "m";
+  const md = mode(L), cur = hex2(L.RgbR ?? 0) + hex2(L.RgbG ?? 0) + hex2(L.RgbB ?? 0);
+  const S = JSON.stringify(scope), J = JSON.stringify(L).replace(/'/g, "&#39;");
+  const set = patch => `sendLight(${S}, Object.assign(${J}, ${patch}))`;
+  return `<div class="ctl"><label>Effect</label><div class="seg">
+      <button class="${md==="colour"?"on":""}" onclick='${set(`{RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'>Colour</button>
+      <button class="${md==="rainbow"?"on":""}" onclick='${set(`{RgbEffect:"Rainbow",RgbOff:false,Blackout:false}`)}'>Rainbow</button>
+      <button class="${md==="off"?"on":""}" onclick='${set(`{RgbOff:true,Blackout:false}`)}'>Lights out</button>
+      <button class="${md==="blackout"?"on":""}" onclick='${set(`{Blackout:true}`)}'>Blackout</button></div></div>
+    ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h}"
+        onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>`).join("")}
+        <input type="color" value="#${cur}" onchange='const v=this.value;${set(`{RgbR:parseInt(v.slice(1,3),16),RgbG:parseInt(v.slice(3,5),16),RgbB:parseInt(v.slice(5,7),16),RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>` : ""}
+    ${md === "rainbow" ? `<div class="ctl"><label>Speed</label><input type="range" min="1" max="5" step="1" value="${L.RgbSpeed ?? 3}"
+        oninput='document.getElementById("${id}-spd").textContent=${JSON.stringify(SPEEDS)}[this.value]' onchange='${set(`{RgbSpeed:+this.value}`)}'><span class="val" id="${id}-spd">${SPEEDS[L.RgbSpeed ?? 3]}</span></div>` : ""}
+    ${md === "colour" || md === "rainbow" ? `<div class="ctl"><label>Brightness</label><input type="range" min="0" max="100" value="${L.RgbBrightness ?? 100}"
+        oninput='document.getElementById("${id}-bri").textContent=this.value+"%"' onchange='${set(`{RgbBrightness:+this.value}`)}'><span class="val" id="${id}-bri">${L.RgbBrightness ?? 100}%</span></div>` : ""}`;
+}
+function fleetLightingCard(){
+  if (!settings || !settings.writable) return "";
+  const on = fleetManaged(), L = fleetLight() || {};
+  const audit = (settings.audit || []).slice(0, 3).map(a => { try { const e = JSON.parse(a); return `${new Date(e.at).toLocaleString()} · ${esc(e.who)} · ${esc(e.what)}`; } catch { return ""; } }).filter(Boolean);
+  return `<div class="card light" style="margin-bottom:14px"><div class="row"><span class="cname">Lighting — all servers</span>
+      <span class="cmeta"><div class="seg"><button class="${on?"on":""}" onclick='sendLight(null, ${JSON.stringify(L)})'>Fleet</button>
+      <button class="${on?"":"on"}" onclick='put("/api/fleet/settings/lighting", Object.assign(${JSON.stringify(L)}, {managed:false}))'>Each server</button></div></span></div>
+    ${on ? lightControls(null, L) : `<div class="note">Each server keeps its own lighting. Pick Fleet to set every server at once.</div>`}
+    ${audit.length ? `<div class="audit">${audit.join("<br>")}</div>` : ""}
+    ${settings.user ? "" : `<div class="note">Open this page through its tailnet address to change settings.</div>`}</div>`;
+}
+function machineLightingCard(m){
+  if (!settings || !settings.writable || !m.Capabilities || !m.Capabilities.Lighting) return "";
+  if (!fleetManaged()) return `<div class="card light" style="margin-top:14px"><span class="cname">Lighting</span><div class="note">The fleet doesn't manage lighting; this server keeps its own (set it on the server, or switch "All servers" to Fleet).</div></div>`;
+  const own = ownLight(m.Name), S = JSON.stringify(m.Name);
+  return `<div class="card light" style="margin-top:14px"><div class="row"><span class="cname">Lighting</span>
+      <span class="cmeta"><div class="seg"><button class="${own?"":"on"}" onclick='put("/api/fleet/machines/"+encodeURIComponent(${S})+"/lighting", {follow:true})'>Follow fleet</button>
+      <button class="${own?"on":""}" onclick='sendLight(${S}, ${JSON.stringify(lightFor(m.Name))})'>Own</button></div></span></div>
+    ${own ? lightControls(m.Name, lightFor(m.Name)) : `<div class="note">Uses the fleet lighting.</div>`}
+    ${m.PushError ? `<div class="note" style="color:var(--warn)">Last push failed: ${esc(m.PushError)}</div>` : ""}</div>`;
+}
 function overview(){
   const online = machines.filter(m => m.Online).length;
-  return `<h1>Servers</h1><div class="sub">${online} of ${machines.length} online</div><div class="cards">` + machines.map(m =>
+  return `<h1>Servers</h1><div class="sub">${online} of ${machines.length} online</div>${fleetLightingCard()}<div class="cards">` + machines.map(m =>
     `<div class="card click" onclick='pick(${JSON.stringify(m.Name)})'>
-      <div class="row"><span class="dot ${state(m)}"></span><span class="cname">${esc(m.Name)}</span><span class="cmeta">${esc(seen(m))}</span></div>
+      <div class="row"><span class="dot ${state(m)}"></span><span class="cname">${esc(m.Name)}</span>${badge(m)}<span class="cmeta">${esc(seen(m))}</span></div>
       ${stats(m)}${banners(m)}</div>`).join("") + "</div>";
 }
 function machinePage(m){
   const d = detail && detail.summary && detail.summary.Name === m.Name ? detail.status : null;
   const meta = [m.MachineName, m.Platform, m.Version && m.Version.split("+")[0] && `v${m.Version.split("+")[0].split(".")[0]}`].filter(Boolean).join(" · ");
-  let html = `<h1>${esc(m.Name)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
+  let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
-      ${caps(m.Capabilities)}</div>`;
+      ${caps(m.Capabilities)}</div>${machineLightingCard(m)}`;
   if (d && d.Warnings && d.Warnings.length) html += `<div class="card" style="margin-top:14px"><b>Warnings</b><ul class="warn">${d.Warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
@@ -285,13 +479,19 @@ function machinePage(m){
 }
 function render(){
   sidebar();
+  if (editing) return; // never redraw under a slider being dragged
   const m = machines.find(x => x.Name === selected);
   document.getElementById("main").innerHTML = m ? machinePage(m) : overview();
 }
+document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".light")) editing = true; });
+document.addEventListener("pointerup", () => setTimeout(() => editing = false, 400));
+document.addEventListener("focusin", e => { if (e.target.type === "color") editing = true; });
+document.addEventListener("change", e => { if (e.target.type === "color") editing = false; });
 function pick(name){ selected = name; detail = null; history.replaceState(null, "", name ? "#" + encodeURIComponent(name) : "#"); render(); refresh(); }
 async function refresh(){
   try {
     machines = await (await fetch("/api/fleet/machines")).json();
+    settings = await (await fetch("/api/fleet/settings")).json();
     if (selected) detail = await (await fetch("/api/fleet/machines/" + encodeURIComponent(selected))).json();
     render();
   } catch { document.getElementById("alldot").className = "dot bad"; }

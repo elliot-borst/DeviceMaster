@@ -87,7 +87,7 @@ internal static class Program
                   [--hold SECONDS] [--brightness PERCENT]
               loop [--config PATH]              run the 1 Hz control loop
               web [--config PATH] --port 27004  control loop + web dashboard (/, /status.json)
-              hub [--config /config/hub.json] [--port 27080] [--bind ADDR]  fleet hub: Servers overview of every agent (no hardware)
+              hub [--config /config/hub.json] [--state PATH] [--port 27080] [--bind ADDR]  fleet hub: Servers overview + fleet settings (no hardware)
 
             Global: --trace (packet-level hub traffic)
             Config: DEVICEMASTER_CONFIG env var or --config (defaults to /config/config.json)
@@ -631,7 +631,10 @@ internal static class Program
         }
 
         var log = (Action<string>)(msg => Log.Information("{msg}", msg));
-        using var hub = new FleetHub(HubConfig.Load(configPath), log);
+        // fleet settings (phase 4) live beside hub.json unless --state says otherwise; audit log next to it
+        var statePath = GetOption(args, "--state")
+            ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath)) ?? ".", "fleet-state.json");
+        using var hub = new FleetHub(HubConfig.Load(configPath), log, store: new FleetStore(statePath));
         using var web = new HubWebServer(hub, port, log, binds);
         SignalWatcher.Install();
         hub.Start();
