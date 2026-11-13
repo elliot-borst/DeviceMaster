@@ -20,6 +20,33 @@ public sealed class HeadlessWebServer : IDisposable
     private readonly Action<string> _log;
     private readonly string _configPath;
     private readonly object _configLock = new();
+    private readonly AgentApi _agentApi;
+
+    /// <summary>The fleet agent API (#33) on top of this machine's config file.</summary>
+    private sealed class Host(HeadlessWebServer server) : IAgentHost
+    {
+        public ControlStatus Status => server._loop.Status;
+
+        public FleetProfile ReadProfile() => FleetProfile.From(HeadlessConfig.Load(server._configPath).Control);
+
+        public bool ApplyProfile(FleetProfile profile)
+        {
+            lock (server._configLock)
+            {
+                var cfg = HeadlessConfig.Load(server._configPath);
+                if (!profile.ApplyTo(cfg.Control))
+                {
+                    return false;
+                }
+
+                // atomic write; the loop hot-reloads the file on its next tick
+                var tmp = server._configPath + ".tmp";
+                File.WriteAllText(tmp, cfg.Save());
+                File.Move(tmp, server._configPath, overwrite: true);
+                return true;
+            }
+        }
+    }
 
     /// <param name="binds">Addresses to listen on; empty = every interface.</param>
     public HeadlessWebServer(HeadlessLoop loop, int port, Action<string> log, string configPath, IReadOnlyList<string>? binds = null)
@@ -28,6 +55,8 @@ public sealed class HeadlessWebServer : IDisposable
         _port = port;
         _log = log;
         _configPath = configPath;
+        var tokenPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath)) ?? ".", "agent-token");
+        _agentApi = new AgentApi(new Host(this), AgentToken.LoadOrCreate(tokenPath, log), log);
         _listener = new HttpListener();
         if (binds is { Count: > 0 })
         {
@@ -47,7 +76,7 @@ public sealed class HeadlessWebServer : IDisposable
     {
         _listener.Start();
         _thread.Start();
-        _log($"web dashboard on :{_port} (page /, data /status.json)");
+        _log($"web dashboard on :{_port} (page /, data /status.json, fleet agent API {AgentApi.Prefix})");
     }
 
     private void Run()
@@ -77,6 +106,11 @@ public sealed class HeadlessWebServer : IDisposable
 
     private void Handle(HttpListenerContext ctx)
     {
+        if (_agentApi.TryHandle(ctx))
+        {
+            return; // /api/v1/… — token-authenticated fleet agent API
+        }
+
         var path = ctx.Request.Url?.AbsolutePath ?? "/";
         var method = ctx.Request.HttpMethod;
 
