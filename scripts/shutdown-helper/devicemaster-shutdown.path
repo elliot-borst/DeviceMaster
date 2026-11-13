@@ -1,0 +1,14 @@
+# DeviceMaster fleet shutdown helper (#49), systemd hosts.
+# The DeviceMaster agent container writes <dir>/shutdown-request (its ShutdownRequestDir,
+# bind-mounted from this host directory) when the fleet asks for a clean shutdown.
+# Install: copy both units to /etc/systemd/system/, adjust the directory, then
+#   systemctl daemon-reload && systemctl enable --now devicemaster-shutdown.path
+[Unit]
+Description=Watch for a DeviceMaster fleet shutdown request
+
+[Path]
+PathExists=/srv/devicemaster/power/shutdown-request
+Unit=devicemaster-shutdown.service
+
+[Install]
+WantedBy=multi-user.target

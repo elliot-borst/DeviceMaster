@@ -36,6 +36,12 @@ public interface IAgentHost
         invalid = false;
         return null;
     }
+
+    /// <summary>Starts a clean shutdown (#49). Returns a short description, or null when this machine can't.</summary>
+    string? RequestShutdown(string reason) => null;
+
+    /// <summary>Withdraws a pending shutdown. True when one was cancelled.</summary>
+    bool CancelShutdown() => false;
 }
 
 /// <summary>
@@ -130,6 +136,24 @@ public sealed class AgentApi
                     break;
                 case ("PATCH", "settings"):
                     HandlePatch(ctx);
+                    break;
+                case ("POST", "power/shutdown"):
+                    if (_host.RequestShutdown(ctx.Request.Headers["X-DeviceMaster-Reason"] ?? "fleet hub") is { } how)
+                    {
+                        _log?.Invoke($"agent api: shutdown requested ({how})");
+                        Respond(ctx, 202, new { started = true, how });
+                    }
+                    else
+                    {
+                        Respond(ctx, 501, new { error = "this machine has no shutdown path set up" });
+                    }
+
+                    break;
+                case ("POST", "power/cancel"):
+                    Respond(ctx, 200, new { cancelled = _host.CancelShutdown() });
+                    break;
+                case ("POST", "power/wake"):
+                    HandleWake(ctx);
                     break;
                 case ("POST", "update-check"):
                     if (_host.RequestUpdateCheck())
@@ -241,6 +265,33 @@ public sealed class AgentApi
             }
 
             Respond(ctx, 200, new { ok = true, applied });
+        }
+    }
+
+    /// <summary>Wake-on-LAN from this machine's LAN: body {"mac":"aa:bb:cc:dd:ee:ff"}.</summary>
+    private void HandleWake(HttpListenerContext ctx)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(new StreamReader(ctx.Request.InputStream, Encoding.UTF8).ReadToEnd());
+            var mac = WakeOnLan.ParseMac(doc.RootElement.TryGetProperty("mac", out var m) ? m.GetString() : null);
+            if (mac is null)
+            {
+                Respond(ctx, 400, new { error = "mac must be six hex bytes" });
+                return;
+            }
+
+            WakeOnLan.Send(mac);
+            _log?.Invoke($"agent api: wake-on-LAN sent to {Convert.ToHexString(mac)}");
+            Respond(ctx, 202, new { sent = true });
+        }
+        catch (JsonException)
+        {
+            Respond(ctx, 400, new { error = "invalid json" });
+        }
+        catch (System.Net.Sockets.SocketException ex)
+        {
+            Respond(ctx, 502, new { error = $"couldn't broadcast ({ex.Message})" });
         }
     }
 

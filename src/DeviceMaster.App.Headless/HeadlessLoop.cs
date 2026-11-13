@@ -459,6 +459,9 @@ public sealed partial class HeadlessLoop : IDisposable
             TargetDutyPercent = duty,
             PumpDutyPercent = readings.Any(r => r.IsPump) ? pumpDuty : null, // no pump on this machine: nothing to report
             FailsafeActive = failsafe,
+            UptimeSeconds = SystemInfo.UptimeSeconds(),
+            Storage = _storage.Get(cfg.StoragePaths),
+            Docker = cfg.DockerSocket is { Length: > 0 } sock ? (_docker ??= new DockerProbe(sock)).Get() : null,
             Capabilities = new MachineCapabilities
             {
                 Pump = readings.Any(r => r.IsPump),
@@ -646,6 +649,8 @@ public sealed partial class HeadlessLoop : IDisposable
     }
 
     private readonly CpuStats _cpuStats = new(); // load/power are rates: keeps the previous tick's counters
+    private readonly StorageSampler _storage = new();
+    private DockerProbe? _docker;
 
     private static double? MbToGb(double? mb) => mb is null ? null : mb.Value / 1024.0;
 

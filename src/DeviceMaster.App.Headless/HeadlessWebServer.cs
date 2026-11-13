@@ -29,6 +29,14 @@ public sealed class HeadlessWebServer : IDisposable
 
         public FleetProfile ReadProfile() => FleetProfile.From(HeadlessConfig.Load(server._configPath).Control);
 
+        public string? RequestShutdown(string reason) =>
+            HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Write(dir, reason)
+                ? "host shutdown helper"
+                : null;
+
+        public bool CancelShutdown() =>
+            HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Cancel(dir);
+
         public string? ReadSettingsJson() =>
             System.Text.Json.JsonSerializer.Serialize(HeadlessConfig.Load(server._configPath).Control, AgentApi.Json);
 

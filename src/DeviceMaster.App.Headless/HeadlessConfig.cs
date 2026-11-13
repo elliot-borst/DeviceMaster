@@ -59,6 +59,25 @@ public sealed class HeadlessConfig
     /// <summary>Write a JSON status snapshot to this path every N seconds (0 = off). Great for external dashboards.</summary>
     public string? StatusFile { get; set; }
 
+    /// <summary>
+    /// Filesystems to report to the fleet display, as "path" or "label=path" (e.g. "System=/host",
+    /// "Array=/mnt/user"). A container only sees what is mounted into it, so mount these read-only.
+    /// </summary>
+    public List<string> StoragePaths { get; set; } = [];
+
+    /// <summary>
+    /// Docker socket to report container counts from (mounted read-only, e.g. /var/run/docker.sock);
+    /// null = not reported. Only for an agent that is already privileged on its host.
+    /// </summary>
+    public string? DockerSocket { get; set; }
+
+    /// <summary>
+    /// Folder shared with the host's single-purpose shutdown helper (#49), e.g. /power. A fleet
+    /// "power off" writes a request file there; the helper runs the host's own clean shutdown.
+    /// Null = this machine can't be powered off from the fleet.
+    /// </summary>
+    public string? ShutdownRequestDir { get; set; }
+
     public int StatusFileEverySeconds { get; set; } = 5;
 
     /// <summary>Packet-level tracing of hub traffic (noisy).</summary>

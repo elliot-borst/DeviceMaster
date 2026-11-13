@@ -66,6 +66,15 @@ public sealed record ControlStatus
     /// <summary>What this machine can be controlled through right now (fleet UI, #33).</summary>
     public MachineCapabilities Capabilities { get; init; } = new();
 
+    /// <summary>Seconds since the machine booted (fleet display, #49).</summary>
+    public double? UptimeSeconds { get; init; }
+
+    /// <summary>Disks / filesystems with their usage (fleet display, #49).</summary>
+    public IReadOnlyList<StorageInfo> Storage { get; init; } = [];
+
+    /// <summary>Container counts where the agent can see its host's Docker (null = not reported).</summary>
+    public DockerInfo? Docker { get; init; }
+
     public IReadOnlyList<DeviceReading> Devices { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
@@ -567,6 +576,8 @@ public sealed class ControlLoop : IDisposable
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
             Capabilities = BuildCapabilities(readings, coolant),
+            UptimeSeconds = SystemInfo.UptimeSeconds(),
+            Storage = _storage.Get(),
             Devices = readings,
             Warnings = warnings,
         };
@@ -574,6 +585,7 @@ public sealed class ControlLoop : IDisposable
 
     // a Turzx screen nobody manages is never opened: probe for it now and then so the fleet UI knows it exists
     private bool _turzxSeen;
+    private readonly StorageSampler _storage = new();
     private long _turzxProbeDue;
 
     private MachineCapabilities BuildCapabilities(IReadOnlyList<DeviceReading> readings, double? coolant)

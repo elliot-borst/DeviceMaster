@@ -2192,6 +2192,29 @@ public sealed class MainWindow : Window
 
         public bool ApplyProfile(FleetProfile profile) => window.Dispatcher.Invoke(() => window.ApplyRemoteProfile(profile));
 
+        // a fleet "power off": Windows' own clean shutdown after a 60 s grace (cancellable)
+        public string? RequestShutdown(string reason)
+        {
+            LogLine($"fleet: shutdown requested ({reason}) — Windows shuts down in 60 s");
+            return RunShutdown($"/s /t 60 /c \"DeviceMaster fleet: shutting down in 60 seconds ({reason.Replace("\"", "'")})\"") ? "Windows shutdown in 60 s" : null;
+        }
+
+        public bool CancelShutdown() => RunShutdown("/a");
+
+        private static bool RunShutdown(string args)
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", args) { CreateNoWindow = true, UseShellExecute = false })!;
+                p.WaitForExit(5_000);
+                return p.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public string? ReadSettingsJson() =>
             window.Dispatcher.Invoke(() => System.Text.Json.JsonSerializer.Serialize(window._controlSettings, AgentApi.Json));
 
