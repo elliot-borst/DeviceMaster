@@ -47,6 +47,42 @@ public class HwmonFanControlTests : IDisposable
         Assert.Equal("5", File.ReadAllText(Path.Combine(dir, "pwm2_enable")));
     }
 
+    private static void Lock(string file) => File.SetAttributes(file, FileAttributes.ReadOnly); // writes now fail, like EIO
+
+    [Fact]
+    public void AHeaderThatRejectsItsDutyIsHandedBackAndDropped()
+    {
+        var dir = Chip("nct6687", (1, 1800, 2), (3, 1600, 2));
+        var log = new List<string>();
+        var fans = HwmonFanControl.Open(_sys, log.Add)!;
+        Lock(Path.Combine(dir, "pwm3"));
+
+        for (var i = 0; i < HwmonFanControl.FailuresBeforeDrop; i++)
+        {
+            Assert.Single(fans.Apply(60, refresh: true), w => w.StartsWith("pwm3:"));
+        }
+
+        Assert.Equal([1], fans.Controlled);
+        Assert.Contains(3, fans.Dropped.Keys);
+        Assert.Equal("2", File.ReadAllText(Path.Combine(dir, "pwm3_enable"))); // BIOS curve again
+        Assert.Contains(log, l => l.Contains("pwm3 does not take a duty"));
+        Assert.Equal("1", File.ReadAllText(Path.Combine(dir, "pwm1_enable"))); // the good header carries on
+    }
+
+    [Fact]
+    public void AFailedHandbackIsReportedAndLeftAtFullSpeed()
+    {
+        var dir = Chip("nct6687", (1, 1800, 2));
+        var fans = HwmonFanControl.Open(_sys)!;
+        fans.Apply(40);
+        Lock(Path.Combine(dir, "pwm1_enable"));
+
+        var problems = fans.Release();
+
+        Assert.Single(problems, p => p.Contains("pwm1 could not be handed back") && p.Contains("full speed"));
+        Assert.Equal("255", File.ReadAllText(Path.Combine(dir, "pwm1"))); // never stuck at the last curve duty
+    }
+
     [Fact]
     public void NoSuperIoChipMeansNoController()
     {
@@ -58,6 +94,11 @@ public class HwmonFanControlTests : IDisposable
     {
         if (Directory.Exists(_sys))
         {
+            foreach (var file in Directory.EnumerateFiles(_sys, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(_sys, recursive: true);
         }
     }

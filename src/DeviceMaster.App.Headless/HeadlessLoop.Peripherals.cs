@@ -73,7 +73,7 @@ public sealed partial class HeadlessLoop
             _mbFansProbed = true;
             try
             {
-                _mbFans = HwmonFanControl.Open();
+                _mbFans = HwmonFanControl.Open(log: _log);
                 if (_mbFans is not null)
                 {
                     _log($"headless: motherboard fans on {_mbFans.Chip}: controlling header(s) "
@@ -95,11 +95,17 @@ public sealed partial class HeadlessLoop
         {
             if (off)
             {
-                _mbFans.Release(); // BIOS curve back in charge
+                warnings.AddRange(_mbFans.Release().Select(p => $"motherboard fans: {p}")); // BIOS curve back in charge
             }
             else
             {
-                _mbFans.Apply(duty, refresh: ++_mbTicks % MotherboardRefreshTicks == 0);
+                warnings.AddRange(_mbFans.Apply(duty, refresh: ++_mbTicks % MotherboardRefreshTicks == 0)
+                    .Select(w => $"motherboard fan write failed: {w}"));
+            }
+
+            foreach (var (index, reason) in _mbFans.Dropped)
+            {
+                warnings.Add($"motherboard fan pwm{index} handed back to the BIOS: it does not take a duty ({reason})");
             }
 
             foreach (var header in _mbFans.Headers().Where(h => _mbFans.Controlled.Contains(h.Index)))
@@ -118,10 +124,12 @@ public sealed partial class HeadlessLoop
     {
         try
         {
+            // Release verifies every restore and logs any header it could not hand back (#35)
             _mbFans?.Release();
         }
-        catch
+        catch (Exception ex)
         {
+            _log($"headless: motherboard fan release failed: {ex.Message}");
         }
     }
 
@@ -279,6 +287,33 @@ public sealed partial class HeadlessLoop
         };
     }
 
+    // whether a Turzx screen is attached (open, or found by a once-a-minute probe while unmanaged)
+    private volatile bool _turzxOpen;
+    private bool _turzxSeen;
+    private long _turzxProbeDue;
+
+    private bool TurzxPresent()
+    {
+        if (_turzxOpen)
+        {
+            _turzxSeen = true;
+        }
+        else if (Environment.TickCount64 >= _turzxProbeDue)
+        {
+            _turzxProbeDue = Environment.TickCount64 + 60_000;
+            try
+            {
+                _turzxSeen = TurzxScreen.FindLinuxDataPort() is not null;
+            }
+            catch
+            {
+                // leave the last answer
+            }
+        }
+
+        return _turzxSeen;
+    }
+
     private void RunTurzx(CancellationToken token)
     {
         TurzxScreen? screen = null;
@@ -336,10 +371,12 @@ public sealed partial class HeadlessLoop
                 }
             }
 
+            _turzxOpen = screen is not null;
             _turzxWake.WaitOne(TurzxFrameMs);
         }
 
         screen?.Dispose(); // the panel keeps showing the last frame
+        _turzxOpen = false;
     }
 
     private void ReleasePeripherals()

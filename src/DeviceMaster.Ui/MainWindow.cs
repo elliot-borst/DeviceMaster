@@ -765,7 +765,7 @@ public sealed class MainWindow : Window
     private TextBlock _curveSubtitle = null!;
 
     private static readonly (CurveSource Source, string Label)[] CurveSources =
-        [(CurveSource.Coolant, "Coolant"), (CurveSource.Cpu, "CPU"), (CurveSource.Gpu, "GPU")];
+        [(CurveSource.Coolant, "Coolant"), (CurveSource.Cpu, "CPU"), (CurveSource.Gpu, "GPU"), (CurveSource.Hottest, "CPU/GPU")];
 
     /// <summary>A row of pill buttons, the selected one filled (same look as the web's segmented control).</summary>
     private static void FillChips(StackPanel host, IReadOnlyList<string> labels, int selected, Action<int> onPick)
@@ -808,7 +808,8 @@ public sealed class MainWindow : Window
         _sourceRow.Visibility = curve ? Visibility.Visible : Visibility.Collapsed;
         var sourceLabel = CurveSources.First(s => s.Source == _controlSettings.Source).Label;
         _fanSubtitle.Text = curve ? $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system" : "one fixed duty · every fan in the system";
-        _curveSubtitle.Text = $"{sourceLabel} temperature → fan duty · drag a point to change it"
+        _curveSubtitle.Text = (_controlSettings.Source == CurveSource.Hottest ? "Hotter of CPU and GPU" : sourceLabel)
+            + " temperature → fan duty · drag a point to change it"
             + (curve ? "" : " · used when Mode is Curve");
         _curveEditor.SetCurve(_controlSettings.CurvePoints);
         _curveEditor.Opacity = curve ? 1.0 : 0.6;
@@ -2330,6 +2331,10 @@ public sealed class MainWindow : Window
         {
             CurveSource.Cpu => status.CpuTemperatureC,
             CurveSource.Gpu => status.GpuTemperatureC,
+            // the loop's smoothed value while the curve runs; the raw hotter one in Fixed mode
+            CurveSource.Hottest => status.Mode == ControlMode.Curve
+                ? status.SourceTemperatureC
+                : HottestTemperature.Combine(status.CpuTemperatureC, status.GpuTemperatureC, gpuExpected: false),
             _ => status.CoolantTemperatureC,
         };
         var curveDuty = status.Mode == ControlMode.Curve
