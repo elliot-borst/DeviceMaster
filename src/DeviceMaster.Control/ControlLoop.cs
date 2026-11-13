@@ -563,6 +563,7 @@ public sealed class ControlLoop : IDisposable
             RamTotalGb = _dashRamTotal,
             GpuName = _dashGpuName,
             TargetDutyPercent = duty,
+            PumpDutyPercent = readings.Any(r => r.IsPump) ? pumpDuty : null, // the fleet overview shows it (#33)
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
             Capabilities = BuildCapabilities(readings, coolant),
