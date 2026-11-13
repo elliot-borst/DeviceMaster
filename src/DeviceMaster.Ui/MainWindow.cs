@@ -158,6 +158,7 @@ public sealed class MainWindow : Window
         _ = Dispatcher.InvokeAsync(async () =>
         {
             ApplyControlState();
+            StartAgentApi();
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
         });
@@ -930,7 +931,7 @@ public sealed class MainWindow : Window
     /// <summary>Label column width shared by stacked slider rows, so their bars line up end to end.</summary>
     private const double SliderLabelWidth = 76;
 
-    private static Border BrightnessRow(int initial, Action<int> onChange, double? labelWidth = null)
+    private static Border BrightnessRow(int initial, Action<int> onChange, double? labelWidth = null, Action<Action<int>>? exposeSetter = null)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         var caption = Theme.SmallLabel("Brightness");
@@ -960,6 +961,7 @@ public sealed class MainWindow : Window
         };
         panel.Children.Add(slider);
         panel.Children.Add(label);
+        exposeSetter?.Invoke(v => { slider.Value = v; label.Text = $"{Math.Clamp(v, 0, 100)}%"; });
         return Theme.InsetRow(panel);
     }
 
@@ -1056,7 +1058,7 @@ public sealed class MainWindow : Window
         {
             _controlSettings.RgbBrightness = v;
             OnControlSettingChanged(); // saves + re-applies the (now dimmed) color to every LED
-        }, SliderLabelWidth);
+        }, SliderLabelWidth, set => _setRgbBrightness = set);
         rgbBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the swatches above
         body.Children.Add(rgbBrightness);
         body.Children.Add(_rgbStatus);
@@ -1592,7 +1594,7 @@ public sealed class MainWindow : Window
             _controlSettings.LcdBrightness = v; // pump + fan LCD backlight (Turzx has its own on its page)
             TrySaveSettings();
             _loop?.Apply(_controlSettings);
-        });
+        }, exposeSetter: set => _setLcdBrightness = set);
         lcdBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the On/Off buttons above
         body.Children.Add(lcdBrightness);
         UpdateLcdStatusText();
@@ -1858,6 +1860,8 @@ public sealed class MainWindow : Window
             _trayIcon = null;
         }
 
+        _agentServer?.Dispose(); // no fleet writes while shutting down
+        _agentServer = null;
         _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
         _loop = null;
     }
@@ -2159,6 +2163,132 @@ public sealed class MainWindow : Window
         id is { Length: > 14 } ? id[..14] + "…" : id;
 
     // ---------- fan control wiring ----------
+
+    // ---------- fleet agent API (#33) ----------
+
+    private AgentServer? _agentServer;
+
+    /// <summary>The window as the agent API's host: every read and write hops onto the UI thread.</summary>
+    private sealed class AgentHost(MainWindow window) : IAgentHost
+    {
+        public ControlStatus Status => window._loop?.Status ?? new ControlStatus();
+
+        public FleetProfile ReadProfile() => window.Dispatcher.Invoke(() => FleetProfile.From(window._controlSettings));
+
+        public bool ApplyProfile(FleetProfile profile) => window.Dispatcher.Invoke(() => window.ApplyRemoteProfile(profile));
+    }
+
+    private void StartAgentApi()
+    {
+        if (NoControl || _agentServer is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            var tokenPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ControlSettings.ConfigPath)!, "agent-token");
+            var api = new AgentApi(new AgentHost(this), AgentToken.LoadOrCreate(tokenPath, LogLine), LogLine);
+            _agentServer = new AgentServer(api, LogLine);
+            if (!_agentServer.Start())
+            {
+                _agentServer.Dispose();
+                _agentServer = null;
+            }
+            else if (_agentServer.Listening.Count > 1)
+            {
+                EnsureAgentFirewallRule();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogLine($"agent api: not started ({ex.Message})"); // fleet control unavailable; local control unaffected
+        }
+    }
+
+    private const string AgentFirewallRule = "DeviceMaster fleet agent";
+
+    /// <summary>
+    /// Inbound allow for the agent port from Tailscale addresses only (100.64.0.0/10) — never the
+    /// LAN. The app runs elevated; the installer does not, so the rule is added here, once.
+    /// </summary>
+    private void EnsureAgentFirewallRule()
+    {
+        static (int Code, string Output) Netsh(string args)
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("netsh", args)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+            })!;
+            var output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(10_000);
+            return (p.ExitCode, output);
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (Netsh($"advfirewall firewall show rule name=\"{AgentFirewallRule}\"").Code == 0)
+                {
+                    return; // already there
+                }
+
+                var (code, output) = Netsh($"advfirewall firewall add rule name=\"{AgentFirewallRule}\" dir=in action=allow "
+                    + $"protocol=TCP localport={AgentServer.DefaultPort} remoteip=100.64.0.0/10 profile=any");
+                LogLine(code == 0
+                    ? $"agent api: firewall rule added (TCP {AgentServer.DefaultPort} from Tailscale addresses only)"
+                    : $"agent api: could not add the firewall rule ({output.Trim()}) — the fleet hub may not reach this machine");
+            }
+            catch (Exception ex)
+            {
+                LogLine($"agent api: firewall rule check failed: {ex.Message}");
+            }
+        });
+    }
+
+    // slider setters for the brightness rows (built by BrightnessRow, which keeps its own slider)
+    private Action<int>? _setRgbBrightness, _setLcdBrightness;
+
+    /// <summary>
+    /// Fleet (#33): applies a profile pushed by the hub through the agent API. Runs on the UI
+    /// thread: the profile lands in the same settings object the pages edit, is saved, goes to the
+    /// loop, and every control is re-synced so the window shows what the machine now runs.
+    /// </summary>
+    internal bool ApplyRemoteProfile(FleetProfile profile)
+    {
+        if (!profile.ApplyTo(_controlSettings))
+        {
+            return false;
+        }
+
+        TrySaveSettings();
+        ReloadControlsFromSettings();
+        _loop?.Apply(_controlSettings);
+        return true;
+    }
+
+    private void ReloadControlsFromSettings()
+    {
+        _dutySlider.Value = _controlSettings.ManualDutyPercent;
+        _pumpSlider.Value = Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100);
+        _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
+        _pumpLabel.Text = $"{_controlSettings.PumpDutyPercent}%";
+        _rgbSpeedSlider.Value = _controlSettings.RgbSpeed;
+        _turzxBrightnessSlider.Value = Math.Clamp(_controlSettings.TurzxBrightness, 0, 100);
+        _turzxBrightnessLabel.Text = $"{Math.Clamp(_controlSettings.TurzxBrightness, 0, 100)}%";
+        _setRgbBrightness?.Invoke(_controlSettings.RgbBrightness);
+        _setLcdBrightness?.Invoke(_controlSettings.LcdBrightness);
+        RefreshFanModeUi();
+        RefreshRgbEffectUi();
+        RebuildSwatches();
+        RebuildLcdButtons();
+        RebuildTurzxButtons();
+        UpdateRgbStatusText();
+        UpdateLcdStatusText();
+    }
 
     private void OnControlSettingChanged()
     {
