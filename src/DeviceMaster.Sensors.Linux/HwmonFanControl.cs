@@ -78,9 +78,25 @@ public sealed class HwmonFanControl : IDisposable
         _controlled = controlled;
         foreach (var index in controlled)
         {
-            _originalEnable[index] = ReadInt($"pwm{index}_enable") ?? 5;
+            var mode = ReadInt($"pwm{index}_enable");
+            if (mode is null or 0 or 1)
+            {
+                // manual (or unreadable) at start-up means a previous run never handed it back
+                // (killed, OOM, overlapping restart): "restoring" that would leave it stuck — use
+                // the chip's automatic mode instead
+                var biosMode = BiosModeFor(chip);
+                log?.Invoke($"motherboard fans: pwm{index} was in mode {mode?.ToString(CultureInfo.InvariantCulture) ?? "?"} at start-up "
+                    + $"(left manual by an earlier run?) — it will be handed back in mode {biosMode}");
+                mode = biosMode;
+            }
+
+            _originalEnable[index] = mode.Value;
         }
     }
+
+    /// <summary>The automatic (BIOS curve) mode: 2 on nct6683/6687 drivers, SmartFan IV (5) on the nct6775 family.</summary>
+    public static int BiosModeFor(string chip) =>
+        chip.StartsWith("nct6683", StringComparison.Ordinal) || chip.StartsWith("nct6687", StringComparison.Ordinal) ? 2 : 5;
 
     /// <summary>The chip name from hwmon (e.g. "nct6799").</summary>
     public string Chip { get; }

@@ -196,6 +196,18 @@ public class HwmonFanControlTests : IDisposable
         Assert.Equal([2], fans.Controlled);
     }
 
+    [Theory]
+    [InlineData("nct6687", "2")]
+    [InlineData("nct6799", "5")]
+    public void AHeaderLeftManualByAnEarlierRunIsHandedBackToTheBiosMode(string chip, string expected)
+    {
+        var dir = Chip(chip, (1, 1800, 1)); // a killed run left it manual
+        var fans = Open();
+        fans.Apply(50);
+        Assert.Empty(fans.Release());
+        Assert.Equal(expected, Read(dir, "pwm1_enable")); // not "restored" to manual
+    }
+
     [Fact]
     public void NoSuperIoChipMeansNoController()
     {
