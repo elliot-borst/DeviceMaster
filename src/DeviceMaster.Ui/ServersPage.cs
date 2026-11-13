@@ -65,7 +65,7 @@ public sealed class ServersPage
         var page = new StackPanel { MaxWidth = 1100, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(MainWindow.PageTitle("Servers", "every DeviceMaster machine on your tailnet"));
 
-        var card = Theme.CardShell("⇄", "Fleet hub", "where the Servers list comes from", out var body, out _);
+        var card = Theme.CardShell("⇄", "Fleet hub", "found automatically on your tailnet · change it only if your hub lives elsewhere", out var body, out _);
         var row = new DockPanel { LastChildFill = true };
         var save = Theme.Btn("Save", primary: true, () =>
         {
@@ -111,6 +111,79 @@ public sealed class ServersPage
     }
 
     private bool _busy;
+    private long _discoverNotBefore;
+
+    /// <summary>The fleet hub's conventional name on a tailnet: devicemaster.&lt;tailnet&gt;.ts.net.</summary>
+    public const string HubHostName = "devicemaster";
+
+    /// <summary>
+    /// This machine's tailnet DNS suffix (e.g. "example-tailnet.ts.net"): from the Tailscale
+    /// adapter's connection-specific DNS suffix, or failing that from <c>tailscale status --json</c>.
+    /// </summary>
+    public static string? TailnetSuffix()
+    {
+        try
+        {
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                var props = nic.GetIPProperties();
+                if (props.UnicastAddresses.Any(a => AgentServer.IsTailnet(a.Address))
+                    && props.DnsSuffix is { Length: > 0 } suffix && suffix.EndsWith(".ts.net", StringComparison.OrdinalIgnoreCase))
+                {
+                    return suffix.Trim('.');
+                }
+            }
+        }
+        catch
+        {
+            // fall through to the CLI
+        }
+
+        try
+        {
+            var exe = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tailscale", "tailscale.exe");
+            if (!System.IO.File.Exists(exe))
+            {
+                return null;
+            }
+
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "status --json")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+            })!;
+            var json = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(5_000);
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("MagicDNSSuffix", out var s) && s.GetString() is { Length: > 0 } suffix ? suffix.Trim('.') : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Finds the hub at devicemaster.&lt;tailnet&gt; and checks it really is one. Null when not found.</summary>
+    private static async Task<(string? Url, string? Suffix)> DiscoverHubAsync()
+    {
+        var suffix = await Task.Run(TailnetSuffix);
+        if (suffix is null)
+        {
+            return (null, null);
+        }
+
+        var url = $"https://{HubHostName}.{suffix}";
+        try
+        {
+            using var response = await Http.GetAsync(url + "/api/fleet/machines");
+            return (response.IsSuccessStatusCode ? url : null, suffix);
+        }
+        catch
+        {
+            return (null, suffix);
+        }
+    }
 
     private async Task RefreshAsync()
     {
@@ -118,8 +191,27 @@ public sealed class ServersPage
         if (hub.Length == 0)
         {
             _machines = [];
-            _error = "Enter the fleet hub's address, e.g. https://devicemaster.<your-tailnet>.ts.net";
+            if (Environment.TickCount64 < _discoverNotBefore)
+            {
+                return;
+            }
+
+            _discoverNotBefore = Environment.TickCount64 + 60_000; // don't probe every 2 s when there's no hub
+            _error = "Looking for the fleet hub on your tailnet…";
             Render();
+            var (found, suffix) = await DiscoverHubAsync();
+            if (found is not null)
+            {
+                _setHubUrl(found); // remembered; the box stays as an override
+                _ = _dispatcher.InvokeAsync(() => _hubBox.Text = found);
+                _ = RefreshAsync();
+                return;
+            }
+
+            _error = suffix is null
+                ? "Tailscale isn't running here, so the fleet hub can't be found. Start Tailscale, or enter the hub's address."
+                : $"No fleet hub answered at {HubHostName}.{suffix}. Enter its address if it lives elsewhere.";
+            _ = _dispatcher.InvokeAsync(Render);
             return;
         }
 
