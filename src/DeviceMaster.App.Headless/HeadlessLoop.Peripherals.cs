@@ -1,5 +1,6 @@
 using DeviceMaster.Control;
 using DeviceMaster.Devices.AsusAura;
+using DeviceMaster.Devices.MsiMysticLight;
 using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Lcd.Skia;
 using DeviceMaster.Sensors.Linux;
@@ -149,6 +150,103 @@ public sealed partial class HeadlessLoop
         }
     }
 
+    // ---------- MSI Mystic Light (761 protocol) ----------
+
+    private MysticLightController? _msi;
+    private string? _appliedMsi;
+    private long _msiRetryAt;
+    private long _msiRefreshDue;
+    private string _msiSummary = "Mystic Light: not opened yet";
+    private const int MsiRefreshMs = 30_000;   // static re-sent so a board-side reset heals itself
+    private const int MsiRainbowLeds = 24;     // one wheel per 24 LEDs, repeated along longer strips
+
+    private void ApplyMysticLight(HeadlessConfig cfg, List<string> warnings)
+    {
+        if (!cfg.AuraEnabled || !cfg.Control.RgbEnabled) // the one "motherboard RGB" switch
+        {
+            return;
+        }
+
+        if (_msi is null)
+        {
+            if (Environment.TickCount64 < _msiRetryAt)
+            {
+                return;
+            }
+
+            _msiRetryAt = Environment.TickCount64 + 60_000;
+            try
+            {
+                if (MysticLightController.FindDevices().FirstOrDefault() is { } device)
+                {
+                    _msi = MysticLightController.Open(device);
+                    _appliedMsi = null;
+                    _msiSummary = _msi.Describe();
+                    _log($"headless: opened {_msiSummary}");
+                }
+                else
+                {
+                    _msiSummary = "Mystic Light: no 761-protocol controller found (HID 0DB0:0076)";
+                }
+            }
+            catch (Exception ex)
+            {
+                var summary = $"Mystic Light: controller unavailable: {ex.Message}";
+                if (summary != _msiSummary)
+                {
+                    _log($"headless: {summary}");
+                }
+
+                _msiSummary = summary;
+            }
+
+            if (_msi is null)
+            {
+                return;
+            }
+        }
+
+        var (r, g, b) = RgbTarget(cfg);
+        var rainbow = cfg.Control.RainbowActive && !cfg.Control.RgbOff;
+        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
+        if (!rainbow && key == _appliedMsi && Environment.TickCount64 < _msiRefreshDue)
+        {
+            return;
+        }
+
+        try
+        {
+            if (rainbow)
+            {
+                // no built-in effect on this protocol: one wheel step per tick, painted from here
+                var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(cfg.Control.RgbSpeed) % 1.0;
+                _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, cfg.Control.RgbBrightness));
+            }
+            else
+            {
+                _msi.ApplyStaticColor(r, g, b);
+            }
+
+            if (key != _appliedMsi)
+            {
+                _log($"RGB applied on {_msi.Describe()}: {key}");
+            }
+
+            _appliedMsi = key;
+            _msiRefreshDue = Environment.TickCount64 + MsiRefreshMs;
+            _msiSummary = _msi.Describe();
+        }
+        catch (Exception ex)
+        {
+            _msiSummary = $"Mystic Light: apply failed: {ex.Message}";
+            warnings.Add($"Mystic Light RGB failed: {ex.Message}");
+            _log($"headless: {_msiSummary} — reopening");
+            _msi.Dispose();
+            _msi = null;
+            _msiRetryAt = Environment.TickCount64 + 10_000;
+        }
+    }
+
     // ---------- ASUS Aura ----------
 
     private void ApplyAura(HeadlessConfig cfg, List<string> warnings)
@@ -232,6 +330,7 @@ public sealed partial class HeadlessLoop
     {
         var lines = new List<string>();
         lines.Add(_auraSummary);
+        lines.Add(_msiSummary);
         lines.Add(_ramRgbSummary);
         if (_aura?.LastZoneErrors.Count > 0)
         {
@@ -409,6 +508,15 @@ public sealed partial class HeadlessLoop
         }
 
         _aura = null;
+        try
+        {
+            _msi?.Dispose(); // direct colours stay until the board resets; nothing is saved to its flash
+        }
+        catch
+        {
+        }
+
+        _msi = null;
         ReleaseRamRgb();
     }
 }

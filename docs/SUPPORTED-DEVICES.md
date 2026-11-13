@@ -108,6 +108,25 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - The headless daemon publishes the firmware name, raw config table and zone map in
   `/status.json` (`RgbDiagnostics`) — start there when a header doesn't light.
 
+## MSI Mystic Light motherboard RGB (761-byte protocol) — not yet verified on hardware
+
+| Device | VID:PID | Transport |
+|---|---|---|
+| Mystic Light controller (X870 / B850 / Z890 boards) | `0DB0:0076` | HID feature reports `0x50` / `0x51` |
+
+- Protocol facts from OpenRGB's `MSIMysticLight761Controller`: one setup report `0x50`
+  (290 bytes, 18 × 16-byte zone rows; JARGB 1–3 and JAF in direct mode, the rest cleared)
+  per open, then one colour report `0x51` per header (727 bytes: `51 09 hdr0 hdr1 00 00 F0`
+  + 240 × R,G,B; `hdr0` 0x04 JARGB with `hdr1` = header 0–2, 0x08 JAF).
+- Headers driven: **JARGB 1–3 and JAF**. The 12 V JRGB header and onboard LEDs are not
+  addressed by this protocol (OpenRGB leaves them off too).
+- Nothing is written to controller flash: after a power cycle the board shows its BIOS/vendor
+  effect until DeviceMaster runs. Static colours are re-sent every 30 s; the protocol has no
+  built-in effects, so Rainbow is painted by DeviceMaster one step per control tick.
+- `0DB0:0076` is shared by older Mystic Light generations (112/162/185-byte reports). Writes
+  need all three: registry entry, the board's DMI name on the tested 761 list, and a report
+  descriptor with the 761 layout (and no legacy-size `0x52` report). Anything else is skipped.
+
 ## RGB DRAM (ENE controllers — Klevv/Essencore, GSkill, Geil, …)
 
 - ENE (Aura-compatible) controllers found by SMBus probing, not brand: unconfigured chips

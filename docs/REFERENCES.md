@@ -72,11 +72,15 @@ ports and we were driving the wrong one (see docs/SUPPORTED-DEVICES.md).
   scratchpad for a future differential-frame (`0xCC`/204) optimisation.
 - **tedd/Tedd.TuringScreen** (C#) — C# framing conventions, 3.5"-oriented; adapt.
 
-## ASUS Aura motherboard RGB (`0B05:19AF`), ENE RAM RGB, NVIDIA GPU RGB
+## ASUS Aura motherboard RGB (`0B05:19AF`), MSI Mystic Light (`0DB0:0076`), ENE RAM RGB, NVIDIA GPU RGB
 
 - **OpenRGB** (GPLv2 — port byte-level facts, don't copy code; cloned under `refs/OpenRGB`):
   - `Controllers/AsusAuraUSBController/AsusAuraMainboardController` — the 19AF HID protocol
     (65-byte `0xEC` reports, effect 0x35/0x36, direct 0x40, commit 0x3F 0x55).
+  - `Controllers/MSIMysticLightController/MSIMysticLight761Controller` (+ `MSIMysticLightCommon.h`
+    `FeaturePacket_PerLED_761`, detection in `MSIMysticLightControllerDetect.cpp`) — MSI
+    Mystic Light 761-byte boards on `0DB0:0076`. Its setup "off" loop indexes one byte early
+    (`ARRAY_ROW_RAW` ignores the report-id byte); we reproduce the bytes it actually sends.
   - `Controllers/ENESMBusController` — ENE register map + 0x77 remap detection for RGB DRAM
     and ASUS GPUs (colors R,B,G; apply 0x80A0).
   - `i2c_smbus/Windows/i2c_smbus_nvapi.cpp` + `dependencies/NVFC/nvapi.{h,cpp}` — NvAPI I2C

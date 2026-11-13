@@ -6,6 +6,7 @@ using DeviceMaster.Devices.AsusAura;
 using DeviceMaster.Devices.CorsairLink;
 using DeviceMaster.Devices.EneRgb;
 using DeviceMaster.Devices.LianLi;
+using DeviceMaster.Devices.MsiMysticLight;
 using DeviceMaster.Devices.Nvidia;
 using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Sensors;
@@ -130,6 +131,9 @@ public sealed class ControlLoop : IDisposable
     private readonly List<LinkHub> _hubs = [];
     private Slv3Controller? _slv3;
     private AuraController? _aura;
+    private MysticLightController? _msi;
+    private long _msiOpenRetryAt; // a board we won't drive (or a failed open) is retried once a minute, not every tick
+    private string? _msiOpenError;
     private LhmSensorSource? _lhm;
     private bool _lhmPolledThisTick; // one hardware poll per tick, shared by every LHM consumer
     private LhmFanController? _headers;
@@ -614,7 +618,7 @@ public sealed class ControlLoop : IDisposable
             CorsairHubs = _hubs.Count > 0,
             LianLiFans = lianLi,
             MotherboardFans = _headers is not null,
-            MotherboardRgb = _aura is not null,
+            MotherboardRgb = _aura is not null || _msi is not null,
             RamRgb = _ramRgb.Count > 0,
             GpuRgb = _gpuRgb.Any(g => g.Ene is not null),
             FanRgb = _hubs.Count > 0 || lianLi,
@@ -822,6 +826,32 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        if (_msi is null && Environment.TickCount64 >= _msiOpenRetryAt
+            && MysticLightController.FindDevices().FirstOrDefault() is { } msiDevice)
+        {
+            try
+            {
+                _msi = MysticLightController.Open(msiDevice);
+                _appliedMsiRgb = null;
+                _msiOpenError = null;
+                _log?.Invoke($"control: opened {_msi.Describe()}");
+            }
+            catch (Exception ex)
+            {
+                _msiOpenRetryAt = Environment.TickCount64 + 60_000;
+                if (_msiOpenError != ex.Message)
+                {
+                    _msiOpenError = ex.Message;
+                    _log?.Invoke($"control: Mystic Light not opened: {ex.Message}");
+                }
+            }
+        }
+
+        if (_msiOpenError is not null && _msi is null)
+        {
+            warnings.Add($"Mystic Light: {_msiOpenError}");
+        }
+
         // chip-level RGB (RAM sticks over SMBus, GPU over NvAPI I2C): scan once — these
         // don't hot-plug, and the SMBus scan is too expensive to repeat every tick
         if (!_chipRgbScanned)
@@ -909,6 +939,9 @@ public sealed class ControlLoop : IDisposable
         _aura?.Dispose(); // committed colors persist in the controller on their own
         _aura = null;
 
+        _msi?.Dispose(); // direct colours stay until the board resets (nothing is saved to its flash)
+        _msi = null;
+
         _ramScanner?.Dispose(); // ENE colors are saved to the controllers' flash
         _ramScanner = null;
         _ramRgb = [];
@@ -963,6 +996,14 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, long> _hubDeepRepaintDue = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
+
+    // Mystic Light: direct colours, no built-in effect on the 761 protocol — static is re-sent
+    // every 30 s (cheap: four feature reports) so a board-side reset heals itself, and rainbow
+    // is painted from here, one wheel step per tick
+    private const int MsiRefreshMs = 30_000;
+    private const int MsiRainbowLeds = 24; // one full wheel per 24 LEDs, repeated along longer strips
+    private string? _appliedMsiRgb;
+    private long _msiRefreshDue;
 
     // rainbow: Corsair hubs are streamed from a background animator; the other families play
     // the effect themselves once told to (Aura/ENE built-in rainbow, SL V3 stored loop)
@@ -1067,6 +1108,37 @@ public sealed class ControlLoop : IDisposable
                 warnings.Add($"RGB on Aura failed: {ex.Message}");
                 _aura.Dispose();
                 _aura = null; // reopen next tick
+            }
+        }
+
+        if (_msi is not null && (rainbow || _appliedMsiRgb != key || Environment.TickCount64 >= _msiRefreshDue))
+        {
+            try
+            {
+                if (rainbow)
+                {
+                    var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(settings.RgbSpeed) % 1.0;
+                    _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, bright));
+                }
+                else
+                {
+                    _msi.ApplyStaticColor(r, g, b);
+                }
+
+                if (_appliedMsiRgb != key)
+                {
+                    _log?.Invoke($"RGB applied on {_msi.Describe()}");
+                }
+
+                _appliedMsiRgb = key;
+                _msiRefreshDue = Environment.TickCount64 + MsiRefreshMs;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"RGB on Mystic Light failed: {ex.Message}");
+                _log?.Invoke($"RGB on Mystic Light failed: {ex.Message} — reopening");
+                _msi.Dispose();
+                _msi = null; // reopen next tick (setup report re-sent)
             }
         }
 

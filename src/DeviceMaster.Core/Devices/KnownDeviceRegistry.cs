@@ -50,6 +50,12 @@ public static class KnownDeviceRegistry
         // ---- ASUS Aura (motherboard RGB) ----
         Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: true,
             "*HID, 65-byte reports (0xEC prefix). Mainboard-class protocol (OpenRGB AuraMainboardController)."),
+
+        // ---- MSI Mystic Light (motherboard RGB) ----
+        // 0076 is shared by several Mystic Light generations: MysticLightController only drives
+        // the 761-byte protocol, gated on the report descriptor and a tested board name too.
+        Entry(0x0DB0, 0x0076, DeviceKind.MotherboardRgbController, "MSI Mystic Light controller", supportPlanned: true,
+            "HID feature reports. 761-byte protocol (X870/B850/Z890; OpenRGB MSIMysticLight761Controller): 0x50 setup, 0x51 per header."),
     }.ToDictionary(d => d.Id);
 
     private static readonly Dictionary<ushort, string> VendorNames = new()
@@ -60,6 +66,7 @@ public static class KnownDeviceRegistry
         [0x1CBE] = "TI Luminary (Lian Li SL V3 fan)",
         [0x1A86] = "WCH/QinHeng (Turzx serial bridge)",
         [0x0B05] = "ASUS",
+        [0x0DB0] = "MSI",
     };
 
     public static KnownDevice? Identify(UsbId id) => Entries.GetValueOrDefault(id);
