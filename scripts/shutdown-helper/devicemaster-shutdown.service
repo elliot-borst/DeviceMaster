@@ -1,0 +1,7 @@
+# Runs only this host's own clean shutdown; nothing else. See devicemaster-shutdown.path.
+[Unit]
+Description=Clean shutdown requested by the DeviceMaster fleet
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'logger -t devicemaster "fleet shutdown: $(cat /srv/devicemaster/power/shutdown-request 2>/dev/null)"; rm -f /srv/devicemaster/power/shutdown-request; exec systemctl poweroff'

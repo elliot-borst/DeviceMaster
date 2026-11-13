@@ -119,6 +119,12 @@ public sealed class HubWebServer : IDisposable
             return;
         }
 
+        if (ctx.Request.HttpMethod == "POST" && path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/power", StringComparison.Ordinal))
+        {
+            HandlePower(ctx, Uri.UnescapeDataString(path["/api/fleet/machines/".Length..^"/power".Length]));
+            return;
+        }
+
         if (ctx.Request.HttpMethod != "GET")
         {
             Send(ctx, 405, "text/plain; charset=utf-8", "GET or PUT");
@@ -146,6 +152,14 @@ public sealed class HubWebServer : IDisposable
         else if (path == "/api/fleet/machines")
         {
             Json(ctx, 200, _hub.Machines.Select(m => m.Summarize(now)));
+        }
+        else if (path is "/display" or "/display/")
+        {
+            Send(ctx, 200, "text/html; charset=utf-8", HubDisplayPage.Html);
+        }
+        else if (path == "/api/fleet/home")
+        {
+            Json(ctx, 200, new { machines = _hub.Machines.Select(m => m.Summarize(now) with { CanWake = _hub.CanWake(m.Name) }), sabnzbd = _hub.Sabnzbd, at = now });
         }
         else if (path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal)
                  && _hub.Machine(Uri.UnescapeDataString(path["/api/fleet/machines/".Length..])) is { } machine)
@@ -244,6 +258,42 @@ public sealed class HubWebServer : IDisposable
                 Send(ctx, 404, "text/plain; charset=utf-8", "not found");
                 return;
         }
+    }
+
+    /// <summary>
+    /// Power on/off/cancel for one server (#49): <c>POST /api/fleet/machines/{name}/power</c> with
+    /// <c>{"action":"on|off|cancel"}</c>. Signed-in tailnet users only; always audited.
+    /// </summary>
+    private void HandlePower(HttpListenerContext ctx, string name)
+    {
+        if (User(ctx) is not { } user)
+        {
+            Json(ctx, 403, new { error = "power needs a signed-in tailnet user (open the page through its tailnet address)" });
+            return;
+        }
+
+        if (!_hub.Knows(name))
+        {
+            Json(ctx, 404, new { error = "unknown server" });
+            return;
+        }
+
+        string action;
+        try
+        {
+            using var doc = JsonDocument.Parse(new StreamReader(ctx.Request.InputStream, Encoding.UTF8).ReadToEnd());
+            action = doc.RootElement.TryGetProperty("action", out var a) ? a.GetString() ?? "" : "";
+        }
+        catch (JsonException)
+        {
+            Json(ctx, 400, new { error = "invalid json" });
+            return;
+        }
+
+        var (status, body) = _hub.PowerAsync(name, action, user).GetAwaiter().GetResult();
+        _hub.Store?.Audit(user, $"{name}: power {action} → {(status is >= 200 and < 300 ? "sent" : $"failed ({status})")}");
+        _log($"hub: {user} asked {name} to power {action} ({status})");
+        Send(ctx, status, "application/json; charset=utf-8", body);
     }
 
     /// <summary>The signed-in tailnet user, from the header tailscale serve adds (null when absent).</summary>

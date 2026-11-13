@@ -15,6 +15,9 @@ public sealed record HubAgent
 
     /// <summary>File holding that agent's token (mounted read-only into the hub). Never the token itself.</summary>
     public string TokenFile { get; init; } = "";
+
+    /// <summary>Wake-on-LAN MAC of the machine's wired NIC (#49); null = can't be powered on from the fleet.</summary>
+    public string? Mac { get; init; }
 }
 
 /// <summary>The hub's configuration file (#33 phase 3).</summary>
@@ -24,6 +27,18 @@ public sealed record HubConfig
 
     /// <summary>How often each agent is asked for its status.</summary>
     public int PollMs { get; init; } = 2_000;
+
+    /// <summary>
+    /// The agent that sends Wake-on-LAN packets (#49): it must sit on the LAN with host networking —
+    /// the hub's own namespace can't broadcast there. Null = power on isn't offered.
+    /// </summary>
+    public string? WakeVia { get; init; }
+
+    /// <summary>SABnzbd base URL for the display (#49), e.g. http://192.168.1.5:8080; null = not shown.</summary>
+    public string? SabnzbdUrl { get; init; }
+
+    /// <summary>File holding SABnzbd's API key (mounted read-only into the hub).</summary>
+    public string? SabnzbdApiKeyFile { get; init; }
 
     public static HubConfig Load(string path) =>
         JsonSerializer.Deserialize<HubConfig>(File.ReadAllText(path), AgentApi.Json) ?? new HubConfig();
@@ -72,6 +87,9 @@ public sealed record MachineSnapshot
         InSync = InSync,
         PushError = PushError,
         Capabilities = Status?.Capabilities,
+        UptimeSeconds = Status?.UptimeSeconds,
+        Storage = Status?.Storage ?? [],
+        Docker = Status?.Docker,
     };
 }
 
@@ -99,6 +117,12 @@ public sealed record MachineSummary
     public bool? InSync { get; init; }
     public string? PushError { get; init; }
     public MachineCapabilities? Capabilities { get; init; }
+    public double? UptimeSeconds { get; init; }
+    public IReadOnlyList<StorageInfo> Storage { get; init; } = [];
+    public DockerInfo? Docker { get; init; }
+
+    /// <summary>Whether the fleet can power this machine on (set by the hub).</summary>
+    public bool CanWake { get; init; }
 }
 
 
@@ -167,11 +191,30 @@ public sealed class FleetHub : IDisposable
 
     public bool Knows(string name) => _config.Agents.Any(a => a.Name == name);
 
+    /// <summary>Whether a machine can be woken from the fleet (it has a MAC and a waking agent is set).</summary>
+    public bool CanWake(string name) =>
+        _config.WakeVia is { Length: > 0 } via && via != name && Knows(via)
+        && _config.Agents.FirstOrDefault(a => a.Name == name)?.Mac is { Length: > 0 } mac && WakeOnLan.ParseMac(mac) is not null;
+
+    /// <summary>
+    /// Power action for one machine (#49): "off" asks its agent for a clean shutdown, "cancel"
+    /// withdraws it, "on" asks the waking agent to send its Wake-on-LAN packet.
+    /// </summary>
+    public Task<(int Status, string Body)> PowerAsync(string name, string action, string who) => action switch
+    {
+        "off" => ForwardAsync(name, HttpMethod.Post, "power/shutdown", headers: new() { ["X-DeviceMaster-Reason"] = $"fleet hub, {who}" }),
+        "cancel" => ForwardAsync(name, HttpMethod.Post, "power/cancel"),
+        "on" when CanWake(name) => ForwardAsync(_config.WakeVia!, HttpMethod.Post, "power/wake",
+            JsonSerializer.Serialize(new { mac = _config.Agents.First(a => a.Name == name).Mac })),
+        "on" => Task.FromResult((409, """{"error":"no MAC address or waking machine set up for this server"}""")),
+        _ => Task.FromResult((400, """{"error":"action must be on, off or cancel"}""")),
+    };
+
     /// <summary>
     /// Sends one agent API request to a machine with its token (phase 5: the full per-server page
     /// goes through here). Returns the agent's status code and body; 502 when it can't be reached.
     /// </summary>
-    public async Task<(int Status, string Body)> ForwardAsync(string machine, HttpMethod method, string route, string? body = null)
+    public async Task<(int Status, string Body)> ForwardAsync(string machine, HttpMethod method, string route, string? body = null, Dictionary<string, string>? headers = null)
     {
         var agent = _config.Agents.FirstOrDefault(a => a.Name == machine);
         if (agent is null)
@@ -184,6 +227,10 @@ public sealed class FleetHub : IDisposable
             var token = File.ReadAllText(agent.TokenFile).Trim();
             using var request = new HttpRequestMessage(method, agent.Url.TrimEnd('/') + AgentApi.Prefix + route);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            foreach (var (k, v) in headers ?? [])
+            {
+                request.Headers.TryAddWithoutValidation(k, v);
+            }
             if (body is not null)
             {
                 request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
@@ -211,12 +258,25 @@ public sealed class FleetHub : IDisposable
 
     private void Run()
     {
+        var sab = _config.SabnzbdUrl is { Length: > 0 } sabUrl && _config.SabnzbdApiKeyFile is { Length: > 0 } sabKey
+            ? new SabnzbdProbe(sabUrl, sabKey, _http)
+            : null;
+        long sabDue = 0;
         while (!_cts.IsCancellationRequested)
         {
             PollOnce().GetAwaiter().GetResult();
+            if (sab is not null && Environment.TickCount64 >= sabDue)
+            {
+                sabDue = Environment.TickCount64 + 5_000;
+                Sabnzbd = sab.FetchAsync(_cts.Token).GetAwaiter().GetResult();
+            }
+
             WaitHandle.WaitAny([_cts.Token.WaitHandle, _wake], Math.Max(_config.PollMs, 500));
         }
     }
+
+    /// <summary>SABnzbd's queue for the display (null = not configured).</summary>
+    public volatile SabnzbdStatus? Sabnzbd;
 
     /// <summary>One round of status requests (and pushes) to every agent, in parallel (public for tests).</summary>
     public Task PollOnce() => Task.WhenAll(_config.Agents.Select(PollAgent));
