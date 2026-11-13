@@ -18,6 +18,16 @@ public static class SafetyLimits
     /// duty in place — so these are never driven below a duty that keeps air moving.
     /// </summary>
     public const int HeaderMinimumDutyPercent = 30;
+
+    /// <summary>
+    /// GPU coolers are handed back to the card's own fan control (which includes its idle fan stop)
+    /// when the curve asks for this little or less — the 30 % floor would otherwise keep a cool
+    /// card's fans spinning. The card's driver is a safe owner: it cools the GPU on its own.
+    /// </summary>
+    public const int GpuHandBackAtOrBelowPercent = 30;
+
+    /// <summary>…and taken back once the curve asks for this much (a gap, so it doesn't flap).</summary>
+    public const int GpuTakeBackAtPercent = 35;
 }
 
 /// <summary>Pure clamping helpers so every write path shares the same, unit-tested safety behaviour.</summary>
@@ -36,4 +46,12 @@ public static class SafetyGuard
 
     /// <summary>Duty to apply when a curve's temperature source failed to read.</summary>
     public static int DutyOnSensorFailure() => SafetyLimits.FailsafeDutyPercent;
+
+    /// <summary>
+    /// Whether GPU coolers should be on the card's own control for this requested duty, given where
+    /// they are now: hand back at or below <see cref="SafetyLimits.GpuHandBackAtOrBelowPercent"/>,
+    /// take back at or above <see cref="SafetyLimits.GpuTakeBackAtPercent"/>, otherwise stay put.
+    /// </summary>
+    public static bool GpuOnCardControl(bool onCardNow, int requestedPercent) =>
+        onCardNow ? requestedPercent < SafetyLimits.GpuTakeBackAtPercent : requestedPercent <= SafetyLimits.GpuHandBackAtOrBelowPercent;
 }

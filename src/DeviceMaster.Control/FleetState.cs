@@ -85,6 +85,80 @@ public sealed record FleetState
     };
 }
 
+/// <summary>Per-section edits of a machine's <see cref="FleetOverride"/> (its own settings instead of the fleet's).</summary>
+public static class FleetOverrides
+{
+    /// <summary>The override with one section set to a machine's own values.</summary>
+    public static FleetOverride Set(FleetOverride o, FleetSection section, FleetProfile own) => section switch
+    {
+        FleetSection.Lighting => o with
+        {
+            RgbEnabled = own.RgbEnabled, RgbOff = own.RgbOff, RgbR = own.RgbR, RgbG = own.RgbG, RgbB = own.RgbB,
+            RgbBrightness = own.RgbBrightness, RgbEffect = own.RgbEffect, RgbSpeed = own.RgbSpeed, Blackout = own.Blackout,
+        },
+        FleetSection.Screens => o with
+        {
+            LcdScreens = own.LcdScreens, LcdBrightness = own.LcdBrightness, PumpScreenMetric = own.PumpScreenMetric,
+            FanScreenMetric = own.FanScreenMetric, TurzxScreen = own.TurzxScreen, TurzxMetric = own.TurzxMetric, TurzxBrightness = own.TurzxBrightness,
+        },
+        FleetSection.Cooling => o with
+        {
+            Mode = own.Mode, ManualDutyPercent = own.ManualDutyPercent, PumpDutyPercent = own.PumpDutyPercent,
+            Source = own.Source, CurvePoints = own.CurvePoints,
+        },
+        _ => o,
+    };
+
+    /// <summary>The override with one section back to following the fleet.</summary>
+    public static FleetOverride Clear(FleetOverride o, FleetSection section) => section switch
+    {
+        FleetSection.Lighting => o with
+        {
+            RgbEnabled = null, RgbOff = null, RgbR = null, RgbG = null, RgbB = null,
+            RgbBrightness = null, RgbEffect = null, RgbSpeed = null, Blackout = null,
+        },
+        FleetSection.Screens => o with
+        {
+            LcdScreens = null, LcdBrightness = null, PumpScreenMetric = null, FanScreenMetric = null,
+            TurzxScreen = null, TurzxMetric = null, TurzxBrightness = null,
+        },
+        FleetSection.Cooling => o with { Mode = null, ManualDutyPercent = null, PumpDutyPercent = null, Source = null, CurvePoints = null },
+        _ => o,
+    };
+
+    /// <summary>Whether a machine has its own values for a section.</summary>
+    public static bool Has(FleetOverride? o, FleetSection section) => o is not null && section switch
+    {
+        FleetSection.Lighting => o.RgbEnabled is not null || o.RgbOff is not null || o.RgbEffect is not null || o.RgbR is not null || o.Blackout is not null,
+        FleetSection.Screens => o.LcdScreens is not null || o.TurzxScreen is not null || o.LcdBrightness is not null || o.TurzxBrightness is not null,
+        FleetSection.Cooling => o.Mode is not null || o.Source is not null || o.CurvePoints is not null || o.ManualDutyPercent is not null || o.PumpDutyPercent is not null,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Makes fleet cooling safe for every machine before it is stored: the curve source is always
+    /// the hottest of each machine's own CPU and GPU (a GPU- or coolant-only source would put a
+    /// machine without that sensor into failsafe), the mode is Curve or Fixed, the curve passes the
+    /// shared rules, and the pump never goes below its floor. Null when the curve is unusable.
+    /// </summary>
+    public static FleetProfile? SanitizeCooling(FleetProfile p)
+    {
+        if (DeviceMaster.Core.Curves.CurveRules.Normalize(p.CurvePoints) is not { } curve)
+        {
+            return null;
+        }
+
+        return p with
+        {
+            Source = CurveSource.Hottest,
+            Mode = p.Mode == ControlMode.Manual ? ControlMode.Manual : ControlMode.Curve,
+            CurvePoints = curve,
+            ManualDutyPercent = Math.Clamp(p.ManualDutyPercent, 0, 100),
+            PumpDutyPercent = Math.Clamp(p.PumpDutyPercent, DeviceMaster.Core.Safety.SafetyLimits.PumpMinimumDutyPercent, 100),
+        };
+    }
+}
+
 /// <summary>Loads and saves the hub's <see cref="FleetState"/>, and appends every change to an audit log.</summary>
 public sealed class FleetStore
 {

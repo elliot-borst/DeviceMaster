@@ -84,19 +84,42 @@ public sealed class LhmFanController : IDisposable
         }
     }
 
-    /// <summary>Writes one duty to every enumerated control. Floored per safety rules; errors bubble to the caller.</summary>
+    /// <summary>True while the GPU coolers are on the card's own control (curve asked for ≤ 30 %).</summary>
+    public bool GpuOnCardControl { get; private set; }
+
+    /// <summary>
+    /// Writes one duty to every enumerated control, floored per safety rules; errors bubble to the
+    /// caller. GPU coolers are handed back to the card's own control (idle fan stop included) when
+    /// the duty is low, and taken back as it rises — see <see cref="SafetyGuard.GpuOnCardControl"/>.
+    /// </summary>
     public void SetAllDuties(int dutyPercent)
     {
         var duty = SafetyGuard.ClampHeaderDuty(dutyPercent);
         lock (_gate)
         {
+            var gpuOnCard = SafetyGuard.GpuOnCardControl(GpuOnCardControl, dutyPercent);
             foreach (var (id, control) in _controls)
             {
+                if (_gpuControls.Contains(id) && gpuOnCard)
+                {
+                    if (!GpuOnCardControl || _touched.Contains(id))
+                    {
+                        control.Control.SetDefault(); // the card's driver owns its fans again
+                        _touched.Remove(id);
+                    }
+
+                    continue;
+                }
+
                 control.Control.SetSoftware(duty);
                 _touched.Add(id);
             }
+
+            GpuOnCardControl = gpuOnCard;
         }
     }
+
+    private readonly HashSet<string> _gpuControls = [];
 
     /// <summary>Writes one control by id (CLI verification path).</summary>
     public void SetDuty(string id, int dutyPercent)
@@ -189,6 +212,10 @@ public sealed class LhmFanController : IDisposable
 
                 var id = sensor.Identifier.ToString();
                 _controls[id] = sensor;
+                if (family == "GPU")
+                {
+                    _gpuControls.Add(id);
+                }
                 tachs.TryGetValue(TrailingIndex(id), out var tach);
                 fans.Add(new HeaderFan(
                     id,
