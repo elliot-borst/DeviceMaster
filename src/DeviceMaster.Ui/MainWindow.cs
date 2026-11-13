@@ -1020,11 +1020,9 @@ public sealed class MainWindow : Window
     private readonly TextBlock _rgbStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
 
     // fully saturated primaries — pastel tones look washed out on LEDs
+    // the one shared colour list (Core ColorPalette): the same colours on every DeviceMaster surface
     private static readonly (byte R, byte G, byte B)[] SwatchColors =
-    [
-        (255, 255, 255), (255, 0, 0), (255, 70, 0), (255, 170, 0), (0, 255, 0),
-        (0, 255, 255), (0, 60, 255), (150, 0, 255), (255, 0, 110),
-    ];
+        DeviceMaster.Core.Lighting.ColorPalette.All.Select(c => (c.R, c.G, c.B)).ToArray();
 
     private Border BuildRgbCard()
     {

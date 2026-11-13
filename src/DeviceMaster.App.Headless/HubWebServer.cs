@@ -147,7 +147,7 @@ public sealed class HubWebServer : IDisposable
         var now = DateTime.UtcNow;
         if (path is "/" or "/index.html")
         {
-            Send(ctx, 200, "text/html; charset=utf-8", Page);
+            Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(Page));
         }
         else if (path == "/api/fleet/machines")
         {
@@ -155,7 +155,7 @@ public sealed class HubWebServer : IDisposable
         }
         else if (path is "/display" or "/display/")
         {
-            Send(ctx, 200, "text/html; charset=utf-8", HubDisplayPage.Html);
+            Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(HubDisplayPage.Html));
         }
         else if (path == "/api/fleet/home")
         {
@@ -200,7 +200,7 @@ public sealed class HubWebServer : IDisposable
         switch ((method, rest))
         {
             case ("GET", "" or "index.html"):
-                Send(ctx, 200, "text/html; charset=utf-8", HeadlessWebServer.DashboardHtml);
+                Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(HeadlessWebServer.DashboardHtml));
                 return;
 
             case ("GET", "status.json"):
@@ -439,7 +439,7 @@ public sealed class HubWebServer : IDisposable
     }
 
     /// <summary>The fleet page: a Servers menu on the left, the chosen machine (or all of them) on the right.</summary>
-    private const string Page = """
+    public const string Page = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -565,7 +565,7 @@ function banners(m){
 }
 /* ---- fleet lighting (phase 4): one setting for every server, or a server's own ---- */
 let settings = null, editing = false;
-const SWATCHES = [["8000ff","Purple"],["ff00ff","Magenta"],["0066ff","Blue"],["00e5ff","Cyan"],["00ff66","Green"],["ff8800","Orange"],["ff2222","Red"],["ffffff","White"]];
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
 const LIGHT_KEYS = ["RgbEnabled","RgbOff","RgbR","RgbG","RgbB","RgbBrightness","RgbEffect","RgbSpeed","Blackout"];
 const SPEEDS = ["","Slowest","Slow","Medium","Fast","Fastest"];
 const hex2 = n => n.toString(16).padStart(2,"0");
@@ -599,7 +599,7 @@ function lightControls(scope, L){
       <button class="${md==="blackout"?"on":""}" onclick='${set(`{Blackout:true}`)}'>Blackout</button></div></div>
     ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h}"
         onclick='${set(`{RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)},RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>`).join("")}
-        <input type="color" value="#${cur}" onchange='const v=this.value;${set(`{RgbR:parseInt(v.slice(1,3),16),RgbG:parseInt(v.slice(3,5),16),RgbB:parseInt(v.slice(5,7),16),RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'></div>` : ""}
+        </div>` : ""}
     ${md === "rainbow" ? `<div class="ctl"><label>Speed</label><input type="range" min="1" max="5" step="1" value="${L.RgbSpeed ?? 3}"
         oninput='document.getElementById("${id}-spd").textContent=${JSON.stringify(SPEEDS)}[this.value]' onchange='${set(`{RgbSpeed:+this.value}`)}'><span class="val" id="${id}-spd">${SPEEDS[L.RgbSpeed ?? 3]}</span></div>` : ""}
     ${md === "colour" || md === "rainbow" ? `<div class="ctl"><label>Brightness</label><input type="range" min="0" max="100" value="${L.RgbBrightness ?? 100}"

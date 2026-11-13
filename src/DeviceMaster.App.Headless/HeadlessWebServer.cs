@@ -153,7 +153,7 @@ public sealed class HeadlessWebServer : IDisposable
             case ("GET", "/") or ("GET", "/index.html"):
                 ctx.Response.StatusCode = 200;
                 ctx.Response.AddHeader("Cache-Control", "no-store");
-                Write(ctx, "text/html; charset=utf-8", DashboardHtml);
+                Write(ctx, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(DashboardHtml));
                 handled = true;
                 break;
             case ("GET", "/status.json"):
@@ -260,7 +260,7 @@ public sealed class HeadlessWebServer : IDisposable
 
     /// <summary>Single-page dashboard (side-menu layout mirroring the Windows UI): live status + config controls.</summary>
     /// <remarks>Also served by the fleet hub for each server at /m/{name}/: every request is relative.</remarks>
-    internal const string DashboardHtml = """
+    public const string DashboardHtml = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -493,22 +493,22 @@ td.dim { color:var(--dim); }
 
   <!-- ============ LIGHTING ============ -->
   <section class="page" id="page-lighting">
-    <h1>Lighting<span class="sub">Hub RGB (70 addressable LEDs across both hubs).</span></h1>
+    <h1>Lighting<span class="sub">one colour or rainbow across every LED</span></h1>
     <div class="card">
-      <div class="cardhead"><div class="tile">◈</div><div><div class="cardtitle">Hub RGB</div><div class="cardsub">applies to every LED on both hubs</div></div></div>
+      <div class="cardhead"><div class="tile">◈</div><div><div class="cardtitle">Lighting</div><div class="cardsub">applies to every LED this machine drives</div></div></div>
       <div class="row"><label>Enabled</label>
         <span class="toggle"><input type="checkbox" id="rgbOn"><span class="tk"></span></span>
         <span class="val" id="rgbOnEcho"></span></div>
       <div class="row"><label>Effect</label><div class="chips" id="effectChips"></div></div>
-      <div class="row" id="colourRow"><label for="rgbColor">Colour</label>
-        <input type="color" id="rgbColor">
+      <div class="row" id="colourRow"><label>Colour</label>
+        <input type="hidden" id="rgbColor" value="#000000"><!-- palette only: no free colour picker (ColorPalette) -->
         <div class="swatches" id="swatches"></div></div>
       <div class="row" id="speedRow"><label for="rgbSpeed">Speed</label>
         <input type="range" class="gslider" id="rgbSpeed" min="1" max="5" step="1" style="max-width:300px"><span class="pct" id="rgbSpeedVal">—</span></div>
       <div class="row"><label for="rgbBright">Brightness</label>
         <input type="range" id="rgbBright" min="0" max="100" step="5"><span class="val" id="rgbBrightVal">—</span></div>
       <div class="row"><label>Preview</label><div class="preview" id="rgbPreview"></div><span class="val mono" id="rgbHex"></span></div>
-      <div class="note">Rainbow streams about 15 frames a second to both hubs (the same effect and speeds as the Windows app).</div>
+      <div class="note">Rainbow runs on every lighting device this machine drives (the same effect and speeds as the Windows app).</div>
     </div>
     <div class="card">
       <div class="cardhead"><div class="tile">▣</div><div><div class="cardtitle">GPU RGB (ENE)</div><div class="cardsub">4090 Strix</div></div></div>
@@ -549,7 +549,7 @@ td.dim { color:var(--dim); }
 
   <!-- ============ DEVICES ============ -->
   <section class="page" id="page-devices">
-    <h1>Devices<span class="sub"><span id="devCount2">…</span> — raw channel telemetry from both hubs.</span></h1>
+    <h1>Devices<span class="sub"><span id="devCount2">…</span> — every fan, pump and screen this machine reports.</span></h1>
     <div class="card">
       <table><thead><tr><th>Hub</th><th>Channel</th><th>Device</th><th>RPM</th><th>Duty</th><th>Type</th></tr></thead>
       <tbody id="devices2"></tbody></table>
@@ -677,7 +677,7 @@ $("lcdBright").onchange = e => apply({lcdBrightness: +e.target.value});
 $("lcdBright").oninput  = e => $("lcdBrightVal").textContent = e.target.value + " %";
 
 /* ---- swatches ---- */
-const SWATCHES = [["8000ff","Purple"],["ff00ff","Magenta"],["0066ff","Blue"],["00e5ff","Cyan"],["00ff66","Green"],["ff8800","Orange"],["ff2222","Red"],["ffffff","White"]];
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
 SWATCHES.forEach(([hex,name]) => {
   const d = document.createElement("div");
   d.className = "swatch"; d.style.background = "#"+hex; d.title = name;

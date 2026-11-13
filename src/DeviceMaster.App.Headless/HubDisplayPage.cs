@@ -5,7 +5,7 @@ namespace DeviceMaster.App.Headless;
 /// storage across the fleet, containers and downloads. Built for a spare screen running a kiosk
 /// browser; everything scales with the viewport.
 /// </summary>
-internal static class HubDisplayPage
+public static class HubDisplayPage
 {
     public const string Html = """
 <!doctype html>
@@ -136,7 +136,7 @@ async function power(name, action){
   setTimeout(() => delete busy[name], 120000); // the card shows the real state again within 2 min
   refresh();
 }
-const SWATCHES = [["ffffff","White"],["ff2222","Red"],["ff8800","Orange"],["00ff66","Green"],["00e5ff","Cyan"],["0066ff","Blue"],["8000ff","Purple"],["ff00ff","Magenta"]];
+const SWATCHES = /*PALETTE*/[]; // filled from Core ColorPalette when served: one colour list everywhere
 let lighting = null;
 async function setLights(patch){
   const body = Object.assign({ RgbEnabled:true, RgbOff:false, RgbEffect:"Static", RgbR:128, RgbG:0, RgbB:255, RgbBrightness:100, RgbSpeed:3, Blackout:false },

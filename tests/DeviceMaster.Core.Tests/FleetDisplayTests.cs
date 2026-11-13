@@ -149,3 +149,28 @@ public class RebootRequestTests
         Assert.Equal(502, (await hub.PowerAsync("A", "reboot", "t")).Status); // forwarded (agent unreachable), not rejected as unknown
     }
 }
+
+public class ColorPaletteTests
+{
+    public static TheoryData<string> Pages() =>
+        [DeviceMaster.App.Headless.HeadlessWebServer.DashboardHtml, DeviceMaster.App.Headless.HubWebServer.Page, DeviceMaster.App.Headless.HubDisplayPage.Html];
+
+    [Fact]
+    public void TheOwnersColoursAreVividAndNamed()
+    {
+        var names = DeviceMaster.Core.Lighting.ColorPalette.All.Select(c => c.Name).ToList();
+        Assert.Equal(["White", "Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Purple", "Pink"], names);
+        Assert.Equal("ff0000", DeviceMaster.Core.Lighting.ColorPalette.All.Single(c => c.Name == "Red").Hex); // pure red, not a dull mix
+    }
+
+    [Theory]
+    [MemberData(nameof(Pages))]
+    public void EveryPageGetsTheOnePaletteAndNoColourPicker(string page)
+    {
+        Assert.Contains(DeviceMaster.Core.Lighting.ColorPalette.Placeholder, page); // filled when served, never hard-coded
+        var served = DeviceMaster.Core.Lighting.ColorPalette.Inject(page);
+        Assert.Contains("[\"ff0000\",\"Red\"]", served);
+        Assert.DoesNotContain("type=\"color\"", served);
+        Assert.DoesNotContain("ff2222", served); // the old dull "red"
+    }
+}
