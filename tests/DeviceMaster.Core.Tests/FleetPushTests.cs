@@ -199,3 +199,70 @@ public sealed class FleetPushTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 }
+
+public class FleetCoolingTests
+{
+    [Fact]
+    public void FleetCoolingAlwaysUsesEachMachinesHottestSensor()
+    {
+        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { Source = CurveSource.Coolant, Mode = ControlMode.Off, PumpDutyPercent = 20 })!;
+        Assert.Equal(CurveSource.Hottest, safe.Source);          // coolant/GPU-only would failsafe machines without that sensor
+        Assert.Equal(ControlMode.Curve, safe.Mode);              // never hand fans back to hardware from the fleet
+        Assert.Equal(DeviceMaster.Core.Safety.SafetyLimits.PumpMinimumDutyPercent, safe.PumpDutyPercent);
+    }
+
+    [Fact]
+    public void AnUnusableCurveIsRejected() =>
+        Assert.Null(FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = [new(50, 50)] }));
+
+    [Fact]
+    public void TheOwnersCurveSurvivesSanitizing()
+    {
+        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = [new(40, 30), new(85, 100)] })!;
+        Assert.Equal([new(40, 30), new(85, 100)], safe.CurvePoints);
+    }
+
+    [Theory]
+    [InlineData(FleetSection.Lighting)]
+    [InlineData(FleetSection.Screens)]
+    [InlineData(FleetSection.Cooling)]
+    public void OverridesSetAndClearPerSection(FleetSection section)
+    {
+        var own = FleetOverrides.Set(new FleetOverride(), section, new FleetProfile { Mode = ControlMode.Manual, LcdScreens = LcdMode.Off, RgbOff = true });
+        Assert.True(FleetOverrides.Has(own, section));
+        Assert.All(Enum.GetValues<FleetSection>().Where(s => s != section), other => Assert.False(FleetOverrides.Has(own, other)));
+        Assert.False(FleetOverrides.Has(FleetOverrides.Clear(own, section), section));
+    }
+
+    [Fact]
+    public void FleetCoolingReachesTheMachineThroughItsOwnClamps()
+    {
+        var machine = new ControlSettings { PumpDutyPercent = 100 };
+        machine.SetSource(CurveSource.Cpu);
+        var state = new FleetState
+        {
+            Profile = FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = [new(40, 30), new(85, 100)], PumpDutyPercent = 100 })!,
+            Managed = [FleetSection.Cooling],
+        };
+
+        state.DesiredFor("x", FleetProfile.From(machine)).ApplyTo(machine);
+
+        Assert.Equal(CurveSource.Hottest, machine.Source);
+        Assert.Equal(ControlMode.Curve, machine.Mode);
+        Assert.Equal([new(40, 30), new(85, 100)], machine.CurvePoints);
+        Assert.Equal(100, machine.PumpDutyPercent);
+    }
+}
+
+public class GpuHandBackTests
+{
+    [Theory]
+    [InlineData(false, 30, true)]   // low duty: the card takes its fans back (idle fan stop possible)
+    [InlineData(false, 0, true)]
+    [InlineData(false, 31, false)]
+    [InlineData(true, 34, true)]    // in the gap: stay with the card (no flapping)
+    [InlineData(true, 35, false)]   // rising: DeviceMaster takes them back
+    [InlineData(true, 100, false)]  // failsafe is always ours
+    public void GpuFansFollowTheCardWhenTheCurveIsLow(bool onCardNow, int requested, bool expected) =>
+        Assert.Equal(expected, DeviceMaster.Core.Safety.SafetyGuard.GpuOnCardControl(onCardNow, requested));
+}

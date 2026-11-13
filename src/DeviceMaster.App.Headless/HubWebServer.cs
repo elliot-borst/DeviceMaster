@@ -195,35 +195,47 @@ public sealed class HubWebServer : IDisposable
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
             FleetState next;
-            if (path == "/api/fleet/settings/lighting")
+            var lastSlash = path.LastIndexOf('/');
+            if (!TryParseSection(path[(lastSlash + 1)..], out var section))
             {
-                var incoming = root.Deserialize<FleetProfile>(AgentApi.Json) ?? new FleetProfile();
+                Json(ctx, 404, new { error = "not found" });
+                return;
+            }
+
+            var incoming = root.Deserialize<FleetProfile>(AgentApi.Json) ?? new FleetProfile();
+            if (section == FleetSection.Cooling && !root.TryGetProperty("follow", out _))
+            {
+                // every machine reads its own sensors: only the hottest-of-CPU/GPU source is safe fleet-wide
+                if (FleetOverrides.SanitizeCooling(incoming) is not { } safe)
+                {
+                    Json(ctx, 400, new { error = "the curve needs two usable points" });
+                    return;
+                }
+
+                incoming = safe;
+            }
+
+            var label = section.ToString().ToLowerInvariant();
+            if (path == $"/api/fleet/settings/{label}")
+            {
                 var managed = !root.TryGetProperty("managed", out var m) || m.ValueKind != JsonValueKind.False;
                 next = store.Update(s => s with
                 {
-                    Profile = FleetState.Take(FleetSection.Lighting, s.Profile, incoming),
-                    Managed = managed ? s.Managed.Union([FleetSection.Lighting]).ToList() : s.Managed.Where(x => x != FleetSection.Lighting).ToList(),
-                }, user, $"fleet lighting: {Describe(incoming)}{(managed ? "" : " (fleet stops managing lighting)")}");
+                    Profile = FleetState.Take(section, s.Profile, incoming),
+                    Managed = managed ? s.Managed.Union([section]).ToList() : s.Managed.Where(x => x != section).ToList(),
+                }, user, $"fleet {label}: {Describe(section, incoming)}{(managed ? "" : $" (fleet stops managing {label})")}");
             }
-            else if (path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/lighting", StringComparison.Ordinal)
-                     && Uri.UnescapeDataString(path["/api/fleet/machines/".Length..^"/lighting".Length]) is var name && _hub.Knows(name))
+            else if (path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal)
+                     && Uri.UnescapeDataString(path["/api/fleet/machines/".Length..lastSlash]) is var name && _hub.Knows(name))
             {
                 var follow = root.TryGetProperty("follow", out var f) && f.ValueKind == JsonValueKind.True;
-                var lighting = follow ? null : root.Deserialize<FleetProfile>(AgentApi.Json) ?? new FleetProfile();
                 next = store.Update(s =>
                 {
                     var overrides = new Dictionary<string, FleetOverride>(s.Overrides);
                     var current = overrides.GetValueOrDefault(name) ?? new FleetOverride();
-                    current = lighting is null
-                        ? current with { RgbEnabled = null, RgbOff = null, RgbR = null, RgbG = null, RgbB = null, RgbBrightness = null, RgbEffect = null, RgbSpeed = null, Blackout = null }
-                        : current with
-                        {
-                            RgbEnabled = lighting.RgbEnabled, RgbOff = lighting.RgbOff, RgbR = lighting.RgbR, RgbG = lighting.RgbG, RgbB = lighting.RgbB,
-                            RgbBrightness = lighting.RgbBrightness, RgbEffect = lighting.RgbEffect, RgbSpeed = lighting.RgbSpeed, Blackout = lighting.Blackout,
-                        };
-                    overrides[name] = current;
+                    overrides[name] = follow ? FleetOverrides.Clear(current, section) : FleetOverrides.Set(current, section, incoming);
                     return s with { Overrides = overrides };
-                }, user, lighting is null ? $"{name}: lighting follows the fleet" : $"{name}: own lighting: {Describe(lighting)}");
+                }, user, follow ? $"{name}: {label} follows the fleet" : $"{name}: own {label}: {Describe(section, incoming)}");
             }
             else
             {
@@ -241,10 +253,19 @@ public sealed class HubWebServer : IDisposable
         }
     }
 
-    private static string Describe(FleetProfile p) =>
-        p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
-        : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Rainbow ? $"rainbow speed {p.RgbSpeed}, {p.RgbBrightness}%"
-        : $"#{p.RgbR:X2}{p.RgbG:X2}{p.RgbB:X2}, {p.RgbBrightness}%";
+    private static bool TryParseSection(string text, out FleetSection section) =>
+        Enum.TryParse(text, ignoreCase: true, out section) && Enum.IsDefined(section);
+
+    private static string Describe(FleetSection section, FleetProfile p) => section switch
+    {
+        FleetSection.Cooling => p.Mode == ControlMode.Manual
+            ? $"fixed {p.ManualDutyPercent}%, pump {p.PumpDutyPercent}%"
+            : $"curve on CPU/GPU {string.Join(" → ", p.CurvePoints.Select(c => $"{c.TemperatureC:0} °C {c.DutyPercent}%"))}, pump {p.PumpDutyPercent}%",
+        FleetSection.Screens => $"fan/pump screens {p.LcdScreens} {p.LcdBrightness}%, Turzx {p.TurzxScreen} {p.TurzxBrightness}%",
+        _ => p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
+            : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Rainbow ? $"rainbow speed {p.RgbSpeed}, {p.RgbBrightness}%"
+            : $"#{p.RgbR:X2}{p.RgbG:X2}{p.RgbB:X2}, {p.RgbBrightness}%",
+    };
 
     private static void Json(HttpListenerContext ctx, int status, object body) =>
         Send(ctx, status, "application/json; charset=utf-8", JsonSerializer.Serialize(body, AgentApi.Json));
@@ -334,6 +355,7 @@ th { color:var(--faint); font-weight:600; font-size:11px; text-transform:upperca
 .sw { width:30px; height:30px; border-radius:9px; border:2px solid transparent; cursor:pointer; }
 .sw.on { border-color:#fff; }
 input[type=range] { width:min(220px, 52vw); accent-color:var(--accent); }
+input[type=number] { background:var(--inset); color:var(--text); border:1px solid var(--line2); border-radius:8px; padding:4px 6px; font:13px "Segoe UI",sans-serif; }
 .val { font-size:13px; font-weight:600; color:var(--accent2); min-width:44px; }
 .badge { font-size:11.5px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim); margin-left:8px; }
 .badge.sync { color:var(--good); border-color:#1f5a46; } .badge.differs { color:var(--warn); border-color:#5c4a14; }
@@ -458,9 +480,83 @@ function machineLightingCard(m){
     ${own ? lightControls(m.Name, lightFor(m.Name)) : `<div class="note">Uses the fleet lighting.</div>`}
     ${m.PushError ? `<div class="note" style="color:var(--warn)">Last push failed: ${esc(m.PushError)}</div>` : ""}</div>`;
 }
+/* ---- fleet cooling + screens: same pattern as lighting ---- */
+const SECTION_KEYS = {
+  cooling: ["Mode","ManualDutyPercent","PumpDutyPercent","Source","CurvePoints"],
+  screens: ["LcdScreens","LcdBrightness","TurzxScreen","TurzxBrightness","PumpScreenMetric","FanScreenMetric","TurzxMetric"],
+};
+const SECTION_NAME = { cooling:"Cooling", screens:"Screens" };
+const managedSection = s => !!(settings && settings.state && (settings.state.Managed || []).includes(SECTION_NAME[s]));
+function ownSection(name, s){
+  const o = settings && settings.state && settings.state.Overrides ? settings.state.Overrides[name] : null;
+  return o && SECTION_KEYS[s].some(k => o[k] != null) ? o : null;
+}
+function valuesFor(name, s){ const f = (settings && settings.state && settings.state.Profile) || {}, o = (name && ownSection(name, s)) || {}; const r = {}; SECTION_KEYS[s].forEach(k => r[k] = o[k] ?? f[k]); return r; }
+function sendSection(s, scope, v){
+  return scope == null ? put(`/api/fleet/settings/${s}`, { ...v, managed:true })
+                       : put(`/api/fleet/machines/${encodeURIComponent(scope)}/${s}`, v);
+}
+const anyPump = () => machines.some(m => m.Capabilities && m.Capabilities.Pump);
+function coolingControls(scope, v){
+  const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), fixed = v.Mode === "Manual";
+  const set = patch => `sendSection("cooling", ${S}, Object.assign(${J}, ${patch}))`;
+  const pts = (v.CurvePoints || []).length >= 2 ? v.CurvePoints : [{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}];
+  const id = scope == null ? "fc" : "mc";
+  const pumpRow = (scope == null ? anyPump() : (machines.find(m => m.Name === scope)?.Capabilities?.Pump)) ? `<div class="ctl"><label>Pump</label>
+      <input type="range" min="50" max="100" value="${v.PumpDutyPercent ?? 100}" oninput='document.getElementById("${id}-pump").textContent=this.value+"%"' onchange='${set(`{PumpDutyPercent:+this.value}`)}'>
+      <span class="val" id="${id}-pump">${v.PumpDutyPercent ?? 100}%</span><span class="note" style="margin:0">never below 50 %</span></div>` : "";
+  return `<div class="ctl"><label>Fans</label><div class="seg">
+      <button class="${fixed?"":"on"}" onclick='${set(`{Mode:"Curve"}`)}'>Curve</button>
+      <button class="${fixed?"on":""}" onclick='${set(`{Mode:"Manual"}`)}'>Fixed</button></div></div>
+    ${fixed ? `<div class="ctl"><label>Duty</label><input type="range" min="0" max="100" value="${v.ManualDutyPercent ?? 50}"
+        oninput='document.getElementById("${id}-duty").textContent=this.value+"%"' onchange='${set(`{ManualDutyPercent:+this.value}`)}'><span class="val" id="${id}-duty">${v.ManualDutyPercent ?? 50}%</span></div>`
+    : `<div class="ctl"><label>Curve</label>
+        <input id="${id}-t0" type="number" min="20" max="99" value="${pts[0].TemperatureC}" style="width:62px"> °C →
+        <input id="${id}-d0" type="number" min="0" max="100" value="${pts[0].DutyPercent}" style="width:58px"> %, rising to
+        <input id="${id}-d1" type="number" min="0" max="100" value="${pts[1].DutyPercent}" style="width:58px"> % at
+        <input id="${id}-t1" type="number" min="21" max="100" value="${pts[1].TemperatureC}" style="width:62px"> °C
+        <div class="seg"><button class="on" onclick='const g=k=>+document.getElementById("${id}-"+k).value;${set(`{CurvePoints:[{TemperatureC:g("t0"),DutyPercent:g("d0")},{TemperatureC:g("t1"),DutyPercent:g("d1")}]}`)}'>Apply</button></div></div>
+      <div class="note">Each server follows the hotter of its own CPU and GPU (a server without a GPU uses its CPU). An unreadable temperature still means 100 %.</div>`}
+    ${pumpRow}`;
+}
+function screensControls(scope, v){
+  const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), id = scope == null ? "fs" : "ms";
+  const set = patch => `sendSection("screens", ${S}, Object.assign(${J}, ${patch}))`;
+  const lcdOn = v.LcdScreens === "Metrics", tzOn = v.TurzxScreen === "Metrics";
+  return `<div class="ctl"><label>Fan &amp; pump screens</label><div class="seg">
+      <button class="${lcdOn?"on":""}" onclick='${set(`{LcdScreens:"Metrics"}`)}'>On</button>
+      <button class="${v.LcdScreens==="Off"?"on":""}" onclick='${set(`{LcdScreens:"Off"}`)}'>Off</button></div>
+      <input type="range" min="0" max="100" value="${v.LcdBrightness ?? 100}" oninput='document.getElementById("${id}-lb").textContent=this.value+"%"' onchange='${set(`{LcdBrightness:+this.value}`)}'><span class="val" id="${id}-lb">${v.LcdBrightness ?? 100}%</span></div>
+    <div class="ctl"><label>Turzx dashboard</label><div class="seg">
+      <button class="${tzOn?"on":""}" onclick='${set(`{TurzxScreen:"Metrics"}`)}'>On</button>
+      <button class="${v.TurzxScreen==="Off"?"on":""}" onclick='${set(`{TurzxScreen:"Off"}`)}'>Off</button></div>
+      <input type="range" min="0" max="100" value="${v.TurzxBrightness ?? 100}" oninput='document.getElementById("${id}-tb").textContent=this.value+"%"' onchange='${set(`{TurzxBrightness:+this.value}`)}'><span class="val" id="${id}-tb">${v.TurzxBrightness ?? 100}%</span></div>`;
+}
+const CONTROLS = { cooling: coolingControls, screens: screensControls };
+const DEFAULTS = {
+  cooling: { Mode:"Curve", ManualDutyPercent:50, PumpDutyPercent:100, Source:"Hottest", CurvePoints:[{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}] },
+  screens: { LcdScreens:"Metrics", LcdBrightness:100, TurzxScreen:"Metrics", TurzxBrightness:100 },
+};
+function fleetSectionCard(s, title){
+  if (!settings || !settings.writable) return "";
+  const on = managedSection(s), v = on ? valuesFor(null, s) : Object.assign({}, valuesFor(null, s), s === "cooling" ? DEFAULTS.cooling : {});
+  return `<div class="card light" style="margin-bottom:14px"><div class="row"><span class="cname">${title} — all servers</span>
+      <span class="cmeta"><div class="seg"><button class="${on?"on":""}" onclick='sendSection("${s}", null, ${JSON.stringify(v)})'>Fleet</button>
+      <button class="${on?"":"on"}" onclick='put("/api/fleet/settings/${s}", Object.assign(${JSON.stringify(v)}, {managed:false}))'>Each server</button></div></span></div>
+    ${on ? CONTROLS[s](null, v) : `<div class="note">Each server keeps its own ${title.toLowerCase()}. Pick Fleet to set every server at once${s === "cooling" ? " (starts as the CPU/GPU curve 0 % at 20 °C → 100 % at 80 °C)" : ""}.</div>`}</div>`;
+}
+function machineSectionCard(s, title, m){
+  if (!settings || !settings.writable || !managedSection(s)) return "";
+  if (s === "screens" && m.Capabilities && !(m.Capabilities.PumpLcd || m.Capabilities.FanLcds || m.Capabilities.Turzx)) return "";
+  const own = ownSection(m.Name, s), S = JSON.stringify(m.Name);
+  return `<div class="card light" style="margin-top:14px"><div class="row"><span class="cname">${title}</span>
+      <span class="cmeta"><div class="seg"><button class="${own?"":"on"}" onclick='put("/api/fleet/machines/"+encodeURIComponent(${S})+"/${s}", {follow:true})'>Follow fleet</button>
+      <button class="${own?"on":""}" onclick='sendSection("${s}", ${S}, ${JSON.stringify(valuesFor(m.Name, s))})'>Own</button></div></span></div>
+    ${own ? CONTROLS[s](m.Name, valuesFor(m.Name, s)) : `<div class="note">Uses the fleet ${title.toLowerCase()}.</div>`}</div>`;
+}
 function overview(){
   const online = machines.filter(m => m.Online).length;
-  return `<h1>Servers</h1><div class="sub">${online} of ${machines.length} online</div>${fleetLightingCard()}<div class="cards">` + machines.map(m =>
+  return `<h1>Servers</h1><div class="sub">${online} of ${machines.length} online</div>${fleetSectionCard("cooling","Cooling")}${fleetLightingCard()}${fleetSectionCard("screens","Screens")}<div class="cards">` + machines.map(m =>
     `<div class="card click" onclick='pick(${JSON.stringify(m.Name)})'>
       <div class="row"><span class="dot ${state(m)}"></span><span class="cname">${esc(m.Name)}</span>${badge(m)}<span class="cmeta">${esc(seen(m))}</span></div>
       ${stats(m)}${banners(m)}</div>`).join("") + "</div>";
@@ -471,7 +567,7 @@ function machinePage(m){
   let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
-      ${caps(m.Capabilities)}</div>${machineLightingCard(m)}`;
+      ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;
   if (d && d.Warnings && d.Warnings.length) html += `<div class="card" style="margin-top:14px"><b>Warnings</b><ul class="warn">${d.Warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
@@ -485,7 +581,8 @@ function render(){
 }
 document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".light")) editing = true; });
 document.addEventListener("pointerup", () => setTimeout(() => editing = false, 400));
-document.addEventListener("focusin", e => { if (e.target.type === "color") editing = true; });
+document.addEventListener("focusin", e => { if (e.target.type === "color" || e.target.type === "number") editing = true; });
+document.addEventListener("focusout", e => { if (e.target.type === "number") setTimeout(() => editing = false, 300); });
 document.addEventListener("change", e => { if (e.target.type === "color") editing = false; });
 function pick(name){ selected = name; detail = null; history.replaceState(null, "", name ? "#" + encodeURIComponent(name) : "#"); render(); refresh(); }
 async function refresh(){

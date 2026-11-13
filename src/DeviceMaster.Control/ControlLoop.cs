@@ -2612,7 +2612,11 @@ public sealed class ControlLoop : IDisposable
             var applied = SafetyGuard.ClampHeaderDuty(duty);
             foreach (var fan in _headers.Enumerate())
             {
-                readings.Add(new DeviceReading(fan.Family, fan.Name, fan.Rpm, applied, IsPump: false, fan.Id));
+                // GPU fans on the card's own control show what the card is doing (0 = idle fan stop)
+                var shown = fan.Family == "GPU" && _headers.GpuOnCardControl
+                    ? (int)Math.Round(fan.CurrentPercent ?? 0)
+                    : applied;
+                readings.Add(new DeviceReading(fan.Family, fan.Name, fan.Rpm, shown, IsPump: false, fan.Id));
             }
         }
         catch (Exception ex)
