@@ -2192,6 +2192,29 @@ public sealed class MainWindow : Window
 
         public bool ApplyProfile(FleetProfile profile) => window.Dispatcher.Invoke(() => window.ApplyRemoteProfile(profile));
 
+        public string? ReadSettingsJson() =>
+            window.Dispatcher.Invoke(() => System.Text.Json.JsonSerializer.Serialize(window._controlSettings, AgentApi.Json));
+
+        // the full per-server page on the hub edits this machine through here; the window re-syncs
+        public IReadOnlyList<string>? PatchSettings(string patchJson, out bool invalid)
+        {
+            var bad = false;
+            var applied = window.Dispatcher.Invoke(() =>
+            {
+                var changes = ConfigPatcher.ApplyPatch(window._controlSettings, patchJson, out bad);
+                if (changes.Count > 0)
+                {
+                    window.TrySaveSettings();
+                    window.ReloadControlsFromSettings();
+                    window._loop?.Apply(window._controlSettings);
+                }
+
+                return changes;
+            });
+            invalid = bad;
+            return applied;
+        }
+
         // same path as the 15-minute check: installs silently, but waits while a game runs
         public bool RequestUpdateCheck()
         {

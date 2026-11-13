@@ -175,7 +175,7 @@ public class FleetProfileTests
     public void TheWebApiAcceptsTheHottestSource()
     {
         var cfg = new HeadlessConfig();
-        var applied = ConfigPatcher.ApplyPatch(cfg, """{"source":3}""", out var invalid);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"source":3}""", out var invalid);
         Assert.False(invalid);
         Assert.NotEmpty(applied);
         Assert.Equal(CurveSource.Hottest, cfg.Control.Source);

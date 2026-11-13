@@ -202,6 +202,15 @@ public sealed class FleetStore
         }
     }
 
+    /// <summary>Records a change made directly on one server (the full per-server page) without touching the fleet state.</summary>
+    public void Audit(string who, string what)
+    {
+        lock (_gate)
+        {
+            File.AppendAllText(_auditPath, JsonSerializer.Serialize(new { at = DateTime.UtcNow, who, what, version = _state.Version }) + "\n");
+        }
+    }
+
     /// <summary>The most recent audit entries, newest first.</summary>
     public IReadOnlyList<string> RecentAudit(int count)
     {

@@ -62,10 +62,10 @@ public class CurveRulesTests
     {
         var cfg = new HeadlessConfig();
         cfg.Control.Source = CurveSource.Coolant;
-        var applied = ConfigPatcher.ApplyPatch(cfg, """{"curvePoints":[[30,40],[45,30],[60,90]]}""", out var invalid);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"curvePoints":[[30,40],[45,30],[60,90]]}""", out var invalid);
         Assert.False(invalid);
         Assert.Equal(["curvePoints=30:40;60:90"], applied); // middle point dropped: first and last kept
 
-        Assert.Empty(ConfigPatcher.ApplyPatch(cfg, """{"curvePoints":[[30,"x"]]}""", out _)); // malformed: ignored
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg.Control, """{"curvePoints":[[30,"x"]]}""", out _)); // malformed: ignored
     }
 }
