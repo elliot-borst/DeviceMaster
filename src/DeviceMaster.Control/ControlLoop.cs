@@ -2239,10 +2239,11 @@ public sealed class ControlLoop : IDisposable
         try
         {
             var readings = Lhm().Read(refresh: false);
-            double? Hottest(string wanted) => readings
-                .Where(r => r.Kind == SensorKind.Temperature && r.Id.Contains(wanted, StringComparison.OrdinalIgnoreCase))
-                .Select(r => (double?)r.Value)
-                .Max();
+            // the same sensors every display shows (CPU package/Tctl, GPU core), not the hottest of all:
+            // GPU hot-spot/memory-junction sit ~10 °C above the core, so "max of everything" drove the
+            // fans from a number shown nowhere (44 °C curve with 40 °C CPU / 33 °C GPU on screen).
+            // The card's own fans still look after its hot-spot and memory.
+            double? Hottest(string wanted) => CanonicalTemp(readings, wanted, wanted == "cpu" ? CpuTempPreference : GpuCorePreference);
 
             if (source == CurveSource.Hottest)
             {
