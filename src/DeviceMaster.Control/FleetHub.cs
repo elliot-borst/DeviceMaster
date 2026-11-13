@@ -235,6 +235,12 @@ public sealed class FleetHub : IDisposable
             {
                 request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             }
+            else if (method != HttpMethod.Get)
+            {
+                // a bodiless POST goes out without Content-Length, which the Linux agents' listener
+                // answers with 411 (after acting on it) — send an explicit empty body
+                request.Content = new StringContent("", System.Text.Encoding.UTF8, "application/json");
+            }
 
             using var response = await _http.SendAsync(request, _cts.Token);
             return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(_cts.Token));
