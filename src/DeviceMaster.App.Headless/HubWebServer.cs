@@ -107,6 +107,12 @@ public sealed class HubWebServer : IDisposable
             return;
         }
 
+        if (path.StartsWith("/m/", StringComparison.Ordinal))
+        {
+            HandleMachinePage(ctx, path);
+            return;
+        }
+
         if (ctx.Request.HttpMethod == "PUT")
         {
             HandleWrite(ctx, path);
@@ -149,6 +155,94 @@ public sealed class HubWebServer : IDisposable
         else
         {
             Send(ctx, 404, "text/plain; charset=utf-8", "not found");
+        }
+    }
+
+    /// <summary>
+    /// Phase 5: the full DeviceMaster page for one server at <c>/m/{name}/</c> — the same page each
+    /// Linux agent serves itself, with its two data calls routed to that server's agent API:
+    /// <c>status.json</c> ← <c>GET /api/v1/status</c>, <c>config.json</c> ← <c>GET/PATCH /api/v1/settings</c>.
+    /// Changes need a signed-in tailnet user and are written to the fleet audit log.
+    /// </summary>
+    private void HandleMachinePage(HttpListenerContext ctx, string path)
+    {
+        var parts = path.Split('/', 4); // "", "m", name, rest
+        var name = parts.Length > 2 ? Uri.UnescapeDataString(parts[2]) : "";
+        if (!_hub.Knows(name))
+        {
+            Send(ctx, 404, "text/plain; charset=utf-8", "unknown server");
+            return;
+        }
+
+        var rest = parts.Length > 3 ? parts[3] : null;
+        var method = ctx.Request.HttpMethod;
+        if (rest is null)
+        {
+            ctx.Response.Redirect($"/m/{parts[2]}/"); // the page's relative requests need the slash
+            ctx.Response.Close();
+            return;
+        }
+
+        switch ((method, rest))
+        {
+            case ("GET", "" or "index.html"):
+                Send(ctx, 200, "text/html; charset=utf-8", HeadlessWebServer.DashboardHtml);
+                return;
+
+            case ("GET", "status.json"):
+            {
+                var (status, body) = _hub.ForwardAsync(name, HttpMethod.Get, "status").GetAwaiter().GetResult();
+                if (status != 200)
+                {
+                    Send(ctx, status, "application/json; charset=utf-8", body);
+                    return;
+                }
+
+                // the page reads enums as numbers (as the agents' own /status.json writes them)
+                var parsed = JsonSerializer.Deserialize<ControlStatus>(body, AgentApi.Json);
+                Send(ctx, 200, "application/json; charset=utf-8", JsonSerializer.Serialize(parsed));
+                return;
+            }
+
+            case ("GET", "config.json"):
+            {
+                var (status, body) = _hub.ForwardAsync(name, HttpMethod.Get, "settings").GetAwaiter().GetResult();
+                Send(ctx, status, "application/json; charset=utf-8", status == 200 ? $"{{\"Control\":{body}}}" : body);
+                return;
+            }
+
+            case ("POST", "config.json"):
+            {
+                if (User(ctx) is not { } user)
+                {
+                    Json(ctx, 403, new { ok = false, error = "changes need a signed-in tailnet user (open the page through its tailnet address)" });
+                    return;
+                }
+
+                string patch;
+                using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+                {
+                    patch = reader.ReadToEnd();
+                }
+
+                var (status, body) = _hub.ForwardAsync(name, HttpMethod.Patch, "settings", patch).GetAwaiter().GetResult();
+                if (status == 200 && _hub.Store is { } store)
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    var applied = doc.RootElement.TryGetProperty("applied", out var a) ? a.EnumerateArray().Select(x => x.GetString()).ToList() : [];
+                    if (applied.Count > 0)
+                    {
+                        store.Audit(user, $"{name}: {string.Join(", ", applied)}");
+                    }
+                }
+
+                Send(ctx, status, "application/json; charset=utf-8", body);
+                return;
+            }
+
+            default:
+                Send(ctx, 404, "text/plain; charset=utf-8", "not found");
+                return;
         }
     }
 
@@ -352,6 +446,7 @@ th { color:var(--faint); font-weight:600; font-size:11px; text-transform:upperca
 .ctl > label { font-size:12px; color:var(--faint); min-width:76px; }
 .seg { display:flex; gap:6px; flex-wrap:wrap; }
 .seg button { background:var(--inset); border:1px solid var(--line2); color:var(--dim); font:13px "Segoe UI",sans-serif; padding:6px 14px; border-radius:99px; cursor:pointer; }
+.openfull { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); color:#fff; font-weight:600; padding:7px 16px; border-radius:99px; text-decoration:none; font-size:13px; }
 .seg button.on { background:linear-gradient(90deg,#4f8cff,#d06cd8,#ff7a45); border-color:transparent; color:#fff; font-weight:600; }
 .sw { width:30px; height:30px; border-radius:9px; border:2px solid transparent; cursor:pointer; }
 .sw.on { border-color:#fff; }
@@ -566,6 +661,7 @@ function machinePage(m){
   const d = detail && detail.summary && detail.summary.Name === m.Name ? detail.status : null;
   const meta = [m.MachineName, m.Platform, m.Version && m.Version.split("+")[0] && `v${m.Version.split("+")[0].split(".")[0]}`].filter(Boolean).join(" · ");
   let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
+    ${m.Online ? `<div class="seg" style="margin:0 0 14px 2px"><a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a></div>` : ""}
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
       ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;

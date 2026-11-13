@@ -29,6 +29,26 @@ public sealed class HeadlessWebServer : IDisposable
 
         public FleetProfile ReadProfile() => FleetProfile.From(HeadlessConfig.Load(server._configPath).Control);
 
+        public string? ReadSettingsJson() =>
+            System.Text.Json.JsonSerializer.Serialize(HeadlessConfig.Load(server._configPath).Control, AgentApi.Json);
+
+        public IReadOnlyList<string>? PatchSettings(string patchJson, out bool invalid)
+        {
+            lock (server._configLock)
+            {
+                var cfg = HeadlessConfig.Load(server._configPath);
+                var applied = ConfigPatcher.ApplyPatch(cfg.Control, patchJson, out invalid);
+                if (applied.Count > 0)
+                {
+                    var tmp = server._configPath + ".tmp";
+                    File.WriteAllText(tmp, cfg.Save());
+                    File.Move(tmp, server._configPath, overwrite: true); // the loop hot-reloads it
+                }
+
+                return applied;
+            }
+        }
+
         public bool ApplyProfile(FleetProfile profile)
         {
             lock (server._configLock)
@@ -176,7 +196,7 @@ public sealed class HeadlessWebServer : IDisposable
                 return;
             }
 
-            var applied = ConfigPatcher.ApplyPatch(cfg, body, out var invalid);
+            var applied = ConfigPatcher.ApplyPatch(cfg.Control, body, out var invalid);
             if (invalid)
             {
                 ctx.Response.StatusCode = 400;
@@ -226,7 +246,8 @@ public sealed class HeadlessWebServer : IDisposable
     }
 
     /// <summary>Single-page dashboard (side-menu layout mirroring the Windows UI): live status + config controls.</summary>
-    private const string DashboardHtml = """
+    /// <remarks>Also served by the fleet hub for each server at /m/{name}/: every request is relative.</remarks>
+    internal const string DashboardHtml = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -384,6 +405,7 @@ td.dim { color:var(--dim); }
 <body>
 <aside>
   <div class="brandrow"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4f8cff"/><stop offset=".5" stop-color="#d06cd8"/><stop offset="1" stop-color="#ff7a45"/></linearGradient><clipPath id="ld"><path d="M11.5 12H32.5A20 20 0 0 1 32.5 52H11.5Z"/></clipPath></defs><rect x="2" y="2" width="60" height="60" rx="14" fill="url(#lg)"/><g clip-path="url(#ld)" fill="#0f1115"><rect x="11.5" y="12" width="8.25" height="40" rx="2.48"/><rect x="22.75" y="12" width="8.25" height="40" rx="2.48"/><rect x="34" y="12" width="8.25" height="40" rx="2.48"/><rect x="45.25" y="12" width="8.25" height="40" rx="2.48"/></g></svg><div><div class="brand">DeviceMaster</div><div class="brandsub">FAN · RGB · LCD</div></div></div>
+  <a class="navbtn" id="fleetBack" href="../../" style="display:none;text-decoration:none"><span class="glyph">⇠</span><span class="lbl">All servers</span></a>
   <button class="navbtn active" data-page="dashboard"><span class="glyph">⌂</span><span class="lbl">Dashboard</span></button>
   <button class="navbtn" data-page="cooling"><span class="glyph">❄</span><span class="lbl">Cooling</span></button>
   <button class="navbtn" data-page="lighting"><span class="glyph">◈</span><span class="lbl">Lighting</span></button>
@@ -393,7 +415,7 @@ td.dim { color:var(--dim); }
     <label class="togglerow" for="blackout"><span>🌙&nbsp; Blackout Mode</span>
       <span class="toggle"><input type="checkbox" id="blackout"><span class="tk"></span></span></label>
     <div class="aside-foot"><div class="dot" id="dot"></div><span id="foot">connecting…</span></div>
-    <div class="aside-build">headless · unraid</div>
+    <div class="aside-build" id="asideBuild"></div>
   </div>
 </aside>
 <main>
@@ -588,7 +610,7 @@ function apply(patch){
   if (!cfg) return;
   // one POST per user action (sliders fire on release, colours are a single batched patch) —
   // no debounce: a dropped POST would leave the UI showing a value the server never got
-  fetch("/config.json", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch) })
+  fetch("config.json", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch) })
     .then(r => r.json()).then(j => {
       if (!j.ok) throw new Error(j.error || "rejected");
       // re-sync the local copy from the server's CLAMPED values (pumpDuty=10 -> 50 etc.),
@@ -776,7 +798,8 @@ $("curveSvg").addEventListener("pointerup", endCurveDrag);
 $("curveSvg").addEventListener("pointercancel", endCurveDrag);
 window.addEventListener("resize", () => { if (!curveDrag) drawCurve(); });
 function tick(){
-  fetch("/status.json").then(r => r.json()).then(s => {
+  fetch("status.json").then(r => r.json()).then(s => {
+    if (s.Capabilities) $("asideBuild").textContent = [s.Capabilities.MachineName, s.Capabilities.Platform, s.Version ? "v" + s.Version.split("+")[0].split(".")[0] : ""].filter(Boolean).join(" · ").toLowerCase();
     $("dot").className = "dot " + (s.Running ? "ok" : "bad");
     $("foot").textContent = s.Running ? "loop running" : "loop down";
     const devs = s.Devices||[];
@@ -840,9 +863,11 @@ function tick(){
   }).catch(() => { $("dot").className = "dot bad"; $("foot").textContent = "dashboard offline"; });
 }
 tick(); setInterval(tick, 2000);
-const pullConfig = () => fetch("/config.json").then(r => r.json()).then(c => { cfg = normalize(c); syncControls(); }).catch(() => {});
+const pullConfig = () => fetch("config.json").then(r => r.json()).then(c => { cfg = normalize(c); syncControls(); }).catch(() => {});
 pullConfig(); setInterval(pullConfig, 5000);
-fetch("/config.json").then(r => r.json()).then(c => { cfg = normalize(c); initControls(); }).catch(() => {});
+fetch("config.json").then(r => r.json()).then(c => { cfg = normalize(c); initControls(); }).catch(() => {});
+/* served by the fleet hub at /m/<server>/: link back to the Servers overview, name the tab */
+if (location.pathname.startsWith("/m/")) { document.getElementById("fleetBack").style.display = "flex"; document.title = decodeURIComponent(location.pathname.split("/")[2]) + " · DeviceMaster"; }
 </script>
 </body>
 </html>

@@ -23,6 +23,19 @@ public interface IAgentHost
     /// machine is busy gaming). False when this app updates some other way (the Linux containers).
     /// </summary>
     bool RequestUpdateCheck() => false;
+
+    /// <summary>The machine's whole settings as JSON (phase 5: the full per-server page). Null = not offered.</summary>
+    string? ReadSettingsJson() => null;
+
+    /// <summary>
+    /// Applies a dashboard patch (the <see cref="ConfigPatcher"/> format the web page sends) to the
+    /// machine's settings, persists it, and returns what changed. Null = not offered.
+    /// </summary>
+    IReadOnlyList<string>? PatchSettings(string patchJson, out bool invalid)
+    {
+        invalid = false;
+        return null;
+    }
 }
 
 /// <summary>
@@ -104,6 +117,20 @@ public sealed class AgentApi
                     var profile = _host.ReadProfile();
                     Respond(ctx, 200, new { revision = Revision(profile), profile });
                     break;
+                case ("GET", "settings"):
+                    if (_host.ReadSettingsJson() is { } settingsJson)
+                    {
+                        RespondRaw(ctx, 200, settingsJson);
+                    }
+                    else
+                    {
+                        Respond(ctx, 501, new { error = "settings are not offered by this machine" });
+                    }
+
+                    break;
+                case ("PATCH", "settings"):
+                    HandlePatch(ctx);
+                    break;
                 case ("POST", "update-check"):
                     if (_host.RequestUpdateCheck())
                     {
@@ -181,6 +208,51 @@ public sealed class AgentApi
         }
 
         Respond(ctx, 200, new { changed, revision = Revision(now), profile = now });
+    }
+
+    private void HandlePatch(HttpListenerContext ctx)
+    {
+        string body;
+        using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+        {
+            body = reader.ReadToEnd();
+        }
+
+        if (body.Length > MaxBodyBytes)
+        {
+            Respond(ctx, 413, new { error = "payload too large" });
+            return;
+        }
+
+        var applied = _host.PatchSettings(body, out var invalid);
+        if (applied is null)
+        {
+            Respond(ctx, 501, new { error = "settings are not offered by this machine" });
+        }
+        else if (invalid)
+        {
+            Respond(ctx, 400, new { ok = false, error = "invalid json" });
+        }
+        else
+        {
+            if (applied.Count > 0)
+            {
+                _log?.Invoke("agent api: settings changed: " + string.Join(", ", applied));
+            }
+
+            Respond(ctx, 200, new { ok = true, applied });
+        }
+    }
+
+    private static void RespondRaw(HttpListenerContext ctx, int status, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        ctx.Response.StatusCode = status;
+        ctx.Response.ContentType = "application/json; charset=utf-8";
+        ctx.Response.AddHeader("Cache-Control", "no-store");
+        ctx.Response.ContentLength64 = bytes.Length;
+        ctx.Response.OutputStream.Write(bytes);
+        ctx.Response.Close();
     }
 
     private bool Authorized(HttpListenerRequest request)

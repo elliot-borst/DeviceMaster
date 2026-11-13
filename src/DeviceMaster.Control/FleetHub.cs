@@ -167,6 +167,37 @@ public sealed class FleetHub : IDisposable
 
     public bool Knows(string name) => _config.Agents.Any(a => a.Name == name);
 
+    /// <summary>
+    /// Sends one agent API request to a machine with its token (phase 5: the full per-server page
+    /// goes through here). Returns the agent's status code and body; 502 when it can't be reached.
+    /// </summary>
+    public async Task<(int Status, string Body)> ForwardAsync(string machine, HttpMethod method, string route, string? body = null)
+    {
+        var agent = _config.Agents.FirstOrDefault(a => a.Name == machine);
+        if (agent is null)
+        {
+            return (404, """{"error":"unknown machine"}""");
+        }
+
+        try
+        {
+            var token = File.ReadAllText(agent.TokenFile).Trim();
+            using var request = new HttpRequestMessage(method, agent.Url.TrimEnd('/') + AgentApi.Prefix + route);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            if (body is not null)
+            {
+                request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            }
+
+            using var response = await _http.SendAsync(request, _cts.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(_cts.Token));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
+        {
+            return (502, JsonSerializer.Serialize(new { error = $"{machine} didn't answer ({ex.Message})" }));
+        }
+    }
+
     /// <summary>Poll (and push) right away instead of at the next tick — after a settings change.</summary>
     public void Nudge() => _wake.Set();
 

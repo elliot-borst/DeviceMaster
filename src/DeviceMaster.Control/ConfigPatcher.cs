@@ -2,12 +2,11 @@ using System.Text.Json;
 using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Lighting;
 using DeviceMaster.Core.Safety;
-using DeviceMaster.Control;
 
-namespace DeviceMaster.App.Headless;
+namespace DeviceMaster.Control;
 
 /// <summary>
-/// Applies a web-dashboard patch to a loaded <see cref="HeadlessConfig"/>. The patch is a
+/// Applies a web-dashboard patch to a machine's <see cref="ControlSettings"/>. The patch is a
 /// flat JSON object; only whitelisted control fields are accepted, everything else is
 /// ignored so the dashboard can never clobber transport/GPU settings. Values are clamped
 /// before the caller persists the config (the loop hot-reloads it on the next tick).
@@ -16,7 +15,8 @@ namespace DeviceMaster.App.Headless;
 /// </summary>
 public static class ConfigPatcher
 {
-    public static List<string> ApplyPatch(HeadlessConfig cfg, string patchJson, out bool invalid)
+    /// <summary>The same patch applied to any machine's settings (the fleet agent API uses it on Windows too).</summary>
+    public static List<string> ApplyPatch(ControlSettings s, string patchJson, out bool invalid)
     {
         var applied = new List<string>();
         invalid = false;
@@ -45,14 +45,14 @@ public static class ConfigPatcher
                 case "mode":
                     if (TryEnum(prop.Value, out var mode) && Enum.IsDefined(typeof(ControlMode), mode))
                     {
-                        cfg.Control.Mode = (ControlMode)mode;
-                        applied.Add($"mode={(int)cfg.Control.Mode}");
+                        s.Mode = (ControlMode)mode;
+                        applied.Add($"mode={(int)s.Mode}");
                     }
                     break;
                 case "fanDuty":
                     if (TryInt(prop.Value, 0, 100, out var duty))
                     {
-                        cfg.Control.ManualDutyPercent = duty;
+                        s.ManualDutyPercent = duty;
                         applied.Add($"fanDuty={duty}");
                     }
                     break;
@@ -60,86 +60,86 @@ public static class ConfigPatcher
                     // hard floor — a low pump duty can damage the loop
                     if (TryInt(prop.Value, SafetyLimits.PumpMinimumDutyPercent, 100, out var pump))
                     {
-                        cfg.Control.PumpDutyPercent = pump;
+                        s.PumpDutyPercent = pump;
                         applied.Add($"pumpDuty={pump}");
                     }
                     break;
                 case "source":
                     // each source keeps its own curve: switching swaps the active curve too
                     if (TryEnum(prop.Value, out var source) && Enum.IsDefined(typeof(CurveSource), source)
-                        && cfg.Control.SetSource((CurveSource)source))
+                        && s.SetSource((CurveSource)source))
                     {
-                        applied.Add($"source={(int)cfg.Control.Source}");
+                        applied.Add($"source={(int)s.Source}");
                     }
                     break;
                 case "curvePoints":
                     // [[tempC, duty], …] — repaired by the same rules as the desktop editor
-                    if (TryCurve(prop.Value, out var points) && cfg.Control.SetCurve(points))
+                    if (TryCurve(prop.Value, out var points) && s.SetCurve(points))
                     {
-                        applied.Add("curvePoints=" + string.Join(";", cfg.Control.CurvePoints.Select(p => $"{p.TemperatureC:0}:{p.DutyPercent}")));
+                        applied.Add("curvePoints=" + string.Join(";", s.CurvePoints.Select(p => $"{p.TemperatureC:0}:{p.DutyPercent}")));
                     }
                     break;
                 case "rgbEnabled":
                     if (prop.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     {
-                        cfg.Control.RgbEnabled = prop.Value.GetBoolean();
-                        applied.Add($"rgbEnabled={cfg.Control.RgbEnabled}");
+                        s.RgbEnabled = prop.Value.GetBoolean();
+                        applied.Add($"rgbEnabled={s.RgbEnabled}");
                     }
                     break;
                 case "rgbR":
-                    if (TryInt(prop.Value, 0, 255, out var r)) { cfg.Control.RgbR = r; applied.Add($"rgbR={r}"); }
+                    if (TryInt(prop.Value, 0, 255, out var r)) { s.RgbR = r; applied.Add($"rgbR={r}"); }
                     break;
                 case "rgbG":
-                    if (TryInt(prop.Value, 0, 255, out var g)) { cfg.Control.RgbG = g; applied.Add($"rgbG={g}"); }
+                    if (TryInt(prop.Value, 0, 255, out var g)) { s.RgbG = g; applied.Add($"rgbG={g}"); }
                     break;
                 case "rgbB":
-                    if (TryInt(prop.Value, 0, 255, out var b)) { cfg.Control.RgbB = b; applied.Add($"rgbB={b}"); }
+                    if (TryInt(prop.Value, 0, 255, out var b)) { s.RgbB = b; applied.Add($"rgbB={b}"); }
                     break;
                 case "rgbBrightness":
-                    if (TryInt(prop.Value, 0, 100, out var rb)) { cfg.Control.RgbBrightness = rb; applied.Add($"rgbBrightness={rb}"); }
+                    if (TryInt(prop.Value, 0, 100, out var rb)) { s.RgbBrightness = rb; applied.Add($"rgbBrightness={rb}"); }
                     break;
                 case "rgbEffect":
                     if (TryEnum(prop.Value, out var effect) && Enum.IsDefined(typeof(RgbEffect), effect))
                     {
-                        cfg.Control.RgbEffect = (RgbEffect)effect;
-                        if (cfg.Control.RgbEffect == RgbEffect.Rainbow)
+                        s.RgbEffect = (RgbEffect)effect;
+                        if (s.RgbEffect == RgbEffect.Rainbow)
                         {
-                            cfg.Control.RgbOff = false; // "lights out" and rainbow are opposites
+                            s.RgbOff = false; // "lights out" and rainbow are opposites
                         }
 
-                        applied.Add($"rgbEffect={(int)cfg.Control.RgbEffect}");
+                        applied.Add($"rgbEffect={(int)s.RgbEffect}");
                     }
                     break;
                 case "rgbSpeed":
                     if (TryInt(prop.Value, RainbowEffect.MinSpeed, RainbowEffect.MaxSpeed, out var speed))
                     {
-                        cfg.Control.RgbSpeed = speed;
+                        s.RgbSpeed = speed;
                         applied.Add($"rgbSpeed={speed}");
                     }
                     break;
                 case "lcdScreens":
                     if (TryEnum(prop.Value, out var lcd) && Enum.IsDefined(typeof(LcdMode), lcd))
                     {
-                        cfg.Control.LcdScreens = (LcdMode)lcd;
-                        applied.Add($"lcdScreens={(int)cfg.Control.LcdScreens}");
+                        s.LcdScreens = (LcdMode)lcd;
+                        applied.Add($"lcdScreens={(int)s.LcdScreens}");
                     }
                     break;
                 case "lcdBrightness":
-                    if (TryInt(prop.Value, 0, 100, out var lb)) { cfg.Control.LcdBrightness = lb; applied.Add($"lcdBrightness={lb}"); }
+                    if (TryInt(prop.Value, 0, 100, out var lb)) { s.LcdBrightness = lb; applied.Add($"lcdBrightness={lb}"); }
                     break;
                 case "pumpScreenMetric":
                     if (TryEnum(prop.Value, out var metric) && Enum.IsDefined(typeof(LcdMetric), metric))
                     {
-                        cfg.Control.PumpScreenMetric = (LcdMetric)metric;
-                        applied.Add($"pumpScreenMetric={(int)cfg.Control.PumpScreenMetric}");
+                        s.PumpScreenMetric = (LcdMetric)metric;
+                        applied.Add($"pumpScreenMetric={(int)s.PumpScreenMetric}");
                     }
                     break;
                 case "blackout":
                     // movie mode: same remember/black-out/restore as the desktop toggle
                     if (prop.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
-                        && cfg.Control.SetBlackout(prop.Value.GetBoolean()))
+                        && s.SetBlackout(prop.Value.GetBoolean()))
                     {
-                        applied.Add($"blackout={cfg.Control.BlackoutActive}");
+                        applied.Add($"blackout={s.BlackoutActive}");
                     }
                     break;
                 default:

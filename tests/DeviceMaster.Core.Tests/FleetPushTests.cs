@@ -266,3 +266,85 @@ public class GpuHandBackTests
     public void GpuFansFollowTheCardWhenTheCurveIsLow(bool onCardNow, int requested, bool expected) =>
         Assert.Equal(expected, DeviceMaster.Core.Safety.SafetyGuard.GpuOnCardControl(onCardNow, requested));
 }
+
+public sealed class FullSettingsTests : IDisposable
+{
+    private const string Token = "99887766554433221100ffeeddccbbaa";
+
+    private sealed class Host : IAgentHost
+    {
+        public ControlSettings Settings { get; } = new() { RgbR = 1 };
+        public ControlStatus Status { get; } = new() { Running = true, Mode = ControlMode.Curve };
+        public FleetProfile ReadProfile() => FleetProfile.From(Settings);
+        public bool ApplyProfile(FleetProfile profile) => profile.ApplyTo(Settings);
+        public string? ReadSettingsJson() => System.Text.Json.JsonSerializer.Serialize(Settings, AgentApi.Json);
+        public IReadOnlyList<string>? PatchSettings(string patchJson, out bool invalid) => ConfigPatcher.ApplyPatch(Settings, patchJson, out invalid);
+    }
+
+    private readonly Host _agent = new();
+    private readonly HttpListener _listener = new();
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), $"dm-full-{Guid.NewGuid():N}");
+    private readonly FleetHub _hub;
+
+    public FullSettingsTests()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        _listener.Prefixes.Add($"http://localhost:{port}/");
+        _listener.Start();
+        var api = new AgentApi(_agent, Token);
+        new Thread(() =>
+        {
+            while (_listener.IsListening)
+            {
+                try
+                {
+                    api.TryHandle(_listener.GetContext());
+                }
+                catch
+                {
+                    break;
+                }
+            }
+        }) { IsBackground = true }.Start();
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "t"), Token);
+        _hub = new FleetHub(new HubConfig { Agents = [new HubAgent { Name = "A", Url = $"http://localhost:{port}", TokenFile = Path.Combine(_dir, "t") }] });
+    }
+
+    [Fact]
+    public async Task TheHubReadsAServersWholeSettings()
+    {
+        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Get, "settings");
+        Assert.Equal(200, status);
+        Assert.Contains("\"RgbR\":1", body);
+    }
+
+    [Fact]
+    public async Task APagePatchReachesTheServerThroughItsClamps()
+    {
+        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"pumpDuty":10,"rgbR":200}""");
+        Assert.Equal(200, status);
+        Assert.Contains("rgbR=200", body);
+        Assert.Equal(200, _agent.Settings.RgbR);
+        Assert.Equal(DeviceMaster.Core.Safety.SafetyLimits.PumpMinimumDutyPercent, _agent.Settings.PumpDutyPercent);
+    }
+
+    [Fact]
+    public async Task AnUnknownServerOrADeadOneIsReported()
+    {
+        Assert.Equal(404, (await _hub.ForwardAsync("nope", HttpMethod.Get, "settings")).Status);
+        using var dead = new FleetHub(new HubConfig { Agents = [new HubAgent { Name = "B", Url = "http://localhost:1", TokenFile = Path.Combine(_dir, "t") }] });
+        Assert.Equal(502, (await dead.ForwardAsync("B", HttpMethod.Get, "settings")).Status);
+    }
+
+    public void Dispose()
+    {
+        _hub.Dispose();
+        _listener.Stop();
+        _listener.Close();
+        Directory.Delete(_dir, recursive: true);
+    }
+}
