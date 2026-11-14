@@ -8,8 +8,8 @@ using DeviceMaster.Sensors.Linux;
 namespace DeviceMaster.App.Headless;
 
 /// <summary>
-/// The non-Corsair hardware of an air-cooled box: motherboard fan headers (Super I/O hwmon),
-/// the ASUS Aura LED controller, and the Turzx 8.8" dashboard.
+/// The non-Corsair hardware of an air-cooled AI box: motherboard fan headers (Super I/O hwmon),
+/// the ASUS Aura LED controller, the Turzx 8.8" dashboard and the local LLM status it shows.
 /// Every piece is optional and absent hardware is simply skipped.
 /// </summary>
 public sealed partial class HeadlessLoop
@@ -17,6 +17,7 @@ public sealed partial class HeadlessLoop
     private const int MotherboardRefreshTicks = 30;
     private const int TurzxFrameMs = 3_000;          // a full 480×1920 serial push takes ~2.3 s
     private const int TurzxRetryMs = 15_000;
+    private const int StrataPollMs = 2_000;
     private const int GpuFanPollMs = 2_000;
 
     // motherboard fan headers
@@ -30,14 +31,21 @@ public sealed partial class HeadlessLoop
     private long _auraRetryAt;
     private string _auraSummary = "Aura: not opened yet";
 
+    // local LLM status (polled off the tick)
+    private StrataStatus? _strata;
+    private volatile LlmStatus? _llm;
+    private Thread? _strataThread;
+
     // Turzx dashboard (own thread: a frame push takes seconds)
     private Thread? _turzxThread;
     private readonly AutoResetEvent _turzxWake = new(false);
     private volatile TurzxDashboardData? _dashboard;
 
-    // GPU fan RPM (polled off the tick; nvidia-smi has percent only)
+    // GPU fan speed, polled off the tick on its own thread (every machine, LLM server or not):
+    // percent from nvidia-smi (the LLM server's GPU figures have none), RPM from NVML
     private Thread? _gpuFanThread;
-    private int? _gpuFanRpm;          // NVML
+    private double? _gpuFanPercent;
+    private int? _gpuFanRpm;
     private NvmlFans? _nvmlFans;
     private long _nvmlRetryAt;
 
@@ -45,6 +53,8 @@ public sealed partial class HeadlessLoop
     {
         _turzxThread = new Thread(() => RunTurzx(token)) { IsBackground = true, Name = "DeviceMaster Turzx dashboard" };
         _turzxThread.Start();
+        _strataThread = new Thread(() => RunStrata(token)) { IsBackground = true, Name = "DeviceMaster LLM status" };
+        _strataThread.Start();
         _gpuFanThread = new Thread(() => RunGpuFan(token)) { IsBackground = true, Name = "DeviceMaster GPU fan" };
         _gpuFanThread.Start();
     }
@@ -53,8 +63,10 @@ public sealed partial class HeadlessLoop
     {
         _turzxWake.Set();
         _turzxThread?.Join(TimeSpan.FromSeconds(8));
+        _strataThread?.Join(TimeSpan.FromSeconds(4));
         _gpuFanThread?.Join(TimeSpan.FromSeconds(4));
         _turzxThread = null;
+        _strataThread = null;
         _gpuFanThread = null;
     }
 
@@ -357,7 +369,38 @@ public sealed partial class HeadlessLoop
         return lines;
     }
 
-    // ---------- GPU fan RPM ----------
+    // ---------- local LLM status (restored for the AI server's screen, #72) ----------
+
+    private void RunStrata(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            var cfg = _config;
+            if (cfg.StrataUrl is { Length: > 0 } url)
+            {
+                try
+                {
+                    _strata ??= new StrataStatus(url, StrataStatus.ReadKeyFile(cfg.StrataKeyFile));
+                    _llm = _strata.ReadAsync(token).GetAwaiter().GetResult() ?? _llm;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch
+                {
+                    // server down or restarting: the dashboard shows it offline once the reading ages out
+                }
+            }
+
+            token.WaitHandle.WaitOne(StrataPollMs);
+        }
+
+        _strata?.Dispose();
+        _strata = null;
+    }
+
+    // ---------- GPU fan speed ----------
 
     private void RunGpuFan(CancellationToken token)
     {
@@ -365,6 +408,8 @@ public sealed partial class HeadlessLoop
         {
             try
             {
+                var cfg = _config;
+                _gpuFanPercent = File.Exists(cfg.NvidiaSmiPath) ? NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath)?.FanPercent : null;
                 _gpuFanRpm = ReadGpuFanRpm();
             }
             catch
@@ -390,15 +435,41 @@ public sealed partial class HeadlessLoop
         return _nvmlFans?.ReadRpm();
     }
 
+    /// <summary>A recent LLM reading (≤ 10 s old), or null.</summary>
+    private LlmStatus? FreshLlm() =>
+        _llm is { } llm && DateTime.UtcNow - llm.ReadAtUtc < TimeSpan.FromSeconds(10) ? llm : null;
+
+    /// <summary>GPU figures from the LLM server's own sampling, when it's running (no nvidia-smi needed in the container).</summary>
+    private GpuReading? GpuFromLlm() =>
+        FreshLlm() is { GpuTempC: { } temp } llm
+            ? new GpuReading(llm.GpuName ?? "GPU", temp, llm.GpuUtil, llm.GpuPowerW, llm.GpuMemUsedMb, llm.GpuMemTotalMb)
+            : null;
+
     // ---------- Turzx 8.8" dashboard ----------
 
     /// <summary>Builds the dashboard snapshot from this tick's status (rendered and pushed by the Turzx thread).</summary>
-    private void UpdateDashboard(ControlStatus status)
+    private void UpdateDashboard(HeadlessConfig cfg, ControlStatus status)
     {
+        var llm = FreshLlm();
         var fan = status.Devices.FirstOrDefault(d => d.Family == "motherboard" && d.Rpm is > 0)
             ?? status.Devices.FirstOrDefault(d => !d.IsPump && !d.IsScreen && d.Rpm is > 0);
         _dashboard = new TurzxDashboardData
         {
+            HasLlm = cfg.StrataUrl is { Length: > 0 },
+            LlmReachable = llm is not null,
+            LlmModel = llm?.Model ?? "",
+            LlmState = llm?.State ?? "offline",
+            LlmPhase = llm?.Phase,
+            LlmRunning = llm?.Running ?? 0,
+            LlmTokPerSec = llm?.TokPerSec,
+            LlmTokHistory = llm?.TokHistory ?? [],
+            LlmSlots = llm?.Slots.Select(s => new DashboardSlot(s.State, s.HeldTokens)).ToList() ?? [],
+            LlmQueued = llm?.Queued ?? 0,
+            LlmReply = llm?.Reply is { } reply
+                ? new DashboardReply(reply.Live, reply.Reading, reply.Seconds, reply.CacheHitPercent, reply.GuessHitPercent, reply.Written)
+                : null,
+            LlmContextUsed = llm?.ContextUsed,
+            LlmContextMax = llm?.ContextMax,
             GpuName = status.GpuName ?? "GPU",
             GpuTempC = status.GpuTemperatureC,
             GpuUtil = status.GpuLoadPercent,

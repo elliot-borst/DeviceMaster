@@ -12,10 +12,11 @@ designed to run in a Docker container on a server.
 | Pump / radiator LCD (JPEG frames, brightness) | yes | **yes** (same HID session) |
 | GPU RGB via ENE controller (ASUS boards, i2c 0x67) | yes | **yes** (raw i2c-dev, repeated starts) |
 | CPU/GPU temperature | LHM / nvidia | kernel hwmon (k10temp/coretemp) + nvidia-smi |
-| Turzx 8.8" screen (system dashboard: GPU + fans, CPU + RAM + cooler) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
+| Turzx 8.8" screen (system dashboard: local LLM, GPU + fans, CPU + RAM + cooler) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
 | ASUS AURA mainboard LED controller (static / rainbow) | yes | **yes** (HidSharp → hidraw) |
 | Motherboard fan headers (Nuvoton NCT67xx Super I/O) | yes (LHM) | **yes** (hwmon `pwmN`; only headers spinning at start-up; never below 30 %; BIOS curve restored on stop / mode Off) |
 | RGB DRAM via ENE controllers (chipset SMBus) | yes | **yes** (`/dev/i2c-N` SMBus ioctls on PIIX4/I801 adapters) |
+| Local LLM status (Strata `/metrics`, read-only) | — | **yes** (model, live speed, slots; also the GPU figures) |
 | Lian Li SL V3 / PresentMon | yes | not ported |
 
 ## Projects
@@ -174,9 +175,10 @@ manual duty, pump duty, RGB, LCD), plus:
   temperature is simply unavailable (failsafe engages if you selected GPU as the curve
   source — use Coolant or CPU).
 
-## Air-cooled boxes: motherboard fans, Aura, Turzx
+## Air-cooled boxes: motherboard fans, Aura, Turzx, local LLM
 
 Config keys (see `HeadlessConfig`): `MotherboardFans` (default true), `AuraEnabled` (default true),
+`StrataUrl` + `StrataKeyFile` (env-style file with `API_KEY=`; only `GET /metrics` is ever sent),
 `DisplayName` (shown on the screen). The Turzx screen follows `Control.TurzxScreen`
 (`Unmanaged` / `Off` / `Metrics`), `TurzxBrightness` and `TurzxRotation` (180 = mounted upside down).
 Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
