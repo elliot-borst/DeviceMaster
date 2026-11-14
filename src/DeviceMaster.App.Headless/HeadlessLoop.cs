@@ -478,7 +478,10 @@ public sealed partial class HeadlessLoop : IDisposable
                 GpuTemperature = SensorValidity.IsPlausibleTemperature(gpu?.TemperatureC),
                 CoolantTemperature = SensorValidity.IsPlausibleTemperature(coolant),
             },
-            Devices = readings,
+            // Corsair channels are read before the duty is decided (the coolant feeds the curve), so
+            // their duty is filled in here: what the fans and pump were actually asked for (#66)
+            Devices = readings.Select(r => r.Family != "corsair-link" || r.IsScreen ? r
+                : r with { AppliedDutyPercent = r.IsPump ? pumpDuty ?? 0 : duty }).ToList(),
             Warnings = warnings,
             Notes = MotherboardFanNotes(),
             RgbDiagnostics = RgbDiagnostics(),
