@@ -8,6 +8,7 @@ using DeviceMaster.Devices.EneRgb;
 using DeviceMaster.Devices.LianLi;
 using DeviceMaster.Devices.MsiMysticLight;
 using DeviceMaster.Devices.Nvidia;
+using DeviceMaster.Devices.Vkb;
 using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Sensors;
 
@@ -138,6 +139,15 @@ public sealed class ControlLoop : IDisposable
     private Slv3Controller? _slv3;
     private AuraController? _aura;
     private MysticLightController? _msi;
+
+    // VKB joysticks (#76): the head LED follows the fleet lighting. Overrides are volatile (a
+    // replugged stick shows its own profile), so they are re-sent every 30 s.
+    private const byte VkbHeadLed = 10;            // the light on top of a Gladiator NXT EVO head
+    private const int VkbRefreshMs = 30_000;
+    private readonly Dictionary<string, VkbController> _vkb = [];
+    private long _vkbScanDue;
+    private string? _appliedVkbRgb;
+    private long _vkbRefreshDue;
     private long _msiOpenRetryAt; // a board we won't drive (or a failed open) is retried once a minute, not every tick
     private string? _msiOpenError;
     private LhmSensorSource? _lhm;
@@ -832,6 +842,25 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
+        if (Environment.TickCount64 >= _vkbScanDue)
+        {
+            _vkbScanDue = Environment.TickCount64 + 15_000; // sticks get plugged in and out
+            foreach (var device in VkbController.FindDevices().Where(d => !_vkb.ContainsKey(d.DevicePath)))
+            {
+                try
+                {
+                    var stick = VkbController.Open(device);
+                    _vkb[device.DevicePath] = stick;
+                    _appliedVkbRgb = null; // paint the new one
+                    _log?.Invoke($"control: opened {stick.Name.Trim()} ({stick.UsbId}) — head LED follows the lighting");
+                }
+                catch (Exception ex)
+                {
+                    _log?.Invoke($"control: VKB device not opened: {ex.Message}");
+                }
+            }
+        }
+
         if (_msi is null && Environment.TickCount64 >= _msiOpenRetryAt
             && MysticLightController.FindDevices().FirstOrDefault() is { } msiDevice)
         {
@@ -946,6 +975,12 @@ public sealed class ControlLoop : IDisposable
         _aura = null;
 
         _msi?.Dispose(); // direct colours stay until the board resets (nothing is saved to its flash)
+        foreach (var stick in _vkb.Values)
+        {
+            stick.Dispose(); // the override stays until the stick is power-cycled
+        }
+
+        _vkb.Clear();
         _msi = null;
 
         _ramScanner?.Dispose(); // ENE colors are saved to the controllers' flash
@@ -1115,6 +1150,40 @@ public sealed class ControlLoop : IDisposable
                 _aura.Dispose();
                 _aura = null; // reopen next tick
             }
+        }
+
+        if (_vkb.Count > 0 && (rainbow || _appliedVkbRgb != key || Environment.TickCount64 >= _vkbRefreshDue))
+        {
+            // VKB LEDs have 8 levels per channel: rainbow steps the hue once a tick
+            var (vr, vg, vb) = (r, g, b);
+            if (rainbow)
+            {
+                var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(settings.RgbSpeed) % 1.0;
+                var frame = DeviceMaster.Core.Lighting.RainbowEffect.Frame(1, phase, bright);
+                (vr, vg, vb) = (frame[0], frame[1], frame[2]);
+            }
+
+            foreach (var (path, stick) in _vkb.ToList())
+            {
+                try
+                {
+                    stick.SetStatic([VkbHeadLed], vr, vg, vb);
+                }
+                catch (Exception ex)
+                {
+                    _log?.Invoke($"VKB {stick.Name.Trim()} unplugged or failed: {ex.Message}");
+                    stick.Dispose();
+                    _vkb.Remove(path);
+                }
+            }
+
+            if (_appliedVkbRgb != key && _vkb.Count > 0)
+            {
+                _log?.Invoke($"RGB applied on {_vkb.Count} VKB stick(s)");
+            }
+
+            _appliedVkbRgb = key;
+            _vkbRefreshDue = Environment.TickCount64 + VkbRefreshMs;
         }
 
         if (_msi is not null && (rainbow || _appliedMsiRgb != key || Environment.TickCount64 >= _msiRefreshDue))

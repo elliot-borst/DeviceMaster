@@ -39,6 +39,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.Lcd.Skia", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.Devices.MsiMysticLight", "src\DeviceMaster.Devices.MsiMysticLight\DeviceMaster.Devices.MsiMysticLight.csproj", "{07E34B16-163F-4789-8A03-C0DE7FDF5FF3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceMaster.Devices.Vkb", "src\DeviceMaster.Devices.Vkb\DeviceMaster.Devices.Vkb.csproj", "{6A4EDA04-ED14-45EC-A3B4-737737BAC341}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -253,6 +255,18 @@ Global
 		{07E34B16-163F-4789-8A03-C0DE7FDF5FF3}.Release|x64.Build.0 = Release|Any CPU
 		{07E34B16-163F-4789-8A03-C0DE7FDF5FF3}.Release|x86.ActiveCfg = Release|Any CPU
 		{07E34B16-163F-4789-8A03-C0DE7FDF5FF3}.Release|x86.Build.0 = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|x64.Build.0 = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Debug|x86.Build.0 = Debug|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|x64.ActiveCfg = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|x64.Build.0 = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|x86.ActiveCfg = Release|Any CPU
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -275,5 +289,6 @@ Global
 		{69581852-723F-4F9B-A391-694B470C00A0} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{35440D9D-8A57-4DA2-AEB3-6B2B2A8536D4} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{07E34B16-163F-4789-8A03-C0DE7FDF5FF3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{6A4EDA04-ED14-45EC-A3B4-737737BAC341} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

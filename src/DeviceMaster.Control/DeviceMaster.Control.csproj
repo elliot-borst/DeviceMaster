@@ -14,6 +14,7 @@
     <ProjectReference Include="..\DeviceMaster.Devices.AsusAura\DeviceMaster.Devices.AsusAura.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.MsiMysticLight\DeviceMaster.Devices.MsiMysticLight.csproj" />
     <ProjectReference Include="..\DeviceMaster.Devices.Nvidia\DeviceMaster.Devices.Nvidia.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.Vkb\DeviceMaster.Devices.Vkb.csproj" />
   </ItemGroup>
 
 </Project>

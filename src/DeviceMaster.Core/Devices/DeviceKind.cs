@@ -24,4 +24,7 @@ public enum DeviceKind
 
     /// <summary>Motherboard RGB controller (e.g. ASUS Aura). Recognized so we can explicitly ignore it.</summary>
     MotherboardRgbController,
+
+    /// <summary>Desk peripheral with controllable lights (e.g. VKB joystick LEDs).</summary>
+    PeripheralLights,
 }
