@@ -1553,13 +1553,20 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_lcdNodes.Count == 0)
+        // open every fan screen that isn't open: at start, and again after a write failure dropped
+        // one (#78 — this used to run only with NO screen open, so one failed screen among eleven was
+        // never reopened and kept showing its picture through Lights out/Blackout)
+        if (_lcdNodes.Count == 0 || Environment.TickCount64 >= _lcdReopenDue)
         {
-            foreach (var (path, serial) in Slv3LcdNode.FindNodes())
+            _lcdReopenDue = Environment.TickCount64 + 15_000;
+            var openBefore = _lcdNodes.Count;
+            foreach (var (path, serial) in Slv3LcdNode.FindNodes().Where(n => _lcdNodes.All(o => o.Serial != n.Serial)))
             {
                 try
                 {
                     _lcdNodes.Add(Slv3LcdNode.Open(path, serial));
+                    _appliedLcd.Remove(serial); // re-apply the current mode to it
+                    _appliedLcdBrightness.Remove(serial);
                 }
                 catch (Exception ex)
                 {
@@ -1567,9 +1574,11 @@ public sealed class ControlLoop : IDisposable
                 }
             }
 
-            if (_lcdNodes.Count > 0)
+            if (_lcdNodes.Count > openBefore)
             {
-                _log?.Invoke($"control: opened {_lcdNodes.Count} fan LCD node(s)");
+                _log?.Invoke(openBefore == 0
+                    ? $"control: opened {_lcdNodes.Count} fan LCD node(s)"
+                    : $"control: reopened {_lcdNodes.Count - openBefore} fan LCD node(s) ({_lcdNodes.Count} open)");
             }
         }
 
@@ -1623,9 +1632,11 @@ public sealed class ControlLoop : IDisposable
             catch (Exception ex)
             {
                 warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
+                _log?.Invoke($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening in ~10 s");
                 node.Dispose();
                 _lcdNodes.Remove(node);
                 _lcdRetryAt = Environment.TickCount64 + 10_000;
+                _lcdReopenDue = Math.Min(_lcdReopenDue, Environment.TickCount64 + 10_000);
             }
         }
 
@@ -2101,6 +2112,7 @@ public sealed class ControlLoop : IDisposable
     private long _lcdMetricsDue;
     private readonly Dictionary<string, string> _lcdShownKey = [];
     private long _fanLcdBatchDue;
+    private long _lcdReopenDue;
 
     private void StreamLcdMetrics(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
     {
