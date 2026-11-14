@@ -2624,9 +2624,22 @@ public sealed class ControlLoop : IDisposable
                         hub.SerialNumber,
                         channel.Channel));
                 }
+
+                _hubTimeoutStreak.Remove(hub.SerialNumber); // a whole clean pass: the hub is fine
+            }
+            catch (Exception ex) when (IsTransientTimeout(ex)
+                && (_hubTimeoutStreak[hub.SerialNumber] = _hubTimeoutStreak.GetValueOrDefault(hub.SerialNumber) + 1) < HubTimeoutsBeforeDrop)
+            {
+                // One missed reply (a 500 ms read timeout) used to close the session — and closing
+                // puts the hub back in hardware mode, so the pump reservoir flashed its built-in
+                // rainbow for the ~10 s until rediscovery reopened it (#74). The hub keeps the duties
+                // already written, so ride out a couple of timeouts on the open session instead.
+                warnings.Add($"Link hub {hub.SerialNumber[..8]}… missed a reply ({ex.Message}) — retrying next tick");
+                _log?.Invoke($"Link hub {hub.SerialNumber[..8]}… missed a reply ({ex.Message}) — keeping the session, retrying next tick");
             }
             catch (Exception ex)
             {
+                _hubTimeoutStreak.Remove(hub.SerialNumber);
                 warnings.Add($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
                 // also into the log — this removal used to be invisible post-mortem, and on a
                 // multi-hub rig it silently orphaned the pump hub for the rest of the session
@@ -2643,6 +2656,15 @@ public sealed class ControlLoop : IDisposable
             _ticksSinceCorsairWrite = 0;
         }
     }
+
+    // a hub is only closed after this many ticks in a row ended in a read/write timeout (#74)
+    private const int HubTimeoutsBeforeDrop = 3;
+    private readonly Dictionary<string, int> _hubTimeoutStreak = [];
+
+    /// <summary>A missed reply, as opposed to a broken session (device gone, protocol error).</summary>
+    public static bool IsTransientTimeout(Exception ex) =>
+        ex is TimeoutException || ex.InnerException is TimeoutException
+        || ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, bool> _slv3TelemetryFresh = [];
     private readonly Dictionary<string, bool> _slv3BoundState = [];
