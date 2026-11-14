@@ -1253,6 +1253,7 @@ public sealed class ControlLoop : IDisposable
                 _slv3ConfirmSendsLeft = 1;
             }
             var sentAny = false;
+            var roundStarted = Environment.TickCount64;
             var uploads = new List<(Slv3Device Device, List<byte[]> Payloads)>();
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
             {
@@ -1280,13 +1281,18 @@ public sealed class ControlLoop : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    warnings.Add($"RGB write to SL V3 {device.MacText[..4]} failed: {ex.Message}");
+                    warnings.Add($"RGB write to SL V3 {device.MacText[..4]} failed: {ex.Message}"); _log?.Invoke($"SL V3 colour send to group {device.MacText[..4]} failed: {ex.Message}"); // into the log too, for post-mortems (#64)
                 }
             }
 
             if (uploads.Count > 0)
             {
                 QueueSlv3Upload(new Slv3UploadJob(_slv3, key, uploads));
+            }
+
+            if (sentAny && !rainbow)
+            {
+                TrackSlv3HealSend(Environment.TickCount64 - roundStarted);
             }
 
             // The RF uplink is fire-and-forget and drops roughly one group per few changes —
@@ -1311,6 +1317,8 @@ public sealed class ControlLoop : IDisposable
                 }
                 else
                 {
+                    FinishSlv3Heal();
+
                     // 20 s steady-state refresh: one group has demonstrably weak RF reception
                     // and drops its stored effect — bound-time-to-heal beats airtime here
                     // (still nowhere near the v17 continuous-resend flood). A rainbow loop is a
@@ -1319,6 +1327,65 @@ public sealed class ControlLoop : IDisposable
                 }
             }
         }
+    }
+
+    // ---- SL V3 colour-heal log (#64) ----
+    // Fan-screen traffic drops the fans to firmware rainbow until the colour re-sends land, so
+    // each heal cycle gets ONE log line: when the screens were touched, when the first colour
+    // re-send went out, how many, and the slowest. A flash the owner sees at hh:mm:ss can then
+    // be matched to a cycle — and a slow or failed cycle is flagged on its own.
+    private const int Slv3HealSlowSendMs = 300;
+    private string? _slv3HealReason;
+    private long _slv3HealStartedAt;
+    private long _slv3HealFirstSendAt;
+    private int _slv3HealSends;
+    private long _slv3HealSlowestMs;
+
+    private void NoteSlv3Heal(string reason)
+    {
+        if (_slv3HealReason is not null)
+        {
+            return; // one cycle at a time: a push during a burst extends the same burst
+        }
+
+        _slv3HealReason = reason;
+        _slv3HealStartedAt = Environment.TickCount64;
+        _slv3HealFirstSendAt = 0;
+        _slv3HealSends = 0;
+        _slv3HealSlowestMs = 0;
+    }
+
+    private void TrackSlv3HealSend(long elapsedMs)
+    {
+        if (_slv3HealReason is null)
+        {
+            return;
+        }
+
+        if (_slv3HealFirstSendAt == 0)
+        {
+            _slv3HealFirstSendAt = Environment.TickCount64;
+        }
+
+        _slv3HealSends++;
+        _slv3HealSlowestMs = Math.Max(_slv3HealSlowestMs, elapsedMs);
+    }
+
+    private void FinishSlv3Heal()
+    {
+        if (_slv3HealReason is null)
+        {
+            return;
+        }
+
+        var first = _slv3HealFirstSendAt == 0 ? "never" : $"{_slv3HealFirstSendAt - _slv3HealStartedAt} ms";
+        var span = (Environment.TickCount64 - _slv3HealStartedAt) / 1000.0;
+        var flag = _slv3HealSends == 0 || _slv3HealSlowestMs > Slv3HealSlowSendMs || _slv3HealFirstSendAt - _slv3HealStartedAt > 2_000
+            ? " — SLOW (rainbow may have shown)"
+            : "";
+        _log?.Invoke($"SL V3 heal: {_slv3HealReason} at {DateTime.Now.AddSeconds(-span):HH:mm:ss} → colour re-sent {_slv3HealSends}× over {span:0.0} s "
+            + $"(first after {first}, slowest {_slv3HealSlowestMs} ms){flag}");
+        _slv3HealReason = null;
     }
 
     // ---- LCD screens (pump LCD + SL V3 per-fan LCDs) ----
@@ -1503,6 +1570,7 @@ public sealed class ControlLoop : IDisposable
             // the colour returns the instant the radio wakes (see Slv3LcdHealConfirms).
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
             _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
+            NoteSlv3Heal($"fan screens set to {mode}");
         }
 
         // the pump panel reasserts its own liquid-temp screen ~30 s after frames stop —
@@ -2053,6 +2121,7 @@ public sealed class ControlLoop : IDisposable
             // outlast the deaf window (see Slv3LcdHealConfirms)
             _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
             _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
+            NoteSlv3Heal("fan screens updated");
         }
     }
 
