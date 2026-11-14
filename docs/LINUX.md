@@ -224,3 +224,11 @@ forward every write to the active hub). Add to each hub's `hub.json`:
   forwarded writes. Every request needs `Authorization: Bearer <peer token>`; the token file holds
   the same random string on every hub. Each hub also needs every agent's token.
 - Without `Peers` a hub is a lone hub and always active (the previous behaviour).
+
+### On Windows (the app)
+
+The Windows app runs the same hub when `%LOCALAPPDATA%\DeviceMaster\hub\hub.json` exists (same
+format; relative `TokenFile`/`PeerTokenFile` paths resolve against that folder; state in
+`fleet-state.json` beside it). The page listens on `127.0.0.1:27080` (put `tailscale serve` in front
+for a tailnet address), the peer API on `PeerPort`, and the app adds a firewall rule allowing that
+port from Tailscale addresses only. Give it the highest priority number: it is the last resort.

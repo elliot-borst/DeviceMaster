@@ -159,6 +159,7 @@ public sealed class MainWindow : Window
         {
             ApplyControlState();
             StartAgentApi();
+            StartFleetHub(); // only when this machine is configured as a failover hub (#68 step 4)
             await RefreshDevicesAsync();
             await CheckForUpdatesAsync(auto: true);
 
@@ -1885,6 +1886,7 @@ public sealed class MainWindow : Window
             _trayIcon = null;
         }
 
+        StopFleetHub(); // a standby hub elsewhere takes over
         _agentServer?.Dispose(); // no fleet writes while shutting down
         _agentServer = null;
         _loop?.Stop(); // Corsair hubs back to hardware mode; SL V3 reverts on its own
@@ -2291,13 +2293,91 @@ public sealed class MainWindow : Window
         }
     }
 
+    // ---- fleet hub in the failover group (#68 step 4) ----
+    // Runs only when %LOCALAPPDATA%\DeviceMaster\hub\hub.json exists (same format as the Linux
+    // hubs': Self, Priority, Peers, PeerTokenFile, PeerPort, Agents with absolute TokenFile paths).
+    // Lowest in the failover order, so it only takes over when every Linux hub is down.
+    private FleetHub? _fleetHub;
+    private HubFailover? _hubFailover;
+    private DeviceMaster.Hub.HubWebServer? _hubWeb;
+    private const string HubFirewallRule = "DeviceMaster fleet hub peers";
+
+    private void StartFleetHub()
+    {
+        if (NoControl || _fleetHub is not null)
+        {
+            return;
+        }
+
+        var dir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ControlSettings.ConfigPath)!, "hub");
+        var configPath = System.IO.Path.Combine(dir, "hub.json");
+        if (!System.IO.File.Exists(configPath))
+        {
+            return; // no hub on this machine
+        }
+
+        try
+        {
+            var config = HubConfig.Load(configPath);
+            string? Resolve(string? path) => path is null ? null : System.IO.Path.IsPathRooted(path) ? path : System.IO.Path.Combine(dir, path);
+            var tokenFile = Resolve(config.PeerTokenFile);
+            var peerToken = tokenFile is not null && System.IO.File.Exists(tokenFile) ? System.IO.File.ReadAllText(tokenFile).Trim() : null;
+            if (config.Peers.Count > 0 && (config.Self is null || peerToken is null))
+            {
+                LogLine("fleet hub: hub.json has Peers but no Self or readable PeerTokenFile — not started");
+                return;
+            }
+
+            var store = new FleetStore(System.IO.Path.Combine(dir, "fleet-state.json"));
+            _fleetHub = new FleetHub(config with { Agents = config.Agents.Select(a => a with { TokenFile = Resolve(a.TokenFile)! }).ToList() }, LogLine, store: store);
+            _hubFailover = new HubFailover(config.Self ?? Environment.MachineName, config.Priority, config.Peers, store, peerToken, LogLine);
+            var hub = _fleetHub;
+            hub.IsActive = () => _hubFailover.IsActive;
+            _hubFailover.RoleChanged += role =>
+            {
+                if (role == HubRole.Active)
+                {
+                    hub.ForgetPushes(); // re-assert the fleet settings: the previous hub's pushes aren't ours to trust
+                    hub.Nudge();
+                }
+            };
+
+            _hubWeb = new DeviceMaster.Hub.HubWebServer(hub, 27080, LogLine, ["127.0.0.1"], _hubFailover, config.PeerPort);
+            hub.Start();
+            _hubFailover.Start();
+            _hubWeb.Start();
+            if (_hubFailover.HasPeers)
+            {
+                EnsureFirewallRule(HubFirewallRule, config.PeerPort, "fleet hub peers");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogLine($"fleet hub: not started ({ex.Message})");
+            StopFleetHub();
+        }
+    }
+
+    private void StopFleetHub()
+    {
+        _hubWeb?.Dispose();
+        _hubFailover?.Dispose();
+        _fleetHub?.Dispose();
+        _hubWeb = null;
+        _hubFailover = null;
+        _fleetHub = null;
+    }
+
     private const string AgentFirewallRule = "DeviceMaster fleet agent";
 
     /// <summary>
     /// Inbound allow for the agent port from Tailscale addresses only (100.64.0.0/10) — never the
     /// LAN. The app runs elevated; the installer does not, so the rule is added here, once.
     /// </summary>
-    private void EnsureAgentFirewallRule()
+    private void EnsureAgentFirewallRule() => EnsureFirewallRule(AgentFirewallRule, AgentServer.DefaultPort, "agent api");
+
+    /// <summary>Inbound allow on one TCP port from Tailscale addresses only (100.64.0.0/10), added once.</summary>
+    private void EnsureFirewallRule(string ruleName, int port, string what)
     {
         static (int Code, string Output) Netsh(string args)
         {
@@ -2316,20 +2396,20 @@ public sealed class MainWindow : Window
         {
             try
             {
-                if (Netsh($"advfirewall firewall show rule name=\"{AgentFirewallRule}\"").Code == 0)
+                if (Netsh($"advfirewall firewall show rule name=\"{ruleName}\"").Code == 0)
                 {
                     return; // already there
                 }
 
-                var (code, output) = Netsh($"advfirewall firewall add rule name=\"{AgentFirewallRule}\" dir=in action=allow "
-                    + $"protocol=TCP localport={AgentServer.DefaultPort} remoteip=100.64.0.0/10 profile=any");
+                var (code, output) = Netsh($"advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow "
+                    + $"protocol=TCP localport={port} remoteip=100.64.0.0/10 profile=any");
                 LogLine(code == 0
-                    ? $"agent api: firewall rule added (TCP {AgentServer.DefaultPort} from Tailscale addresses only)"
-                    : $"agent api: could not add the firewall rule ({output.Trim()}) — the fleet hub may not reach this machine");
+                    ? $"{what}: firewall rule added (TCP {port} from Tailscale addresses only)"
+                    : $"{what}: could not add the firewall rule ({output.Trim()}) — other machines may not reach this one");
             }
             catch (Exception ex)
             {
-                LogLine($"agent api: firewall rule check failed: {ex.Message}");
+                LogLine($"{what}: firewall rule check failed: {ex.Message}");
             }
         });
     }

@@ -1,3 +1,4 @@
+using DeviceMaster.Hub;
 using System.Text.Json;
 using DeviceMaster.App.Headless;
 using DeviceMaster.Control;
