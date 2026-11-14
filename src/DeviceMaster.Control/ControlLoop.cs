@@ -1053,6 +1053,9 @@ public sealed class ControlLoop : IDisposable
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
     private long _slv3RgbRefreshDue;
+    private long _slv3ResaveDue;
+    private const int Slv3ResaveAfterMs = 120_000;
+    private const int Slv3StaticRefreshMs = 10_000;
     private int _slv3ConfirmSendsLeft;
 
     // flash persistence is slow and endurance-limited: colors apply instantly (volatile),
@@ -1260,7 +1263,31 @@ public sealed class ControlLoop : IDisposable
         // once every surface carries the current color and it has settled, persist it so it
         // survives power cycles (Aura commit + ENE flash saves — one write per color, total)
         // (and never mid rainbow upload: SaveConfig would store the fans' half-received effect)
-        if (_persistedRgb != key && _appliedChipRgb == key && (_aura is null || _appliedAuraRgb == key) && !Slv3UploadBusy)
+        // (#80) and never while the fan radios are deaf after fan-screen traffic (a heal burst in
+        // progress): a group that misses the SaveConfig keeps the factory rainbow in its flash and
+        // shows it at every firmware hiccup. A second save follows a couple of minutes later.
+        var slv3RadiosSettled = _slv3HealReason is null && _slv3ConfirmSendsLeft == 0;
+        if (_persistedRgb == key && _slv3ResaveDue > 0 && Environment.TickCount64 >= _slv3ResaveDue && slv3RadiosSettled && !Slv3UploadBusy)
+        {
+            _slv3ResaveDue = 0;
+            lock (_slv3Gate)
+            {
+                if (_slv3 is not null && !_slv3Dead)
+                {
+                    try
+                    {
+                        _slv3.SaveConfig();
+                        _log?.Invoke("SL V3: colour saved to the fans again (confirmation for any group that missed the first save)");
+                    }
+                    catch (Exception ex)
+                    {
+                        _log?.Invoke($"SL V3 confirmation save failed: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        if (_persistedRgb != key && _appliedChipRgb == key && (_aura is null || _appliedAuraRgb == key) && !Slv3UploadBusy && slv3RadiosSettled)
         {
             if (_rgbPersistArmedFor != key)
             {
@@ -1293,6 +1320,7 @@ public sealed class ControlLoop : IDisposable
                     }
 
                     _persistedRgb = key;
+                    _slv3ResaveDue = Environment.TickCount64 + Slv3ResaveAfterMs;
                     _log?.Invoke("RGB persisted to controller flash (survives power cycles)");
                 }
                 catch (Exception ex)
@@ -1388,11 +1416,11 @@ public sealed class ControlLoop : IDisposable
                 {
                     FinishSlv3Heal();
 
-                    // 20 s steady-state refresh: one group has demonstrably weak RF reception
+                    // 10 s steady-state refresh (was 20 s; #80): one group has demonstrably weak RF reception
                     // and drops its stored effect — bound-time-to-heal beats airtime here
                     // (still nowhere near the v17 continuous-resend flood). A rainbow loop is a
                     // ~60-frame upload, so it re-sends every 2 minutes instead.
-                    _slv3RgbRefreshDue = Environment.TickCount64 + (rainbow ? 120_000 : 20_000);
+                    _slv3RgbRefreshDue = Environment.TickCount64 + (rainbow ? 120_000 : Slv3StaticRefreshMs);
                 }
             }
         }
