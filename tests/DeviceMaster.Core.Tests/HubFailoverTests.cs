@@ -208,3 +208,16 @@ public sealed class HubFailoverTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 }
+
+public class HubTimeoutToleranceTests
+{
+    [Fact]
+    public void AMissedReplyIsTransientButABrokenSessionIsNot()
+    {
+        Assert.True(ControlLoop.IsTransientTimeout(new TimeoutException()));
+        Assert.True(ControlLoop.IsTransientTimeout(new DeviceMaster.Devices.CorsairLink.LinkHubException("Operation timed out (500 ms).")));
+        Assert.True(ControlLoop.IsTransientTimeout(new IOException("read failed", new TimeoutException())));
+        Assert.False(ControlLoop.IsTransientTimeout(new IOException("The device is not connected.")));
+        Assert.False(ControlLoop.IsTransientTimeout(new DeviceMaster.Devices.CorsairLink.LinkHubException("hub answered error 0x07")));
+    }
+}
