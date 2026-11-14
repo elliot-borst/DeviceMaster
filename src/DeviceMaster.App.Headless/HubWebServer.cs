@@ -21,13 +21,27 @@ public sealed class HubWebServer : IDisposable
     private readonly Action<string> _log;
     private readonly Thread _thread;
 
+    // failover group (#68): the peer API on its own port (peer token required), and forwarding of
+    // users' writes to the active hub while this one is standby
+    private readonly HubFailover? _failover;
+    private readonly HttpListener? _peerListener;
+    private readonly Thread? _peerThread;
+
     /// <summary>Only connections from these addresses are served (null = anyone who can reach the port).</summary>
     private readonly HashSet<IPAddress>? _allowedClients;
 
-    public HubWebServer(FleetHub hub, int port, Action<string> log, IReadOnlyList<string> binds)
+    public HubWebServer(FleetHub hub, int port, Action<string> log, IReadOnlyList<string> binds, HubFailover? failover = null, int peerPort = 0)
     {
         _hub = hub;
         _log = log;
+        _failover = failover;
+        if (failover is { HasPeers: true } && peerPort > 0)
+        {
+            _peerListener = new HttpListener();
+            _peerListener.Prefixes.Add($"http://+:{peerPort}/"); // any address: every request must carry the peer token
+            _peerThread = new Thread(() => Run(_peerListener, fromPeer: true)) { IsBackground = true, Name = "hub peer web" };
+        }
+
         var hosts = binds.Count > 0 ? binds : ["127.0.0.1"];
         if (OperatingSystem.IsWindows())
         {
@@ -48,7 +62,7 @@ public sealed class HubWebServer : IDisposable
                 : hosts.Select(h => h == "localhost" ? IPAddress.Loopback : IPAddress.Parse(h)).ToHashSet();
         }
 
-        _thread = new Thread(Run) { IsBackground = true, Name = "hub web" };
+        _thread = new Thread(() => Run(_listener, fromPeer: false)) { IsBackground = true, Name = "hub web" };
     }
 
     /// <summary>Whether a client may be served under the --bind rule (loopback binds admit any loopback client).</summary>
@@ -61,17 +75,24 @@ public sealed class HubWebServer : IDisposable
     {
         _listener.Start();
         _thread.Start();
+        if (_peerListener is not null)
+        {
+            _peerListener.Start();
+            _peerThread!.Start();
+            _log($"fleet hub peer API on {string.Join(", ", _peerListener.Prefixes)} (peer token required)");
+        }
+
         _log($"fleet hub web on {string.Join(", ", _listener.Prefixes)} (page /, data /api/fleet/machines)");
     }
 
-    private void Run()
+    private void Run(HttpListener listener, bool fromPeer)
     {
-        while (_listener.IsListening)
+        while (listener.IsListening)
         {
             HttpListenerContext ctx;
             try
             {
-                ctx = _listener.GetContext();
+                ctx = listener.GetContext();
             }
             catch
             {
@@ -80,7 +101,7 @@ public sealed class HubWebServer : IDisposable
 
             try
             {
-                Handle(ctx);
+                Handle(ctx, fromPeer);
             }
             catch (Exception ex)
             {
@@ -98,12 +119,47 @@ public sealed class HubWebServer : IDisposable
         }
     }
 
-    private void Handle(HttpListenerContext ctx)
+    private void Handle(HttpListenerContext ctx, bool fromPeer)
     {
         var path = ctx.Request.Url?.AbsolutePath ?? "/";
-        if (!ClientAllowed(ctx.Request.RemoteEndPoint.Address, _allowedClients))
+        if (fromPeer)
+        {
+            if (_failover is null || !_failover.Authorized(ctx.Request.Headers["Authorization"]))
+            {
+                Send(ctx, 401, "text/plain; charset=utf-8", "peer token required");
+                return;
+            }
+
+            if (path.StartsWith("/api/hub/v1/", StringComparison.Ordinal))
+            {
+                HandlePeerApi(ctx, path["/api/hub/v1/".Length..]);
+                return;
+            }
+
+            if (IsWrite(ctx.Request.HttpMethod, path) && !_failover.IsActive)
+            {
+                // forwarded by a standby that thought this hub was active: never forward again
+                Json(ctx, 503, new { ok = false, error = "this hub is not the active one any more — try again in a moment" });
+                return;
+            }
+        }
+        else if (!ClientAllowed(ctx.Request.RemoteEndPoint.Address, _allowedClients))
         {
             Send(ctx, 403, "text/plain; charset=utf-8", "forbidden");
+            return;
+        }
+        else if (_failover is { IsActive: false } standby && IsWrite(ctx.Request.HttpMethod, path))
+        {
+            // standby: the active hub makes every change, so its state, pushes and audit stay the only ones
+            string body;
+            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+            {
+                body = reader.ReadToEnd();
+            }
+
+            var (status, type, answer) = standby.ForwardToActiveAsync(ctx.Request.HttpMethod, ctx.Request.Url?.PathAndQuery ?? path, body, User(ctx))
+                .GetAwaiter().GetResult();
+            Send(ctx, status, type, answer);
             return;
         }
 
@@ -140,6 +196,7 @@ public sealed class HubWebServer : IDisposable
                 user = User(ctx),
                 state,
                 audit = _hub.Store?.RecentAudit(20) ?? [],
+                failover = _failover is { HasPeers: true } f ? new { self = f.Self, role = f.Role.ToString(), hubs = f.Describe() } : null,
             });
             return;
         }
@@ -296,6 +353,54 @@ public sealed class HubWebServer : IDisposable
         Send(ctx, status, "application/json; charset=utf-8", body);
     }
 
+    /// <summary>Requests that change something: they only ever run on the active hub (#68).</summary>
+    public static bool IsWrite(string method, string path) =>
+        method == "PUT"
+        || (method == "POST" && path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/power", StringComparison.Ordinal))
+        || (method == "POST" && path.StartsWith("/m/", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The hub-to-hub API (#68), peer token only: <c>GET heartbeat</c> (name, priority, role, state
+    /// version), <c>GET state</c> (fleet state + audit, for a hub taking over), <c>PUT state</c> (the
+    /// active hub keeping a standby in step).
+    /// </summary>
+    private void HandlePeerApi(HttpListenerContext ctx, string route)
+    {
+        var failover = _failover!;
+        switch ((ctx.Request.HttpMethod, route))
+        {
+            case ("GET", "heartbeat"):
+                Json(ctx, 200, failover.Heartbeat());
+                return;
+            case ("GET", "state"):
+                if (failover.Export() is { } export)
+                {
+                    Json(ctx, 200, export);
+                }
+                else
+                {
+                    Json(ctx, 404, new { error = "no fleet state on this hub" });
+                }
+
+                return;
+            case ("PUT", "state"):
+            {
+                HubStateTransfer? transfer;
+                using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+                {
+                    transfer = JsonSerializer.Deserialize<HubStateTransfer>(reader.ReadToEnd(), AgentApi.Json);
+                }
+
+                Json(ctx, 200, new { ok = true, taken = transfer is not null && failover.Accept(transfer) });
+                return;
+            }
+
+            default:
+                Send(ctx, 404, "text/plain; charset=utf-8", "not found");
+                return;
+        }
+    }
+
     /// <summary>The signed-in tailnet user, from the header tailscale serve adds (null when absent).</summary>
     private static string? User(HttpListenerContext ctx) =>
         ctx.Request.Headers["Tailscale-User-Login"] is { Length: > 0 } login ? login : null;
@@ -431,6 +536,8 @@ public sealed class HubWebServer : IDisposable
         {
             _listener.Stop();
             _listener.Close();
+            _peerListener?.Stop();
+            _peerListener?.Close();
         }
         catch
         {

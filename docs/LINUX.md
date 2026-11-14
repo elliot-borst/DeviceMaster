@@ -189,3 +189,36 @@ Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
   Run under a restart policy.
 - **Clock:** the dashboard shows the container's local time; set `TZ` (the image includes tzdata).
 
+
+## Fleet hub failover (#68)
+
+The fleet hub (`devicemaster hub --config hub.json`) can run on several machines at once. One
+is **active** (pushes fleet settings, adopts changes made on a machine, sends power actions,
+keeps the audit log); the others are **standby** (they poll the agents for their own pages and
+forward every write to the active hub). Add to each hub's `hub.json`:
+
+```json
+{
+  "Self": "server-a",
+  "Priority": 1,
+  "PeerTokenFile": "/tokens/hub-peer",
+  "PeerPort": 27081,
+  "Peers": [
+    { "Name": "server-b", "Url": "http://100.x.y.z:27081", "Priority": 2 },
+    { "Name": "server-c", "Url": "http://100.x.y.w:27081", "Priority": 3 }
+  ],
+  "Agents": [ … same list on every hub … ]
+}
+```
+
+- **Election:** the reachable hub with the lowest `Priority` that has been up for 60 s (or is
+  already active) is active. A hub that stops answering heartbeats for 15 s is down, so the next
+  one takes over; when it comes back it takes over again after 60 s up (no flapping during a
+  reboot). A freshly started group waits 60 s before anyone claims.
+- **State:** the active hub pushes fleet state and the audit log to every standby (on change and
+  every 30 s); a hub becoming active first pulls the newest state a peer has. Every change is made
+  by the active hub only.
+- **Peer API** on `PeerPort`: `GET /api/hub/v1/heartbeat`, `GET`/`PUT /api/hub/v1/state`, plus
+  forwarded writes. Every request needs `Authorization: Bearer <peer token>`; the token file holds
+  the same random string on every hub. Each hub also needs every agent's token.
+- Without `Peers` a hub is a lone hub and always active (the previous behaviour).

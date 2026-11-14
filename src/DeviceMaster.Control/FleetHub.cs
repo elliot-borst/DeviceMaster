@@ -40,6 +40,24 @@ public sealed record HubConfig
     /// <summary>File holding SABnzbd's API key (mounted read-only into the hub).</summary>
     public string? SabnzbdApiKeyFile { get; init; }
 
+    /// <summary>
+    /// Failover (#68): this hub's name in the group (normally its machine name). Null, or no
+    /// <see cref="Peers"/>, = a lone hub that is always active.
+    /// </summary>
+    public string? Self { get; init; }
+
+    /// <summary>This hub's place in the failover order: lower runs first.</summary>
+    public int Priority { get; init; }
+
+    /// <summary>The other hubs in the failover group (their peer API URLs and priorities).</summary>
+    public List<HubPeer> Peers { get; init; } = [];
+
+    /// <summary>File holding the group's shared peer token (the same file content on every hub).</summary>
+    public string? PeerTokenFile { get; init; }
+
+    /// <summary>Port of this hub's peer API (hub-to-hub only; every request needs the peer token).</summary>
+    public int PeerPort { get; init; } = 27081;
+
     public static HubConfig Load(string path) =>
         JsonSerializer.Deserialize<HubConfig>(File.ReadAllText(path), AgentApi.Json) ?? new HubConfig();
 }
@@ -170,6 +188,22 @@ public sealed class FleetHub : IDisposable
 
     /// <summary>The fleet settings store (null = read-only hub).</summary>
     public FleetStore? Store => _store;
+
+    /// <summary>Whether this hub is the active one of its failover group (#68); a lone hub always is.</summary>
+    public Func<bool> IsActive { get; set; } = () => true;
+
+    /// <summary>
+    /// Forgets what was pushed to each machine, so the next round pushes the fleet settings again —
+    /// for a hub that has just become active and can't know what the previous one sent.
+    /// </summary>
+    public void ForgetPushes()
+    {
+        lock (_gate)
+        {
+            _pushed.Clear();
+            _baseline.Clear();
+        }
+    }
 
     /// <summary>Every machine, in configuration order.</summary>
     public IReadOnlyList<MachineSnapshot> Machines
@@ -318,7 +352,8 @@ public sealed class FleetHub : IDisposable
             status = await Get<ControlStatus>(agent, token, "status");
             profile = (await Get<ProfileAnswer>(agent, token, "profile"))?.Profile;
 
-            if (_store?.State is { Managed.Count: > 0 } state && profile is not null)
+            // only the active hub of a failover group (#68) pushes and adopts; standbys just watch
+            if (IsActive() && _store?.State is { Managed.Count: > 0 } state && profile is not null)
             {
                 state = AdoptLocalChanges(agent.Name, state, profile);
                 var desired = state.DesiredFor(agent.Name, profile);

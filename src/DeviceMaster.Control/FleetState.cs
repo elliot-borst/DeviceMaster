@@ -238,6 +238,30 @@ public sealed class FleetStore
         }
     }
 
+    /// <summary>
+    /// Takes over a peer hub's state (#68 failover): kept only when its version is newer than ours,
+    /// saved atomically, and the audit log replaced by the peer's (oldest first) so whichever hub is
+    /// active shows the same history. Returns whether anything changed.
+    /// </summary>
+    public bool Replace(FleetState state, IReadOnlyList<string> audit)
+    {
+        lock (_gate)
+        {
+            if (state.Version <= _state.Version)
+            {
+                return false;
+            }
+
+            var tmp = _path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(state, AgentApi.Json));
+            File.Move(tmp, _path, overwrite: true);
+            File.WriteAllLines(_auditPath + ".tmp", audit);
+            File.Move(_auditPath + ".tmp", _auditPath, overwrite: true);
+            _state = state;
+            return true;
+        }
+    }
+
     /// <summary>The most recent audit entries, newest first.</summary>
     public IReadOnlyList<string> RecentAudit(int count)
     {

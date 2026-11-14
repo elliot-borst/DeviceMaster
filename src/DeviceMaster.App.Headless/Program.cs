@@ -634,10 +634,33 @@ internal static class Program
         // fleet settings (phase 4) live beside hub.json unless --state says otherwise; audit log next to it
         var statePath = GetOption(args, "--state")
             ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath)) ?? ".", "fleet-state.json");
-        using var hub = new FleetHub(HubConfig.Load(configPath), log, store: new FleetStore(statePath));
-        using var web = new HubWebServer(hub, port, log, binds);
+        var config = HubConfig.Load(configPath);
+        var store = new FleetStore(statePath);
+        using var hub = new FleetHub(config, log, store: store);
+
+        // failover group (#68): with peers, this hub only pushes/adopts/powers while it's the active one
+        var peerToken = config.PeerTokenFile is { } tokenFile && File.Exists(tokenFile) ? File.ReadAllText(tokenFile).Trim() : null;
+        if (config.Peers.Count > 0 && (config.Self is null || peerToken is null))
+        {
+            Console.WriteLine("hub: Peers needs Self and a readable PeerTokenFile");
+            return 1;
+        }
+
+        using var failover = new HubFailover(config.Self ?? Environment.MachineName, config.Priority, config.Peers, store, peerToken, log);
+        hub.IsActive = () => failover.IsActive;
+        failover.RoleChanged += role =>
+        {
+            if (role == HubRole.Active)
+            {
+                hub.ForgetPushes(); // re-push the fleet settings: the previous hub's pushes aren't ours to trust
+                hub.Nudge();
+            }
+        };
+
+        using var web = new HubWebServer(hub, port, log, binds, failover, config.PeerPort);
         SignalWatcher.Install();
         hub.Start();
+        failover.Start();
         web.Start();
         while (!SignalWatcher.StopRequested)
         {
