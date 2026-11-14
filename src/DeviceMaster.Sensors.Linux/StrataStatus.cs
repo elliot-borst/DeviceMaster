@@ -1,0 +1,215 @@
+using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text.Json;
+
+namespace DeviceMaster.Sensors.Linux;
+
+/// <summary>One serving slot (conversation) of a local LLM server.</summary>
+public sealed record LlmSlot(int Id, string State, int HeldTokens);
+
+/// <summary>
+/// One reply: the one being worked on (<paramref name="Live"/>) or the newest finished one.
+/// <paramref name="Seconds"/> is the wait before the first word (while still reading: the time so far).
+/// </summary>
+public sealed record LlmReply(bool Live, bool Reading, double? Seconds, double? CacheHitPercent, double? GuessHitPercent, int? Written);
+
+/// <summary>What the dashboard shows about a local LLM server, from Strata's <c>/metrics</c>.</summary>
+public sealed record LlmStatus(
+    string Model,
+    string State,
+    double? TokPerSec,
+    IReadOnlyList<LlmSlot> Slots,
+    int Queued,
+    long Requests,
+    long OutputTokens,
+    IReadOnlyList<double> TokHistory,
+    double? GpuUtil,
+    double? GpuTempC,
+    double? GpuPowerW,
+    double? GpuMemUsedMb,
+    double? GpuMemTotalMb,
+    string? GpuName,
+    DateTime ReadAtUtc,
+    int Running = 0,          // conversations being worked on right now (slots + outside them)
+    int OutsideSlots = 0,     // single conversations run outside the batch slots (Strata's solo path)
+    string? Phase = null,     // what the model is doing: "thinking", "answering", "writing a tool call: …"
+    int? PromptTokens = null,
+    LlmReply? Reply = null,           // the current reply, else the last one
+    int? ContextUsed = null,          // tokens the current conversation holds (the last one while idle)
+    int? ContextMax = null,           // the model's context limit
+    double? GpuPowerLimitW = null);
+
+/// <summary>
+/// Read-only client for a Strata (llama.cpp-style) server's JSON <c>/metrics</c>: model, live
+/// state and speed, per-slot activity, request totals and the GPU figures Strata already samples.
+/// Only ever GETs that one endpoint (never chat/completions), with the server's bearer key.
+/// </summary>
+public sealed class StrataStatus : IDisposable
+{
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(3) };
+    private readonly string _metricsUrl;
+
+    /// <param name="baseUrl">e.g. http://127.0.0.1:8081</param>
+    /// <param name="apiKey">bearer key; null when the server needs none</param>
+    public StrataStatus(string baseUrl, string? apiKey)
+    {
+        _metricsUrl = baseUrl.TrimEnd('/') + "/metrics";
+        if (!string.IsNullOrEmpty(apiKey))
+        {
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+    }
+
+    /// <summary>Reads <c>API_KEY=…</c> (or <c>STRATA_API_KEY=…</c>) from an env-style file; null if absent.</summary>
+    public static string? ReadKeyFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            return null;
+        }
+
+        foreach (var line in File.ReadLines(path))
+        {
+            var trimmed = line.Trim();
+            foreach (var name in new[] { "API_KEY=", "STRATA_API_KEY=" })
+            {
+                if (trimmed.StartsWith(name, StringComparison.Ordinal))
+                {
+                    return trimmed[name.Length..].Trim().Trim('"', '\'');
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public async Task<LlmStatus?> ReadAsync(CancellationToken token)
+    {
+        using var response = await _http.GetAsync(_metricsUrl, token);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        return Parse(await response.Content.ReadAsStringAsync(token), DateTime.UtcNow);
+    }
+
+    /// <summary>Pure parser for the <c>/metrics</c> JSON (tolerant of missing fields).</summary>
+    public static LlmStatus Parse(string json, DateTime nowUtc)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var engine = Obj(root, "engine");
+        var live = Obj(root, "live");
+        var totals = Obj(root, "totals");
+        var hw = Obj(root, "hardware");
+        var hwStatic = Obj(root, "hardware_static");
+        var history = Obj(root, "history");
+
+        var slots = new List<LlmSlot>();
+        if (live is { } l && l.TryGetProperty("slots", out var s) && s.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var slot in s.EnumerateArray())
+            {
+                slots.Add(new LlmSlot((int)(Num(slot, "slot") ?? slots.Count), Str(slot, "state") ?? "?", (int)(Num(slot, "held_tokens") ?? 0)));
+            }
+        }
+
+        var tokHistory = new List<double>();
+        if (history is { } h && h.TryGetProperty("tok_s", out var th) && th.ValueKind == JsonValueKind.Array)
+        {
+            tokHistory.AddRange(th.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.Number).Select(v => v.GetDouble()));
+        }
+
+        return new LlmStatus(
+            Model: (engine is { } e ? Str(e, "model") : null) ?? "model",
+            State: (live is { } l2 ? Str(l2, "state") : null) ?? "unknown",
+            TokPerSec: live is { } l3 ? Num(l3, "tok_s") : null,
+            Slots: slots,
+            Queued: (int)((live is { } l4 ? (Num(l4, "queued") ?? 0) + (Num(l4, "waiting") ?? 0) : 0)),
+            Requests: (long)(totals is { } t ? Num(t, "requests") ?? 0 : 0),
+            OutputTokens: (long)(totals is { } t2 ? Num(t2, "output_tokens") ?? 0 : 0),
+            TokHistory: tokHistory,
+            GpuUtil: hw is { } a ? Num(a, "gpu_util") : null,
+            GpuTempC: hw is { } b ? Num(b, "gpu_temp") : null,
+            GpuPowerW: hw is { } c ? Num(c, "gpu_power") : null,
+            GpuMemUsedMb: hw is { } d && Num(d, "gpu_mem_used") is { } used ? used / 1048576.0 : null,
+            GpuMemTotalMb: hw is { } f && Num(f, "gpu_mem_total") is { } total ? total / 1048576.0 : null,
+            GpuName: hwStatic is { } g ? Str(g, "gpu_name") : null,
+            ReadAtUtc: nowUtc,
+            Running: (int)(live is { } l5 ? Num(l5, "running") ?? 0 : 0),
+            OutsideSlots: (int)(live is { } l6 ? Num(l6, "outside_slots") ?? 0 : 0),
+            Phase: live is { } l7 ? Str(l7, "phase") : null,
+            PromptTokens: live is { } l8 && (Num(l8, "prompt_total") ?? Num(l8, "prompt_tokens")) is { } pt ? (int)pt : null,
+            Reply: ParseReply(root, live),
+            ContextUsed: ContextInUse(root, live),
+            ContextMax: engine is { } e2 && (Num(e2, "context") ?? Num(e2, "max_context")) is { } cm ? (int)cm : null,
+            GpuPowerLimitW: hw is { } k && Num(k, "gpu_power_limit") is { } limit && limit > 0 ? limit : null);
+    }
+
+    /// <summary>
+    /// The conversation being worked on (prompt + tokens written so far), or while idle the most
+    /// recent one (<c>requests[0]</c> is the newest).
+    /// </summary>
+    private static int? ContextInUse(JsonElement root, JsonElement? live)
+    {
+        if (live is { } l && Num(l, "prompt_total") is { } prompt)
+        {
+            return (int)(prompt + (Num(l, "generated") ?? 0));
+        }
+
+        if (root.TryGetProperty("requests", out var requests) && requests.ValueKind == JsonValueKind.Array
+            && requests.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } last
+            && (Num(last, "prompt_total") ?? Num(last, "prompt_tokens")) is { } lastPrompt)
+        {
+            return (int)(lastPrompt + (Num(last, "output_tokens") ?? 0));
+        }
+
+        return null;
+    }
+
+    private static LlmReply? ParseReply(JsonElement root, JsonElement? live)
+    {
+        if (live is { } l && Str(l, "state") is { } state && state != "idle" && Num(l, "prompt_tokens") is { } prompt && prompt > 0)
+        {
+            var generated = (int)(Num(l, "generated") ?? 0);
+            var elapsed = Num(l, "elapsed_s");
+            var tokS = Num(l, "tok_s");
+            var reading = generated == 0;
+            // live data has no first-token time: elapsed minus the time spent writing at the current speed
+            double? started = reading ? elapsed
+                : elapsed is { } e && tokS is { } speed && speed > 0 ? Math.Max(0, e - generated / speed) : null;
+            // the conversation cache reports what it restored for the request it just admitted
+            double? cache = Obj(root, "conversation_cache") is { } cc && Num(cc, "last_prompt") == prompt && Num(cc, "last_reused") is { } reused
+                ? 100.0 * reused / prompt : null;
+            return new LlmReply(true, reading, started, cache, null, generated);
+        }
+
+        if (root.TryGetProperty("requests", out var requests) && requests.ValueKind == JsonValueKind.Array
+            && requests.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } last)
+        {
+            var lastPrompt = Num(last, "prompt_tokens") ?? Num(last, "prompt_total");
+            var offered = Num(last, "drafts_offered");
+            return new LlmReply(
+                Live: false,
+                Reading: false,
+                Seconds: Num(last, "first_engine_token_s"),
+                CacheHitPercent: lastPrompt is { } p && p > 0 ? 100.0 * (Num(last, "reused") ?? 0) / p : null,
+                GuessHitPercent: offered is { } o && o > 0 ? 100.0 * (Num(last, "drafts_accepted") ?? 0) / o : null,
+                Written: Num(last, "output_tokens") is { } w ? (int)w : null);
+        }
+
+        return null;
+    }
+
+    private static JsonElement? Obj(JsonElement e, string key) =>
+        e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Object ? v : null;
+
+    private static string? Str(JsonElement e, string key) =>
+        e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static double? Num(JsonElement e, string key) =>
+        e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+
+    public void Dispose() => _http.Dispose();
+}
