@@ -10,6 +10,6 @@
          DO NOT pin FileVersion/AssemblyVersion anywhere: the update check reads AssemblyVersion
          (GetName().Version.Major), so a pinned AssemblyVersion that lags <Version> makes the
          installed build under-report its version and auto-update in an infinite loop. -->
-    <Version>120.0.0</Version>
+    <Version>121.0.0</Version>
   </PropertyGroup>
 </Project>
