@@ -40,6 +40,7 @@ try
         "headers" => HeaderCommands.Run(args),
         "turzx" => TurzxCommands.Run(args),
         "aura" => AuraCommands.Run(args),
+        "vkb" => VkbCommands.Run(args),
         "ramrgb" => RgbChipCommands.RunRam(args),
         "gpurgb" => RgbChipCommands.RunGpu(args),
         _ => PrintUsage(),

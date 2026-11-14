@@ -51,6 +51,12 @@ public static class KnownDeviceRegistry
         Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: true,
             "*HID, 65-byte reports (0xEC prefix). Mainboard-class protocol (OpenRGB AuraMainboardController)."),
 
+        // ---- VKB joysticks (LED overrides only; volatile until power-cycle) ----
+        Entry(0x231D, 0x0200, DeviceKind.PeripheralLights, "VKB Gladiator NXT EVO (right)", supportPlanned: true,
+            "HID feature report 0x59 (129 B) LED overrides — pyvkb vkb/led.py protocol."),
+        Entry(0x231D, 0x0201, DeviceKind.PeripheralLights, "VKB Gladiator NXT EVO (left)", supportPlanned: true,
+            "HID feature report 0x59 (129 B) LED overrides — pyvkb vkb/led.py protocol."),
+
         // ---- MSI Mystic Light (motherboard RGB) ----
         // 0076 is shared by several Mystic Light generations: MysticLightController only drives
         // the 761-byte protocol, gated on the report descriptor and a tested board name too.
@@ -67,6 +73,7 @@ public static class KnownDeviceRegistry
         [0x1A86] = "WCH/QinHeng (Turzx serial bridge)",
         [0x0B05] = "ASUS",
         [0x0DB0] = "MSI",
+        [0x231D] = "VKB",
     };
 
     public static KnownDevice? Identify(UsbId id) => Entries.GetValueOrDefault(id);
