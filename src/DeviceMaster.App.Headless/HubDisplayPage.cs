@@ -21,10 +21,10 @@ public static class HubDisplayPage
 * { box-sizing:border-box; margin:0; }
 html,body { height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; user-select:none; -webkit-tap-highlight-color:transparent; }
 body { display:grid; grid-template-rows:auto 1.15fr 1fr; gap:1.6vh; padding:2vh 2vw; height:100vh; }
-header { display:flex; align-items:baseline; gap:2vw; }
+header { display:flex; align-items:center; gap:2vw; white-space:nowrap; } /* one row: title, lights, then date + time together */
 header .title { font-size:3.2vh; font-weight:700; background:linear-gradient(90deg,var(--a1),var(--a2),var(--a3)); -webkit-background-clip:text; color:transparent; }
-header .online { font-size:2.2vh; color:var(--dim); }
-header .clock { margin-left:auto; font-size:5vh; font-weight:700; font-variant-numeric:tabular-nums; }
+header .when { margin-left:auto; display:flex; align-items:baseline; gap:1vw; }
+header .clock { font-size:4.4vh; font-weight:700; font-variant-numeric:tabular-nums; } header .clock small { font-size:2.2vh; font-weight:600; color:var(--dim); margin-left:.3vw; }
 header .date { font-size:2.2vh; color:var(--dim); }
 .row { display:grid; gap:1.4vw; min-height:0; }
 .machines { grid-template-columns:repeat(var(--n,4), minmax(0,1fr)); }
@@ -74,8 +74,8 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
 </style>
 </head>
 <body>
-<header><span class="title">DeviceMaster</span><span class="online" id="online">—</span><span class="date" id="date"></span>
-  <span class="lights" id="lights"></span><span class="clock" id="clock">--:--</span></header>
+<header><span class="title">DeviceMaster</span>
+  <span class="lights" id="lights"></span><span class="when"><span class="date" id="date"></span><span class="clock" id="clock">--:--</span></span></header>
 <section class="row machines" id="machines"></section>
 <section class="row lower">
   <div class="card"><h2>Storage</h2><div class="disks" id="disks"></div></div>
@@ -94,7 +94,11 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const deg = v => v == null ? "—" : Math.round(v) + "°";
 function up(s){ if (s == null) return "—"; const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
 function bytes(b){ const u = ["B","KB","MB","GB","TB","PB"]; let i = 0; while (b >= 1024 && i < u.length-1) { b /= 1024; i++; } return (b >= 100 ? b.toFixed(0) : b.toFixed(1)) + " " + u[i]; }
-function tick(){ const d = new Date(); $("clock").textContent = d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); $("date").textContent = d.toLocaleDateString([], {weekday:"long", day:"numeric", month:"long"}); }
+function tick(){ // date beside the time, both on the one header row
+  const d = new Date(), parts = d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}).split(/\s+/); // en-AU puts a narrow no-break space before "am"
+  $("clock").innerHTML = esc(parts[0]) + (parts[1] ? `<small>${esc(parts[1])}</small>` : "");
+  $("date").textContent = d.toLocaleDateString([], {weekday:"short", day:"numeric", month:"short"});
+}
 function heat(t, fans){ const p = Math.min(100, Math.max(0, (t - 20) / 70 * 100)), c = t >= 85 ? "bad" : t >= 75 ? "warn" : "";
   return `<div class="heat"><div class="k">Hottest</div><div class="hv">${Math.round(t)}°</div><div class="bar"><i class="${c}" style="width:${p.toFixed(1)}%"></i></div><div class="sub">${fans ? fans + " fan" + (fans === 1 ? "" : "s") + " under control" : ""}</div></div>`; }
 /* ---- controls: power (with confirmation) and fleet lighting ---- */
@@ -183,7 +187,6 @@ function machine(m){
 }
 function render(h){
   const ms = h.machines || [];
-  $("online").textContent = `${ms.filter(m => m.Online).length} of ${ms.length} online`;
   $("machines").style.setProperty("--n", Math.max(ms.length, 1));
   $("machines").innerHTML = ms.map(machine).join("");
   const disks = ms.flatMap(m => (m.Storage || []).map(d => ({ m: m.Name, ...d }))).filter(d => d.TotalBytes > 0)

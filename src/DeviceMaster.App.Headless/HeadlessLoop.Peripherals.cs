@@ -104,9 +104,17 @@ public sealed partial class HeadlessLoop
                     .Select(w => $"motherboard fan write failed: {w}"));
             }
 
-            // a header that won't take a duty is back on the BIOS curve — settled and safe, so it's a
-            // note (MotherboardFanNotes), not a standing orange warning. A header that won't go back
-            // to the BIOS is still a warning (it's set to full speed: see HandBack/FullSpeed).
+            // a header that never took a duty is on the BIOS curve for good — a note (MotherboardFanNotes),
+            // not a standing orange warning. One that WAS under control and got dropped is a loss: a
+            // warning until HwmonFanControl takes it back. A header that won't go back to the BIOS is
+            // a warning too (it's set to full speed: see HandBack/FullSpeed).
+            foreach (var (index, reason) in _mbFans.Dropped.Where(d => _mbFans.EverHeld.Contains(d.Key)))
+            {
+                var retake = _mbFans.RetakeAt.TryGetValue(index, out var at)
+                    ? $"; taking it back in {Math.Max(0, (at - Environment.TickCount64) / 1000)} s"
+                    : "";
+                warnings.Add($"motherboard fan pwm{index} lost control ({reason}) — on the BIOS curve meanwhile{retake}");
+            }
 
             foreach (var header in _mbFans.Headers().Where(h => _mbFans.Controlled.Contains(h.Index)))
             {
@@ -121,11 +129,14 @@ public sealed partial class HeadlessLoop
     }
 
     /// <summary>Headers the board won't let software drive, left on its own BIOS curve.</summary>
-    private List<string> MotherboardFanNotes() =>
-        _mbFans is null || _mbFans.Dropped.Count == 0
+    private List<string> MotherboardFanNotes()
+    {
+        var never = _mbFans?.Dropped.Keys.Where(i => !_mbFans.EverHeld.Contains(i)).Order().ToList() ?? [];
+        return never.Count == 0
             ? []
-            : [$"Fan header{(_mbFans.Dropped.Count > 1 ? "s" : "")} {string.Join(", ", _mbFans.Dropped.Keys.Order().Select(i => $"pwm{i}"))} "
+            : [$"Fan header{(never.Count > 1 ? "s" : "")} {string.Join(", ", never.Select(i => $"pwm{i}"))} "
                 + "run on the board's own BIOS curve (the board doesn't accept software speed control on them)"];
+    }
 
     private void HandBackMotherboardFans(List<string> warnings)
     {

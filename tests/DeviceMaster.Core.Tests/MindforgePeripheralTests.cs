@@ -103,6 +103,73 @@ public class HwmonFanControlTests : IDisposable
     }
 
     [Fact]
+    public void AHeaderThatWorkedAndWasDroppedIsTakenBackByItself()
+    {
+        var dir = Chip("nct6687", (1, 1800, 2));
+        var log = new List<string>();
+        var fans = Open(log);
+
+        // it holds its duty first
+        fans.Apply(50);
+        _now += HwmonFanControl.VerifyAfterMs;
+        fans.Apply(50);
+        Assert.Contains(1, fans.EverHeld);
+
+        // then the driver starts ignoring it (the nct6687 "rejected new configuration" case)
+        for (var i = 0; i < HwmonFanControl.FailuresBeforeDrop; i++)
+        {
+            fans.Apply(60);
+            Set(dir, "pwm1", 165);
+            _now += HwmonFanControl.VerifyAfterMs;
+        }
+
+        fans.Apply(60);
+        Assert.Empty(fans.Controlled);
+        Assert.Contains(1, fans.RetakeAt.Keys);
+        _now += HwmonFanControl.VerifyAfterMs;
+        fans.Apply(60); // handback confirmed: on the BIOS curve meanwhile
+        Assert.Equal("2", Read(dir, "pwm1_enable"));
+
+        // after the wait it is taken back, and once it holds it's fully back under control
+        _now += HwmonFanControl.RetakeDelaysMs[0];
+        fans.Apply(60);
+        Assert.Equal([1], fans.Controlled);
+        Assert.Equal("1", Read(dir, "pwm1_enable"));
+        _now += HwmonFanControl.VerifyAfterMs;
+        fans.Apply(60);
+        Assert.Empty(fans.Dropped);
+        Assert.Contains(log, l => l.Contains("pwm1 is under control again") || l.Contains("taking pwm1 back"));
+    }
+
+    [Fact]
+    public void AHeaderThatNeverHeldIsOnlyRetriedAFewTimes()
+    {
+        var dir = Chip("nct6687", (3, 1600, 2));
+        var fans = Open();
+
+        for (var round = 0; round <= HwmonFanControl.MaxRetakesNeverHeld; round++)
+        {
+            for (var i = 0; i < HwmonFanControl.FailuresBeforeDrop; i++)
+            {
+                fans.Apply(50);
+                Set(dir, "pwm3", 165);
+                _now += HwmonFanControl.VerifyAfterMs;
+            }
+
+            fans.Apply(50);                               // dropped
+            _now += HwmonFanControl.VerifyAfterMs;
+            fans.Apply(50);                               // handed back
+            _now += HwmonFanControl.RetakeDelaysMs[^1];   // past any retake wait
+            fans.Apply(50);                               // retaken (if it still has tries)
+        }
+
+        Assert.DoesNotContain(3, fans.EverHeld);
+        Assert.Empty(fans.RetakeAt);                      // given up: BIOS curve for good
+        Assert.Empty(fans.Controlled);
+        Assert.Equal("2", Read(dir, "pwm3_enable"));
+    }
+
+    [Fact]
     public void AHandbackWaitsForTheLastDutyWriteToSettle()
     {
         var dir = Chip("nct6687", (2, 2000, 2));
