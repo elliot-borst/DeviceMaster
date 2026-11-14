@@ -458,6 +458,9 @@ public sealed class Slv3Controller : IDisposable
     /// Sends a one-frame static color to a fan group (all LEDs the same). The firmware stores
     /// and loops the effect, so this is sent once per color change, not per frame.
     /// </summary>
+    private readonly PreciseDelay _staticDelay = new();
+    private readonly object _staticDelayGate = new();
+
     public void ApplyStaticColor(Slv3Device device, byte r, byte g, byte b, ReadOnlySpan<byte> effectIndex)
     {
         var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
@@ -470,11 +473,18 @@ public sealed class Slv3Controller : IDisposable
         }
 
         var compressed = TinyUz.Compress(raw);
-        foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
-            device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: 1, intervalMs: 5000))
+
+        // real 2 ms gaps (#62): with Thread.Sleep(2) = ~15.6 ms on Windows a colour send took
+        // ~0.4 s per group, a full re-send ~1.7 s of the 1 Hz tick — so the per-tick colour heal
+        // after each fan-LCD push (which drops fans to firmware rainbow) landed seconds late
+        lock (_staticDelayGate)
         {
-            SendRfChunks(payload, device.Channel, device.RxType);
-            Thread.Sleep(2);
+            foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
+                device.Mac, MasterMac, effectIndex, compressed, ledCount, totalFrames: 1, intervalMs: 5000))
+            {
+                SendRgbPayload(device, payload, _staticDelay);
+                _staticDelay.Wait(2);
+            }
         }
 
         _trace?.Invoke($"RGB #{r:X2}{g:X2}{b:X2} -> {device.MacText} ({ledCount} LEDs, {compressed.Length}B compressed)");
@@ -697,5 +707,6 @@ public sealed class Slv3Controller : IDisposable
     {
         _tx.Dispose();
         _rx.Dispose();
+        _staticDelay.Dispose();
     }
 }
