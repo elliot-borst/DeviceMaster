@@ -47,7 +47,8 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
 
 ## Releasing (whole-number versions: 1, 2, 3, …)
 
-1. Bump `<Version>` major in `src/DeviceMaster.Ui/DeviceMaster.Ui.csproj` (single source;
+1. Bump `<Version>` major in `Directory.Build.props` (single source for every build — Windows app,
+   Linux agents and hub all report it;
    the UI shows it and the updater compares against the release tag) and update
    `MainWindow.VersionDate`.
 2. `.\build-installer.ps1` → `dist\DeviceMaster-Setup.exe` (Inno Setup 6 required).

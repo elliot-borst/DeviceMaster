@@ -1,8 +1,8 @@
 # Builds DeviceMaster-Setup.exe into dist\.
-# Reads the whole-number version from DeviceMaster.Ui.csproj (major of <Version>).
+# Reads the whole-number version from Directory.Build.props (major of <Version>).
 $ErrorActionPreference = 'Stop'
 
-$csproj = Join-Path $PSScriptRoot 'src\DeviceMaster.Ui\DeviceMaster.Ui.csproj'
+$csproj = Join-Path $PSScriptRoot 'Directory.Build.props'
 $version = ([regex]::Match((Get-Content $csproj -Raw), '<Version>(\d+)').Groups[1].Value)
 if (-not $version) { throw "Could not read <Version> from $csproj" }
 
