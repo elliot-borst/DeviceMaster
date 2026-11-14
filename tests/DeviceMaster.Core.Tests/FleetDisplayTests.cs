@@ -1,3 +1,4 @@
+using DeviceMaster.Hub;
 using DeviceMaster.Control;
 
 namespace DeviceMaster.Core.Tests;
@@ -153,7 +154,7 @@ public class RebootRequestTests
 public class ColorPaletteTests
 {
     public static TheoryData<string> Pages() =>
-        [DeviceMaster.App.Headless.HeadlessWebServer.DashboardHtml, DeviceMaster.App.Headless.HubWebServer.Page, DeviceMaster.App.Headless.HubDisplayPage.Html];
+        [DeviceMaster.App.Headless.HeadlessWebServer.DashboardHtml, DeviceMaster.Hub.HubWebServer.Page, DeviceMaster.Hub.HubDisplayPage.Html];
 
     [Fact]
     public void TheOwnersColoursAreVividAndNamed()

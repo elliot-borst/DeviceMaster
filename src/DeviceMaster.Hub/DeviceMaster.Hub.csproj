@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The fleet hub's web front (pages, fleet API, peer API) — shared by the Linux headless app
+       and the Windows app, so any machine can run a hub in the failover group (#68). -->
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceMaster.Core\DeviceMaster.Core.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Control\DeviceMaster.Control.csproj" />
+  </ItemGroup>
+</Project>

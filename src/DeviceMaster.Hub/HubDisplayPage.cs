@@ -1,4 +1,4 @@
-namespace DeviceMaster.App.Headless;
+namespace DeviceMaster.Hub;
 
 /// <summary>
 /// The fleet's wall display (#49): one full-screen page, no scrolling, no controls — every machine,

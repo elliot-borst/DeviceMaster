@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using DeviceMaster.Control;
 
-namespace DeviceMaster.App.Headless;
+namespace DeviceMaster.Hub;
 
 /// <summary>
 /// The fleet hub's web front (#33 phase 3): the Servers overview at one address, plus the JSON the
@@ -43,24 +43,16 @@ public sealed class HubWebServer : IDisposable
         }
 
         var hosts = binds.Count > 0 ? binds : ["127.0.0.1"];
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (var host in hosts)
-            {
-                _listener.Prefixes.Add($"http://{host}:{port}/");
-            }
-        }
-        else
-        {
-            // A host-specific prefix makes HttpListener 404 every request whose Host header differs
-            // — and tailscale serve forwards the public name (devicemaster.<tailnet>.ts.net). So
-            // accept any Host, and enforce --bind by the client address instead: with the default
-            // 127.0.0.1 only serve (same namespace) is answered, never the tailnet or LAN directly.
-            _listener.Prefixes.Add($"http://+:{port}/");
-            _allowedClients = hosts.Any(h => h is "+" or "*" or "0.0.0.0")
-                ? null
-                : hosts.Select(h => h == "localhost" ? IPAddress.Loopback : IPAddress.Parse(h)).ToHashSet();
-        }
+
+        // A host-specific prefix makes HttpListener reject every request whose Host header differs
+        // — and tailscale serve forwards the public name (devicemaster.<tailnet>.ts.net). So accept
+        // any Host, and enforce --bind by the client address instead: with the default 127.0.0.1
+        // only serve (same machine/namespace) is answered, never the tailnet or LAN directly.
+        // On Windows a "+" prefix needs the app elevated, which it normally is (#68 step 4).
+        _listener.Prefixes.Add($"http://+:{port}/");
+        _allowedClients = hosts.Any(h => h is "+" or "*" or "0.0.0.0")
+            ? null
+            : hosts.Select(h => h == "localhost" ? IPAddress.Loopback : IPAddress.Parse(h)).ToHashSet();
 
         _thread = new Thread(() => Run(_listener, fromPeer: false)) { IsBackground = true, Name = "hub web" };
     }
@@ -257,7 +249,7 @@ public sealed class HubWebServer : IDisposable
         switch ((method, rest))
         {
             case ("GET", "" or "index.html"):
-                Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(HeadlessWebServer.DashboardHtml));
+                Send(ctx, 200, "text/html; charset=utf-8", DeviceMaster.Core.Lighting.ColorPalette.Inject(AgentDashboardPage.Html));
                 return;
 
             case ("GET", "status.json"):

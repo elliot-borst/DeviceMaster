@@ -1,3 +1,4 @@
+using DeviceMaster.Hub;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -57,7 +58,7 @@ public class HubElectionTests
     [InlineData("GET", "/api/fleet/settings", false)]
     [InlineData("GET", "/m/MindForge/status.json", false)]
     public void WritesAreTheRequestsAStandbyForwards(string method, string path, bool write) =>
-        Assert.Equal(write, DeviceMaster.App.Headless.HubWebServer.IsWrite(method, path));
+        Assert.Equal(write, DeviceMaster.Hub.HubWebServer.IsWrite(method, path));
 }
 
 /// <summary>Two hubs in one process: their peer APIs wired to each other through a fake network.</summary>

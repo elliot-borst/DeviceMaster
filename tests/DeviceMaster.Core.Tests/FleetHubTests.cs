@@ -1,3 +1,4 @@
+using DeviceMaster.Hub;
 using System.Net;
 using System.Net.Sockets;
 using DeviceMaster.Control;
@@ -156,9 +157,9 @@ public class HubClientRuleTests
     [InlineData("100.82.31.23", false)] // a tailnet peer straight to the port
     [InlineData("172.17.0.5", false)]   // another container on the bridge
     public void ALoopbackBindOnlyServesLocalClients(string client, bool allowed) =>
-        Assert.Equal(allowed, DeviceMaster.App.Headless.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse(client), LoopbackOnly));
+        Assert.Equal(allowed, DeviceMaster.Hub.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse(client), LoopbackOnly));
 
     [Fact]
     public void NoBindRuleServesEveryone() =>
-        Assert.True(DeviceMaster.App.Headless.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse("100.82.31.23"), null));
+        Assert.True(DeviceMaster.Hub.HubWebServer.ClientAllowed(System.Net.IPAddress.Parse("100.82.31.23"), null));
 }
