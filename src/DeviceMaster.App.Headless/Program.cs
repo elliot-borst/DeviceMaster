@@ -673,7 +673,14 @@ internal static class Program
             }
         };
 
-        using var web = new HubWebServer(hub, port, log, binds, failover, config.PeerPort);
+        // automations (#83): bearer tokens that may change settings/power, audited under their own names
+        var automations = HubAutomations.Load(config.Automations, log);
+        if (automations.Count > 0)
+        {
+            log($"hub: automation tokens accepted for {string.Join(", ", automations.Names)}");
+        }
+
+        using var web = new HubWebServer(hub, port, log, binds, failover, config.PeerPort, automations);
         SignalWatcher.Install();
         hub.Start();
         failover.Start();

@@ -86,6 +86,24 @@ public static class ConfigPatcher
                         applied.Add($"rgbEnabled={s.RgbEnabled}");
                     }
                     break;
+                case "rgbOff":
+                    // lights out (paint every LED black). During blackout it sets what blackout restores,
+                    // so leaving blackout lands on the requested lighting (#83)
+                    if (prop.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    {
+                        var off = prop.Value.GetBoolean();
+                        if (s.BlackoutActive)
+                        {
+                            s.BlackoutPrevRgbOff = off;
+                        }
+                        else
+                        {
+                            s.RgbOff = off;
+                        }
+
+                        applied.Add($"rgbOff={off}");
+                    }
+                    break;
                 case "rgbR":
                     if (TryInt(prop.Value, 0, 255, out var r)) { s.RgbR = r; applied.Add($"rgbR={r}"); }
                     break;

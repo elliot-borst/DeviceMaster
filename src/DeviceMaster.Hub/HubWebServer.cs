@@ -30,11 +30,16 @@ public sealed class HubWebServer : IDisposable
     /// <summary>Only connections from these addresses are served (null = anyone who can reach the port).</summary>
     private readonly HashSet<IPAddress>? _allowedClients;
 
-    public HubWebServer(FleetHub hub, int port, Action<string> log, IReadOnlyList<string> binds, HubFailover? failover = null, int peerPort = 0)
+    /// <summary>Bearer tokens that count as a user for writes (#83: agents, scheduled jobs).</summary>
+    private readonly HubAutomations? _automations;
+
+    public HubWebServer(FleetHub hub, int port, Action<string> log, IReadOnlyList<string> binds, HubFailover? failover = null, int peerPort = 0,
+        HubAutomations? automations = null)
     {
         _hub = hub;
         _log = log;
         _failover = failover;
+        _automations = automations;
         if (failover is { HasPeers: true } && peerPort > 0)
         {
             _peerListener = new HttpListener();
@@ -393,9 +398,13 @@ public sealed class HubWebServer : IDisposable
         }
     }
 
-    /// <summary>The signed-in tailnet user, from the header tailscale serve adds (null when absent).</summary>
-    private static string? User(HttpListenerContext ctx) =>
-        ctx.Request.Headers["Tailscale-User-Login"] is { Length: > 0 } login ? login : null;
+    /// <summary>
+    /// Who is making the request: the signed-in tailnet user (the header tailscale serve adds, or the
+    /// one a standby forwarded), else an automation's bearer token (#83); null = nobody, so read-only.
+    /// </summary>
+    private string? User(HttpListenerContext ctx) =>
+        ctx.Request.Headers["Tailscale-User-Login"] is { Length: > 0 } login ? login
+        : _automations?.Resolve(ctx.Request.Headers["Authorization"]);
 
     /// <summary>
     /// Fleet settings writes (phase 4). Allowed only for a request that tailscale serve marked with

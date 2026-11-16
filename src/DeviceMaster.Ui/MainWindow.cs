@@ -2342,7 +2342,9 @@ public sealed class MainWindow : Window
                 }
             };
 
-            _hubWeb = new DeviceMaster.Hub.HubWebServer(hub, 27080, LogLine, ["127.0.0.1"], _hubFailover, config.PeerPort);
+            // automations (#83): bearer tokens that may change settings/power, audited under their own names
+            var automations = HubAutomations.Load(config.Automations.Select(x => x with { TokenFile = Resolve(x.TokenFile) ?? "" }), LogLine);
+            _hubWeb = new DeviceMaster.Hub.HubWebServer(hub, 27080, LogLine, ["127.0.0.1"], _hubFailover, config.PeerPort, automations);
             hub.Start();
             _hubFailover.Start();
             _hubWeb.Start();

@@ -58,6 +58,12 @@ public sealed record HubConfig
     /// <summary>Port of this hub's peer API (hub-to-hub only; every request needs the peer token).</summary>
     public int PeerPort { get; init; } = 27081;
 
+    /// <summary>
+    /// Automations (#83) that may change fleet settings and power with a bearer token instead of a
+    /// signed-in tailnet user, audited as "&lt;Name&gt; (automation)". Each needs a token file.
+    /// </summary>
+    public List<HubAutomation> Automations { get; init; } = [];
+
     public static HubConfig Load(string path) =>
         JsonSerializer.Deserialize<HubConfig>(File.ReadAllText(path), AgentApi.Json) ?? new HubConfig();
 }

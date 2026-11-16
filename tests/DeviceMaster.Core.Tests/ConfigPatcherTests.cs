@@ -120,6 +120,36 @@ public class ConfigPatcherTests
     }
 
     [Fact]
+    public void RgbOffTurnsLightsOutOnAndOff()
+    {
+        var cfg = NewConfig();
+        cfg.Control.RgbOff = true;
+
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"rgbOff":false,"rgbR":150,"rgbG":0,"rgbB":255,"rgbBrightness":100}""", out var invalid);
+        Assert.False(invalid);
+        Assert.Contains("rgbOff=False", applied);
+        Assert.False(cfg.Control.RgbOff);
+
+        ConfigPatcher.ApplyPatch(cfg.Control, """{"rgbOff":true}""", out _);
+        Assert.True(cfg.Control.RgbOff);
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg.Control, """{"rgbOff":"no"}""", out _)); // not a bool: ignored
+    }
+
+    [Fact]
+    public void RgbOffDuringBlackoutSetsWhatBlackoutRestores()
+    {
+        var cfg = NewConfig();
+        cfg.Control.RgbOff = true;
+        ConfigPatcher.ApplyPatch(cfg.Control, """{"blackout":true}""", out _);
+
+        ConfigPatcher.ApplyPatch(cfg.Control, """{"rgbOff":false}""", out _);
+        Assert.True(cfg.Control.RgbOff); // still blacked out
+
+        ConfigPatcher.ApplyPatch(cfg.Control, """{"blackout":false}""", out _);
+        Assert.False(cfg.Control.RgbOff); // lights come back on
+    }
+
+    [Fact]
     public void RainbowEffectAndSpeed()
     {
         var cfg = NewConfig();

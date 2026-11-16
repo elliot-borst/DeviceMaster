@@ -192,6 +192,30 @@ Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
 - **Clock:** the dashboard shows the container's local time; set `TZ` (the image includes tzdata).
 
 
+## Automations on the fleet hub (#83)
+
+An agent or a scheduled job (e.g. "blackout at 23:00, lights on at 07:00") can change fleet settings
+and power without a signed-in tailnet user, using a bearer token. Add to `hub.json`:
+
+```json
+"Automations": [ { "Name": "claudecode", "TokenFile": "/tokens/automation-claudecode" } ]
+```
+
+- The token file holds one random token of 32+ characters (e.g. `openssl rand -hex 32`). The hub
+  never logs it; a missing, short or unreadable file just skips that automation.
+- Requests send `Authorization: Bearer <token>` to the hub page's address (normally loopback on the
+  hub machine). They get the same reach as a signed-in user: `PUT /api/fleet/settings/<section>`,
+  `PUT /api/fleet/machines/<name>/<section>`, `POST /api/fleet/machines/<name>/power`, and a machine's
+  page (`POST /m/<name>/config.json`). Peer endpoints stay peer-token only.
+- Every change is audited as `<Name> (automation)`. A standby hub forwards the write, and that name,
+  to the active hub, so only the hub the automation talks to needs the token.
+- Revoke: delete the token file (or the entry) and restart the hub.
+- Lighting writes replace the whole lighting section: read `GET /api/fleet/settings` first and send
+  every lighting field back with your changes (`RgbOff` = lights out, `Blackout` = movie mode).
+
+A machine's own settings API also accepts `rgbOff` (bool) now; during blackout it sets what leaving
+blackout restores.
+
 ## Fleet hub failover (#68)
 
 The fleet hub (`devicemaster hub --config hub.json`) can run on several machines at once. One
