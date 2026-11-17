@@ -233,7 +233,8 @@ the refused headers back to the BIOS; it just couldn't drive them without the dr
    This driver build doesn't expose the option under `/sys/module/nct6687/parameters`, so prove it
    with a write instead.
 3. Test one header: `echo 1 > pwmN_enable; echo 128 > pwmN` should succeed with no new "rejected"
-   lines in `dmesg`. `fanN_input` falls gradually (the EC moves about 2 % a second). Then
+   lines in `dmesg`. `fanN_input` changes gradually: the EC ramps slowly (measured on MS-7E59: about 1/255 of
+   the duty range per second, so a big change takes a minute or more; `pwmN` reads the ramping value). Then
    `echo 2 > pwmN_enable` hands it back to the BIOS, and the rpm climbs back.
 4. Start DeviceMaster. Its log shows no "does not take a duty" lines, the dashboard lists the system
    fans as controlled, and the BIOS-curve note is gone.
@@ -253,6 +254,9 @@ the refused headers back to the BIOS; it just couldn't drive them without the dr
 - `manual=1` is about voltage labels, not fans; it doesn't help.
 - Unloading the driver while DeviceMaster runs makes its writes fail. The fans keep running on the
   EC's own curves, but stop DeviceMaster first, and start it again afterwards.
+- DeviceMaster checks each duty write by reading `pwmN` back; before #86 it judged this slow ramp as
+  "does not take a duty" and kept handing the headers back (dashboard: fewer fans under control plus a
+  warning per header). Since #86 a read-back that is moving towards the duty counts as following it.
 - After an S3 resume the EC may write its own curves back while `pwmN_enable` still reads 1
   (nct6687d PR #228). DeviceMaster rewrites duties regularly, so it recovers on its next refresh.
 - Upstream PR #228 (a draft as of 2026-11) would control system fans through their own manual bits,

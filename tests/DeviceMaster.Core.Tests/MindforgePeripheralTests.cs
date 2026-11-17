@@ -65,9 +65,9 @@ public class HwmonFanControlTests : IDisposable
         var dir = Chip("nct6687", (3, 1900, 2));
         var fans = Open();
         fans.Apply(70); // writes 179 (from 164)
-        for (var step = 1; step <= 4; step++)
+        for (var step = 1; step <= 7; step++)
         {
-            Set(dir, "pwm3", Math.Min(179, 164 + 6 * step)); // creeping up, not there yet after 2.5 s
+            Set(dir, "pwm3", Math.Min(179, 164 + 2 * step)); // ~1/255 per second: 2 steps per check
             _now += HwmonFanControl.VerifyAfterMs + 100;
             Assert.Empty(fans.Apply(70));
         }
@@ -94,7 +94,8 @@ public class HwmonFanControlTests : IDisposable
 
     [Theory]
     [InlineData(164, 170, 179, true)]   // moved 6 towards 179
-    [InlineData(164, 165, 179, false)]  // within noise: not a ramp
+    [InlineData(179, 181, 192, true)]   // the MSI EC: ~1/255 per second, 2 steps in 2.5 s
+    [InlineData(179, 179, 192, false)]  // didn't move: ignored
     [InlineData(164, 160, 179, false)]  // moved away
     [InlineData(null, 170, 179, false)] // no "before": can't tell
     [InlineData(128, 165, 154, false)]  // shot past the target: not ours

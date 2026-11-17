@@ -62,14 +62,16 @@ public sealed class HwmonFanControl : IDisposable
     private const int PwmTolerance = 3;
 
     /// <summary>
-    /// True when the output has clearly moved towards the written duty since just before the write:
-    /// a controller that ramps (the MSI nct6687 EC with msi_fan_brute_force moves ~2 %/s, so a big
-    /// change takes longer than <see cref="VerifyAfterMs"/>) is following the write, not ignoring it.
+    /// True when the output has moved towards the written duty since just before the write, without
+    /// passing it: a controller that ramps is following the write, not ignoring it. The MSI nct6687
+    /// EC with msi_fan_brute_force moves only ~1/255 per second (measured on MS-7E59: 203, 204, 205 …),
+    /// i.e. 2–3 steps per <see cref="VerifyAfterMs"/>, so any step counts; a controller that ignores
+    /// the write reads back exactly the same value. Re-writing the same duty doesn't restart the ramp.
     /// The header is re-written and judged again on the next ticks until it lands (#86).
     /// </summary>
     public static bool StillRamping(int? before, int readBack, int wrote) =>
         before is { } b
-        && Math.Abs(readBack - b) > PwmTolerance              // really moved, not noise
+        && readBack != b                                      // moved at all (a stuck output reads the same)
         && Math.Sign(readBack - b) == Math.Sign(wrote - b)    // towards the written duty
         && Math.Abs(readBack - b) <= Math.Abs(wrote - b);     // and not past it (that's someone else's value)
 
