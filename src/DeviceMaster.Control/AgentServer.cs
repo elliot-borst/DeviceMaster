@@ -18,6 +18,13 @@ public sealed class AgentServer : IDisposable
     private readonly Action<string>? _log;
     private Thread? _thread;
 
+    // Tailscale often comes up after the app (a logon task right after boot): the address can appear
+    // later, so it is re-checked on every network change and every 30 s, and bound when it does (#84)
+    private readonly HashSet<string> _bound = [];
+    private readonly HashSet<string> _failed = [];
+    private Timer? _rescan;
+    private int _port;
+
     public AgentServer(AgentApi api, Action<string>? log = null)
     {
         _api = api;
@@ -87,12 +94,54 @@ public sealed class AgentServer : IDisposable
             return false;
         }
 
-        Listening = bound;
+        _port = port;
+        lock (_bound)
+        {
+            _bound.UnionWith(bound);
+            Listening = _bound.ToList();
+        }
+
         _thread = new Thread(Run) { IsBackground = true, Name = "DeviceMaster agent api" };
         _thread.Start();
         _log?.Invoke($"agent api listening on {string.Join(", ", bound)}"
-            + (bound.Count == 1 ? " (no Tailscale address found: localhost only)" : ""));
+            + (bound.Count == 1 ? " (no Tailscale address found yet: localhost only, binding it when it appears)" : ""));
+        NetworkChange.NetworkAddressChanged += OnAddressChanged;
+        _rescan = new Timer(_ => BindNewTailnetAddresses(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
         return true;
+    }
+
+    /// <summary>The prefixes for tailnet addresses that aren't listened on yet (pure; tested).</summary>
+    public static IReadOnlyList<string> NewPrefixes(IEnumerable<IPAddress> tailnet, IReadOnlySet<string> known, int port) =>
+        tailnet.Where(IsTailnet).Select(a => $"http://{a}:{port}/").Distinct().Where(p => !known.Contains(p)).ToList();
+
+    private void OnAddressChanged(object? sender, EventArgs e) => BindNewTailnetAddresses();
+
+    /// <summary>Adds a prefix for every tailnet address that appeared since the last check (the listener keeps running).</summary>
+    private void BindNewTailnetAddresses()
+    {
+        if (!_listener.IsListening)
+        {
+            return;
+        }
+
+        lock (_bound)
+        {
+            foreach (var prefix in NewPrefixes(TailnetAddresses(), _bound.Union(_failed).ToHashSet(), _port))
+            {
+                try
+                {
+                    _listener.Prefixes.Add(prefix);
+                    _bound.Add(prefix);
+                    Listening = _bound.ToList();
+                    _log?.Invoke($"agent api: Tailscale address appeared, now also listening on {prefix}");
+                }
+                catch (Exception ex)
+                {
+                    _failed.Add(prefix); // report once, not every 30 s
+                    _log?.Invoke($"agent api: cannot listen on {prefix}: {ex.Message}");
+                }
+            }
+        }
     }
 
     private void Run()
@@ -129,6 +178,8 @@ public sealed class AgentServer : IDisposable
 
     public void Dispose()
     {
+        NetworkChange.NetworkAddressChanged -= OnAddressChanged;
+        _rescan?.Dispose();
         try
         {
             _listener.Stop();

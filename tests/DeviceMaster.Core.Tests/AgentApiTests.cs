@@ -158,6 +158,18 @@ public sealed class AgentApiTests : IDisposable
         _listener.Stop();
         _listener.Close();
     }
+
+    [Fact]
+    public void ATailnetAddressThatAppearsLaterGetsAPrefix()
+    {
+        var known = new HashSet<string> { "http://127.0.0.1:27004/" };
+        var addresses = new[] { IPAddress.Parse("192.168.1.5"), IPAddress.Parse("100.75.142.31"), IPAddress.Parse("100.75.142.31") };
+
+        Assert.Equal(["http://100.75.142.31:27004/"], AgentServer.NewPrefixes(addresses, known, 27004));
+
+        known.Add("http://100.75.142.31:27004/");
+        Assert.Empty(AgentServer.NewPrefixes(addresses, known, 27004)); // already bound: nothing new
+    }
 }
 
 public sealed class AgentUpdateCheckTests : IDisposable
