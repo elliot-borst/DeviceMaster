@@ -59,6 +59,49 @@ public class HwmonFanControlTests : IDisposable
     }
 
     [Fact]
+    public void AControllerThatRampsSlowlyKeepsTheHeader()
+    {
+        // the MSI EC with msi_fan_brute_force: ~5/255 per second towards the target (#86)
+        var dir = Chip("nct6687", (3, 1900, 2));
+        var fans = Open();
+        fans.Apply(70); // writes 179 (from 164)
+        for (var step = 1; step <= 4; step++)
+        {
+            Set(dir, "pwm3", Math.Min(179, 164 + 6 * step)); // creeping up, not there yet after 2.5 s
+            _now += HwmonFanControl.VerifyAfterMs + 100;
+            Assert.Empty(fans.Apply(70));
+        }
+
+        Assert.Contains(3, fans.Controlled);
+    }
+
+    [Fact]
+    public void AControllerThatDoesNotMoveIsStillDropped()
+    {
+        var dir = Chip("nct6687", (3, 1900, 2));
+        var fans = Open();
+        var warnings = new List<string>();
+        for (var i = 0; i < HwmonFanControl.FailuresBeforeDrop + 1; i++)
+        {
+            fans.Apply(70);
+            Set(dir, "pwm3", 164); // the EC ignores the write
+            _now += HwmonFanControl.VerifyAfterMs + 100;
+            warnings.AddRange(fans.Apply(70));
+        }
+
+        Assert.NotEmpty(warnings);
+    }
+
+    [Theory]
+    [InlineData(164, 170, 179, true)]   // moved 6 towards 179
+    [InlineData(164, 165, 179, false)]  // within noise: not a ramp
+    [InlineData(164, 160, 179, false)]  // moved away
+    [InlineData(null, 170, 179, false)] // no "before": can't tell
+    [InlineData(128, 165, 154, false)]  // shot past the target: not ours
+    public void StillRampingNeedsRealProgress(int? before, int readBack, int wrote, bool expected) =>
+        Assert.Equal(expected, HwmonFanControl.StillRamping(before, readBack, wrote));
+
+    [Fact]
     public void AHeaderStillRampingIsNotJudgedEarly()
     {
         var dir = Chip("nct6687", (1, 1800, 2));

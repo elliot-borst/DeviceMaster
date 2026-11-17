@@ -61,6 +61,18 @@ public sealed class HwmonFanControl : IDisposable
     /// <summary>Read-back tolerance: drivers round the duty to the chip's own resolution.</summary>
     private const int PwmTolerance = 3;
 
+    /// <summary>
+    /// True when the output has clearly moved towards the written duty since just before the write:
+    /// a controller that ramps (the MSI nct6687 EC with msi_fan_brute_force moves ~2 %/s, so a big
+    /// change takes longer than <see cref="VerifyAfterMs"/>) is following the write, not ignoring it.
+    /// The header is re-written and judged again on the next ticks until it lands (#86).
+    /// </summary>
+    public static bool StillRamping(int? before, int readBack, int wrote) =>
+        before is { } b
+        && Math.Abs(readBack - b) > PwmTolerance              // really moved, not noise
+        && Math.Sign(readBack - b) == Math.Sign(wrote - b)    // towards the written duty
+        && Math.Abs(readBack - b) <= Math.Abs(wrote - b);     // and not past it (that's someone else's value)
+
     private readonly string _dir;
     private readonly Action<string>? _log;
     private readonly Func<long> _clock;
@@ -68,7 +80,7 @@ public sealed class HwmonFanControl : IDisposable
     private readonly Dictionary<int, int> _originalEnable = [];
     private readonly List<int> _controlled;
     private readonly Dictionary<int, int> _written = [];
-    private readonly Dictionary<int, (int Raw, long At)> _verify = [];
+    private readonly Dictionary<int, (int Raw, long At, int? Before)> _verify = [];
     private readonly Dictionary<int, int> _failures = [];
     private readonly Dictionary<int, string> _dropped = [];
     private readonly Dictionary<int, Handback> _handbacks = [];
@@ -196,7 +208,7 @@ public sealed class HwmonFanControl : IDisposable
         var raw = (int)Math.Ceiling(duty * 255 / 100.0); // round up: never land under the floor (30 % = 76.5)
 
         // 1) verdicts on writes that have had time to land
-        foreach (var (index, (wrote, at)) in _verify.ToList())
+        foreach (var (index, (wrote, at, before)) in _verify.ToList())
         {
             if (now - at < VerifyAfterMs)
             {
@@ -206,7 +218,7 @@ public sealed class HwmonFanControl : IDisposable
             _verify.Remove(index);
             _written.Remove(index); // re-written next tick, then judged again
             var readBack = ReadInt($"pwm{index}");
-            if (readBack is { } r && Math.Abs(r - wrote) <= PwmTolerance)
+            if (readBack is { } r && (Math.Abs(r - wrote) <= PwmTolerance || StillRamping(before, r, wrote)))
             {
                 _failures.Remove(index);
                 _retakes.Remove(index); // holding again: a later loss starts from the short delay
@@ -246,11 +258,12 @@ public sealed class HwmonFanControl : IDisposable
 
             try
             {
+                var before = ReadInt($"pwm{index}"); // where the output was, to tell a slow ramp from no response
                 Write($"pwm{index}_enable", 1);
                 Write($"pwm{index}", raw);
                 _written[index] = raw;
                 _lastDutyWrite[index] = now;
-                _verify[index] = (raw, now);
+                _verify[index] = (raw, now, before);
             }
             catch (Exception ex)
             {
