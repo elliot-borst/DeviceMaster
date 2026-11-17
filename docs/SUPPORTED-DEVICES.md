@@ -164,6 +164,11 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - Safety: SuperIO has no hardware fallback — a killed process leaves the last duty in
   place — so header/GPU duties are floored at 30% (`SafetyLimits.HeaderMinimumDutyPercent`)
   and every touched control is restored on shutdown.
+- **MSI boards with the NCT6687D(-R) EC (B840/B850/X870/X870E/Z890) on Linux:** system-fan headers
+  refuse software duty (EIO, `dmesg`: "The device rejected new configuration as invalid") unless the
+  out-of-tree `nct6687` driver is loaded with `msi_fan_brute_force=1`; the CPU header works either way.
+  Verified on MAG X870E TOMAHAWK WIFI (MS-7E59). Full cause, fix, persistence (incl. Unraid) and
+  sources: docs/LINUX.md → "MSI boards: system fans need `msi_fan_brute_force=1`" (#85).
 
 ## Turzx / Turing-family smart screens
 

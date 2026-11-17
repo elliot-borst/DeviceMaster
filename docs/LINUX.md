@@ -185,12 +185,86 @@ Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
 
 - **Fan driver:** load the kernel's Super I/O driver (`modprobe nct6775`, persist with
   `/etc/modules-load.d/nct6775.conf`). Only headers with a spinning fan at start-up are controlled.
+  Newer MSI boards use the out-of-tree `nct6687` driver instead and need one extra option: see
+  [MSI boards: system fans need `msi_fan_brute_force=1`](#msi-boards-system-fans-need-msi_fan_brute_force1).
 - **Safety:** SuperIO has no hardware fallback, so a killed process leaves the last duty in place;
   duties never go below `SafetyLimits.HeaderMinimumDutyPercent` (30 %, rounded up), sensor failure
   drives 100 %, and SIGTERM/mode Off hand every header back to its original `pwmN_enable` mode.
   Run under a restart policy.
 - **Clock:** the dashboard shows the container's local time; set `TZ` (the image includes tzdata).
 
+
+## MSI boards: system fans need `msi_fan_brute_force=1`
+
+Read this before trying anything else on an MSI board's fan headers (#85). It took several attempts to
+find; this is the cause and the fix.
+
+**Applies to:** MSI boards with the Nuvoton NCT6687D(-R) embedded controller, driven on Linux by the
+out-of-tree [`nct6687` driver](https://github.com/Fred78290/nct6687d) (hwmon name `nct6687`, often
+installed as a package or plugin, e.g. the Unraid "nct6687-driver" plugin). The driver's README lists
+the affected `msi_alt1` families: B840 / B850 / X870 / X870E / Z890. Verified on an MSI MAG X870E
+TOMAHAWK WIFI (MS-7E59), BIOS 2.AC4, driver build 20261019, kernel 6.18, 2026-11-18.
+
+**Symptoms**
+- The CPU fan header (`pwm1`) takes a duty, but every system-fan header (`pwm3`, `pwm5`, …) refuses:
+  the write to `pwmN` or `pwmN_enable` fails with `Input/output error` (EIO).
+- `dmesg` shows `nct6687: The device rejected new configuration as invalid`, once per refused write
+  (75 of them in the case above).
+- DeviceMaster logs `motherboard fans: pwmN does not take a duty (… Input/output error …) — handing it
+  back to the BIOS`, and the dashboard notes those headers "run on the board's own BIOS curve".
+  Before #85 that note said the board "doesn't accept software speed control", which was misleading.
+- Without the fix, some MSI boards instead send every fan to about 60 % (duty 154/255) once one is set
+  (nct6687d issue #148).
+
+**Cause.** On these boards the EC doesn't take a plain manual duty for a system fan; it runs each
+system fan from a 7-point curve and rejects a configuration it considers invalid. Since nct6687d PR
+#190 the driver checks each write and returns EIO when the EC refuses it. `msi_fan_brute_force=1`
+makes the driver write the requested duty to all 7 curve points (a flat curve), which the EC
+accepts. The driver saves the original curve first and restores it when the header goes back to
+automatic (`pwmN_enable` = 2), on driver unload, or when its fan-control watchdog expires. So
+DeviceMaster's hand-back to the BIOS curve still works. The CPU and pump headers have their own manual
+mode and don't need the option. **This is not a DeviceMaster bug:** DeviceMaster was right to hand
+the refused headers back to the BIOS; it just couldn't drive them without the driver option.
+
+**Fix**
+1. Stop DeviceMaster, so nothing writes to the chip while the driver reloads.
+2. Reload the driver with the option, then check `pwm1`…`pwm8` exist again:
+   `rmmod nct6687 && modprobe nct6687 msi_fan_brute_force=1`.
+   This driver build doesn't expose the option under `/sys/module/nct6687/parameters`, so prove it
+   with a write instead.
+3. Test one header: `echo 1 > pwmN_enable; echo 128 > pwmN` should succeed with no new "rejected"
+   lines in `dmesg`. `fanN_input` falls gradually (the EC moves about 2 % a second). Then
+   `echo 2 > pwmN_enable` hands it back to the BIOS, and the rpm climbs back.
+4. Start DeviceMaster. Its log shows no "does not take a duty" lines, the dashboard lists the system
+   fans as controlled, and the BIOS-curve note is gone.
+
+**Make it survive a reboot**
+- Plain Linux: `/etc/modprobe.d/nct6687.conf` containing `options nct6687 msi_fan_brute_force=1`.
+- **Unraid:** `/etc` is rebuilt at every boot, so put that file in **`/boot/config/modprobe.d/nct6687.conf`**
+  on the flash drive. `rc.modules.local` copies every file in `/boot/config/modprobe.d` into
+  `/etc/modprobe.d` at boot, before plugins load the driver. Copy it to `/etc/modprobe.d` as well to
+  apply it without a reboot. Check with `modprobe -c | grep nct6687`.
+- Undo: delete the file and reload the driver (or reboot); the headers go back to the BIOS curve.
+
+**Pitfalls**
+- Don't force `fan_config=msi_alt1` on older MSI boards (B650/B660/X670/Z690/Z790): they use the
+  `default` map, and `msi_alt1` reads zero rpm on every system fan there. `auto` (the default) picks
+  correctly; check `/sys/module/nct6687/parameters/fan_config`.
+- `manual=1` is about voltage labels, not fans; it doesn't help.
+- Unloading the driver while DeviceMaster runs makes its writes fail. The fans keep running on the
+  EC's own curves, but stop DeviceMaster first, and start it again afterwards.
+- After an S3 resume the EC may write its own curves back while `pwmN_enable` still reads 1
+  (nct6687d PR #228). DeviceMaster rewrites duties regularly, so it recovers on its next refresh.
+- Upstream PR #228 (a draft as of 2026-11) would control system fans through their own manual bits,
+  which would make `msi_fan_brute_force` unnecessary. Re-check after a driver update.
+
+**Sources:** the [nct6687d README](https://github.com/Fred78290/nct6687d) (module parameters, the
+supported-board table, the "Loading `msi_fan_brute_force` parameter fails" troubleshooting entry), and
+these pages under github.com/Fred78290/nct6687d/:
+- issue #148: MSI B850/X870E Tomahawk; brute force fixes case-fan control; the 60 % behaviour;
+- issue #224: X870E Carbon; the EIO plus "rejected new configuration as invalid", fixed by brute force;
+- PR #190: write verification returning EIO; curve save and restore; tested on MS-7E59;
+- PR #228: draft, the EC's register-level behaviour.
 
 ## Automations on the fleet hub (#83)
 

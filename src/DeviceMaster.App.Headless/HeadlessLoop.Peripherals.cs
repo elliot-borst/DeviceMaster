@@ -147,7 +147,11 @@ public sealed partial class HeadlessLoop
         return never.Count == 0
             ? []
             : [$"Fan header{(never.Count > 1 ? "s" : "")} {string.Join(", ", never.Select(i => $"pwm{i}"))} "
-                + "run on the board's own BIOS curve (the board doesn't accept software speed control on them)"];
+                + "run on the board's own BIOS curve (the board rejected software speed control on them)"
+                + (_mbFans?.Chip == "nct6687"
+                    // MSI NCT6687D-R boards reject SYS_FAN duties unless the driver writes the whole curve (#85)
+                    ? ": on MSI boards load the nct6687 driver with msi_fan_brute_force=1 (docs/LINUX.md)"
+                    : "")];
     }
 
     private void HandBackMotherboardFans(List<string> warnings)
