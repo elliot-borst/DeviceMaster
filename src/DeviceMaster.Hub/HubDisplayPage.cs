@@ -48,7 +48,7 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
 .bar { height:1.1vh; border-radius:1vh; background:#0b0d11; border:1px solid var(--line); overflow:hidden; margin-top:.4vh; }
 .bar i { display:block; height:100%; background:linear-gradient(90deg,var(--a1),var(--a2)); }
 .bar i.warn { background:var(--warn); } .bar i.bad { background:var(--bad); }
-.hero { font-size:9vh; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
+.hero { font-size:6.5vh; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
 .hero small { font-size:3vh; color:var(--dim); font-weight:600; }
 .list { font-size:1.6vh; color:var(--dim); margin-top:1vh; overflow:hidden; }
 .speed { font-size:7vh; font-weight:800; line-height:1; background:linear-gradient(90deg,var(--a1),var(--a2),var(--a3)); -webkit-background-clip:text; color:transparent; font-variant-numeric:tabular-nums; }
@@ -198,7 +198,8 @@ function render(h){
   const dk = ms.filter(m => m.Docker);
   $("docker").innerHTML = dk.length ? dk.map(m => `<div class="hero">${m.Docker.Running}<small> / ${m.Docker.Total}</small></div>
       <div class="sub">running on ${esc(m.Name)}</div>
-      ${m.Docker.Stopped.length ? `<div class="list ell">Stopped: ${m.Docker.Stopped.slice(0, 6).map(esc).join(", ")}${m.Docker.Stopped.length > 6 ? "…" : ""}</div>` : `<div class="list">All containers running</div>`}`).join("")
+      ${m.Docker.Stopped.length ? `<div class="list" style="margin-top:auto;overflow:hidden;min-height:0">Stopped (${m.Docker.Stopped.length}):
+        ${m.Docker.Stopped.map(s => `<div class="ell" style="padding-left:1em">${esc(s)}</div>`).join("")}</div>` : `<div class="list">All containers running</div>`}`).join("")
     : `<div class="list">No container host reporting</div>`;
   const s = h.sabnzbd;
   if (!s) $("sab").innerHTML = `<div class="list">SABnzbd not configured</div>`;
