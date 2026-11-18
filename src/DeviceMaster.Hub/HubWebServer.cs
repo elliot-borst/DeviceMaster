@@ -17,7 +17,9 @@ namespace DeviceMaster.Hub;
 public sealed class HubWebServer : IDisposable
 {
     private readonly FleetHub _hub;
-    private readonly HttpListener _listener = new();
+    private HttpListener _listener = new();
+    private readonly IReadOnlyList<string> _hosts;
+    private readonly int _port;
     private readonly Action<string> _log;
     private readonly Thread _thread;
 
@@ -48,6 +50,8 @@ public sealed class HubWebServer : IDisposable
         }
 
         var hosts = binds.Count > 0 ? binds : ["127.0.0.1"];
+        _hosts = hosts;
+        _port = port;
 
         // A host-specific prefix makes HttpListener reject every request whose Host header differs
         // — and tailscale serve forwards the public name (devicemaster.<tailnet>.ts.net). So accept
@@ -70,7 +74,25 @@ public sealed class HubWebServer : IDisposable
 
     public void Start()
     {
-        _listener.Start();
+        try
+        {
+            _listener.Start();
+        }
+        catch (HttpListenerException ex) when (OperatingSystem.IsWindows() && ex.ErrorCode == 5)
+        {
+            // Not elevated (a test run, or the app started without admin): Windows only lets admins
+            // listen on "+". Fall back to the bind hosts themselves — local callers still work; a
+            // tailscale serve in front may then need the matching Host (the elevated app never hits this).
+            _listener = new HttpListener();
+            foreach (var host in _hosts.Where(h => h is not ("+" or "*" or "0.0.0.0")).DefaultIfEmpty("127.0.0.1"))
+            {
+                _listener.Prefixes.Add($"http://{(host == "localhost" ? "127.0.0.1" : host)}:{_port}/");
+            }
+
+            _listener.Start();
+            _log("fleet hub web: not elevated — listening on the bind address only (http://+ needs admin on Windows)");
+        }
+
         _thread.Start();
         if (_peerListener is not null)
         {
