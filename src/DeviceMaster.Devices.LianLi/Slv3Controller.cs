@@ -76,6 +76,16 @@ public sealed class Slv3Controller : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether any SL V3 dongle is attached at all — as a working interface or as a present USB
+    /// node in an error state. False on a machine that has no Lian Li wireless kit (or had it
+    /// removed): then there is nothing to open, warn about or recover.
+    /// </summary>
+    public static bool AnyDonglePresent() =>
+        WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid).Count > 0
+        || DeviceMaster.Core.Discovery.UsbDeviceRestarter.FindInstanceIds(Vid, TxPid).Count > 0
+        || DeviceMaster.Core.Discovery.UsbDeviceRestarter.FindInstanceIds(Vid, RxPid).Count > 0;
+
     public static Slv3Controller Open(Action<string>? trace = null, Action<string>? log = null)
     {
         var candidates = WinUsbDevice.Enumerate(WinUsbDevice.Slv3InterfaceGuid);
