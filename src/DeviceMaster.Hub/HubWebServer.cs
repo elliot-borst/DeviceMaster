@@ -181,6 +181,18 @@ public sealed class HubWebServer : IDisposable
             Send(ctx, status, type, answer);
             return;
         }
+        else if (_failover is { IsActive: false } watcher && IsFleetRead(ctx.Request.HttpMethod, path))
+        {
+            // standby (#100): only the active hub knows whether each machine matches the fleet
+            // settings, so read the list from it; its own (sync-less) view only if that fails
+            var (status, type, answer) = watcher.ForwardToActiveAsync("GET", ctx.Request.Url?.PathAndQuery ?? path, null, User(ctx))
+                .GetAwaiter().GetResult();
+            if (status == 200)
+            {
+                Send(ctx, status, type, answer);
+                return;
+            }
+        }
 
         if (path.StartsWith("/m/", StringComparison.Ordinal))
         {
@@ -371,6 +383,12 @@ public sealed class HubWebServer : IDisposable
         _log($"hub: {user} asked {name} to power {action} ({status})");
         Send(ctx, status, "application/json; charset=utf-8", body);
     }
+
+    /// <summary>Fleet machine lists a standby reads from the active hub (#100): only it computes InSync.</summary>
+    public static bool IsFleetRead(string method, string path) =>
+        method == "GET" && (path is "/api/fleet/machines" or "/api/fleet/home"
+                            || (path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal)
+                                && path.IndexOf('/', "/api/fleet/machines/".Length) < 0));
 
     /// <summary>Requests that change something: they only ever run on the active hub (#68).</summary>
     public static bool IsWrite(string method, string path) =>

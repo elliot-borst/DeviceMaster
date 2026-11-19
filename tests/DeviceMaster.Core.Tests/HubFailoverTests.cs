@@ -59,6 +59,16 @@ public class HubElectionTests
     [InlineData("GET", "/m/MindForge/status.json", false)]
     public void WritesAreTheRequestsAStandbyForwards(string method, string path, bool write) =>
         Assert.Equal(write, DeviceMaster.Hub.HubWebServer.IsWrite(method, path));
+
+    [Theory]
+    [InlineData("GET", "/api/fleet/machines", true)]
+    [InlineData("GET", "/api/fleet/home", true)]
+    [InlineData("GET", "/api/fleet/machines/StormVault", true)]
+    [InlineData("GET", "/api/fleet/machines/StormVault/settings", false)]
+    [InlineData("GET", "/api/fleet/settings", false)]
+    [InlineData("POST", "/api/fleet/machines/StormVault/power", false)]
+    public void FleetListsAreReadFromTheActiveHub(string method, string path, bool read) =>
+        Assert.Equal(read, DeviceMaster.Hub.HubWebServer.IsFleetRead(method, path));
 }
 
 /// <summary>Two hubs in one process: their peer APIs wired to each other through a fake network.</summary>
