@@ -363,15 +363,6 @@ public sealed class ServersPage
         Stat("CPU", Deg(m.CpuTemperatureC));
         Stat("GPU", Deg(m.GpuTemperatureC));
         Stat("FANS", m.FanDutyPercent is { } d ? $"{d}%" : "—");
-        if (m.CoolantTemperatureC is not null)
-        {
-            Stat("COOLANT", Deg(m.CoolantTemperatureC));
-        }
-
-        if (m.PumpDutyPercent is { } p)
-        {
-            Stat("PUMP", $"{p}%");
-        }
 
         body.Children.Add(stats);
 
@@ -395,9 +386,8 @@ public sealed class ServersPage
             var chips = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
             foreach (var (on, label) in new[]
             {
-                (c.Pump, "Pump"), (c.CorsairHubs, "Corsair"), (c.LianLiFans, "Lian Li"), (c.MotherboardFans, "Board fans"),
-                (c.MotherboardRgb, "Board RGB"), (c.RamRgb, "RAM RGB"), (c.GpuRgb, "GPU RGB"), (c.PumpLcd, "Pump LCD"),
-                (c.FanLcds, "Fan LCDs"), (c.Turzx, "Turzx"),
+                (c.CorsairHubs, "Corsair"), (c.LianLiFans, "Lian Li"), (c.MotherboardFans, "Board fans"),
+                (c.MotherboardRgb, "Board RGB"), (c.RamRgb, "RAM RGB"), (c.GpuRgb, "GPU RGB"), (c.Turzx, "Turzx"),
             }.Where(x => x.Item1))
             {
                 chips.Children.Add(new Border
@@ -422,9 +412,9 @@ public sealed class ServersPage
                 body.Children.Add(Note("⚠ " + warning, Theme.Warn));
             }
 
-            foreach (var device in status.Devices.Where(d => !d.IsScreen))
+            foreach (var device in status.Devices)
             {
-                body.Children.Add(Note($"{device.Name}{(device.IsPump ? " (pump)" : "")} · {device.Family} · {(device.Rpm is { } rpm ? $"{rpm} rpm" : "—")} · {device.AppliedDutyPercent}%", Theme.Dim));
+                body.Children.Add(Note($"{device.Name} · {device.Family} · {(device.Rpm is { } rpm ? $"{rpm} rpm" : "—")} · {device.AppliedDutyPercent}%", Theme.Dim));
             }
         }
 

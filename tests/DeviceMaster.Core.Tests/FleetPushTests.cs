@@ -235,18 +235,18 @@ public sealed class FleetPushTests : IDisposable
     public async Task OnlyTheManagedSectionChangesOnTheMachine()
     {
         _agent.Settings.SetSource(CurveSource.Cpu);
-        _agent.Settings.PumpDutyPercent = 80;
+        _agent.Settings.ManualDutyPercent = 80;
         _store.Update(s => s with
         {
             Managed = [FleetSection.Lighting],
-            Profile = s.Profile with { Source = CurveSource.Hottest, PumpDutyPercent = 100, RgbOff = true },
+            Profile = s.Profile with { Source = CurveSource.Hottest, ManualDutyPercent = 100, RgbOff = true },
         }, "t", "t");
 
         await _hub.PollOnce();
 
         Assert.True(_agent.Settings.RgbOff);
         Assert.Equal(CurveSource.Cpu, _agent.Settings.Source);  // cooling stays the machine's own
-        Assert.Equal(80, _agent.Settings.PumpDutyPercent);
+        Assert.Equal(80, _agent.Settings.ManualDutyPercent);
     }
 
     public void Dispose()
@@ -263,10 +263,10 @@ public class FleetCoolingTests
     [Fact]
     public void FleetCoolingAlwaysUsesEachMachinesHottestSensor()
     {
-        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { Source = CurveSource.Coolant, Mode = ControlMode.Off, PumpDutyPercent = 20 })!;
-        Assert.Equal(CurveSource.Hottest, safe.Source);          // coolant/GPU-only would failsafe machines without that sensor
+        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { Source = CurveSource.Gpu, Mode = ControlMode.Off, ManualDutyPercent = 150 })!;
+        Assert.Equal(CurveSource.Hottest, safe.Source);          // a GPU-only source would failsafe machines without a GPU
         Assert.Equal(ControlMode.Curve, safe.Mode);              // never hand fans back to hardware from the fleet
-        Assert.Equal(DeviceMaster.Core.Safety.SafetyLimits.PumpMinimumDutyPercent, safe.PumpDutyPercent);
+        Assert.Equal(100, safe.ManualDutyPercent);
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class FleetCoolingTests
     [InlineData(FleetSection.Cooling)]
     public void OverridesSetAndClearPerSection(FleetSection section)
     {
-        var own = FleetOverrides.Set(new FleetOverride(), section, new FleetProfile { Mode = ControlMode.Manual, LcdScreens = LcdMode.Off, RgbOff = true });
+        var own = FleetOverrides.Set(new FleetOverride(), section, new FleetProfile { Mode = ControlMode.Manual, TurzxScreen = LcdMode.Off, RgbOff = true });
         Assert.True(FleetOverrides.Has(own, section));
         Assert.All(Enum.GetValues<FleetSection>().Where(s => s != section), other => Assert.False(FleetOverrides.Has(own, other)));
         Assert.False(FleetOverrides.Has(FleetOverrides.Clear(own, section), section));
@@ -295,11 +295,11 @@ public class FleetCoolingTests
     [Fact]
     public void FleetCoolingReachesTheMachineThroughItsOwnClamps()
     {
-        var machine = new ControlSettings { PumpDutyPercent = 100 };
+        var machine = new ControlSettings();
         machine.SetSource(CurveSource.Cpu);
         var state = new FleetState
         {
-            Profile = FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = [new(40, 30), new(85, 100)], PumpDutyPercent = 100 })!,
+            Profile = FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = [new(40, 30), new(85, 100)] })!,
             Managed = [FleetSection.Cooling],
         };
 
@@ -308,7 +308,6 @@ public class FleetCoolingTests
         Assert.Equal(CurveSource.Hottest, machine.Source);
         Assert.Equal(ControlMode.Curve, machine.Mode);
         Assert.Equal([new(40, 30), new(85, 100)], machine.CurvePoints);
-        Assert.Equal(100, machine.PumpDutyPercent);
     }
 }
 
@@ -383,11 +382,11 @@ public sealed class FullSettingsTests : IDisposable
     [Fact]
     public async Task APagePatchReachesTheServerThroughItsClamps()
     {
-        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"pumpDuty":10,"rgbR":200}""");
+        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"fanDuty":150,"rgbR":200}""");
         Assert.Equal(200, status);
         Assert.Contains("rgbR=200", body);
         Assert.Equal(200, _agent.Settings.RgbR);
-        Assert.Equal(DeviceMaster.Core.Safety.SafetyLimits.PumpMinimumDutyPercent, _agent.Settings.PumpDutyPercent);
+        Assert.Equal(100, _agent.Settings.ManualDutyPercent);
     }
 
     [Fact]

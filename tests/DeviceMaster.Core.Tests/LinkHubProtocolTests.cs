@@ -149,18 +149,31 @@ public class LinkDutyPlannerTests
     private static LinkChannel Fan(int channel) =>
         new(channel, $"FAN{channel}", 0x01, 0x00, LinkDeviceCatalog.Find(0x01, 0x00));
 
-    private static LinkChannel Pump(int channel) =>
-        new(channel, $"PMP{channel}", 0x0c, 0x00, LinkDeviceCatalog.Find(0x0c, 0x00));
+    /// <summary>A chain device as the hub reports it: model byte looked up in the catalog.</summary>
+    private static LinkChannel Device(int channel, byte model, byte variant = 0x00) =>
+        new(channel, $"DEV{channel}", model, variant, LinkDeviceCatalog.Find(model, variant));
 
     private static LinkChannel Unknown(int channel) => new(channel, $"UNK{channel}", 0xEE, 0x00, null);
 
-    [Fact]
-    public void PumpChannels_AlwaysGetFailsafeDuty_IgnoringRequests()
+    // pump control was removed: every liquid-cooling model (AIOs 0x07/0x11, water blocks 0x09/0x0A,
+    // XD5/XD6 pumps 0x0C/0x19, the XD5 Elite LCD 0x0E) is uncatalogued, so a chain carrying one is
+    // never written to — no pump ever receives a duty, fan-style or otherwise
+    [Theory]
+    [InlineData(0x07)]
+    [InlineData(0x09)]
+    [InlineData(0x0a)]
+    [InlineData(0x0c)]
+    [InlineData(0x0e)]
+    [InlineData(0x11)]
+    [InlineData(0x19)]
+    public void LiquidCoolingDevices_AreUnknown_AndAbortTheWholeWrite(byte model)
     {
-        var duties = LinkDutyPlanner.BuildDutyMap([Fan(1), Pump(2)], new Dictionary<int, int> { [1] = 70, [2] = 20 });
+        var device = Device(2, model);
 
-        Assert.Equal(70, duties[1]);
-        Assert.Equal(100, duties[2]);
+        Assert.False(device.IsKnown);
+        Assert.False(device.ControlsSpeed);
+        Assert.Throws<InvalidOperationException>(() =>
+            LinkDutyPlanner.BuildDutyMap([Fan(1), device], new Dictionary<int, int> { [1] = 70, [2] = 20 }));
     }
 
     [Theory]
@@ -182,35 +195,22 @@ public class LinkDutyPlannerTests
         Assert.Equal(80, duties[2]);
     }
 
-    [Theory]
-    [InlineData(70, 70)]
-    [InlineData(100, 100)]
-    [InlineData(30, 50)]   // below the safety floor -> floored, never lower
-    [InlineData(150, 100)]
-    public void PumpDuty_IsControlledSeparately_AndFloored(int requestedPump, int expected)
-    {
-        var duties = LinkDutyPlanner.BuildDutyMap([Fan(1), Pump(2)],
-            new Dictionary<int, int> { [1] = 40, [2] = 10 }, requestedPump);
-
-        Assert.Equal(40, duties[1]);
-        Assert.Equal(expected, duties[2]); // the fan-style request for ch2 is ignored
-    }
-
     [Fact]
     public void UnknownDeviceOnChain_AbortsAllWrites() =>
         Assert.Throws<InvalidOperationException>(() => LinkDutyPlanner.BuildDutyMap([Fan(1), Unknown(2)]));
 
     [Fact]
-    public void UnknownDevice_IsTreatedAsPump() => Assert.True(Unknown(1).IsPump);
+    public void UnknownDevice_NeverControlsSpeed() => Assert.False(Unknown(1).ControlsSpeed);
 
     [Fact]
     public void NonSpeedDevices_AreExcludedFromWrites()
     {
-        var lcd = new LinkChannel(13, "LCD", 0x0e, 0x00, LinkDeviceCatalog.Find(0x0e, 0x00));
+        var sensorOnly = new LinkChannel(13, "TACH", 0x01, 0x00,
+            new LinkDeviceInfo(LinkDeviceModel.FanQxSeries, 0x00, "tach only", LinkDeviceFlags.ReportsSpeed));
 
-        var duties = LinkDutyPlanner.BuildDutyMap([Fan(1), lcd]);
+        var duties = LinkDutyPlanner.BuildDutyMap([Fan(1), sensorOnly]);
 
-        Assert.True(lcd.IsKnown);
+        Assert.True(sensorOnly.IsKnown);
         Assert.False(duties.ContainsKey(13));
         Assert.Equal(LinkDutyPlanner.DefaultFanDutyPercent, duties[1]);
     }
@@ -242,14 +242,8 @@ public class LinkDeviceCatalogLedCodeTests
     }
 
     [Fact]
-    public void FindByLedCommandCode_ResolvesXd6Pump()
-    {
-        var info = LinkDeviceCatalog.FindByLedCommandCode(0x11);
-
-        Assert.NotNull(info);
-        Assert.Equal(22, info!.LedCount);
-        Assert.True(info.IsPump);
-    }
+    public void FindByLedCommandCode_NoLongerResolvesThePump() =>
+        Assert.Null(LinkDeviceCatalog.FindByLedCommandCode(0x11)); // XD6 — uncatalogued with pump control gone
 
     [Fact]
     public void FindByLedCommandCode_ZeroIsNeverAMatch() =>

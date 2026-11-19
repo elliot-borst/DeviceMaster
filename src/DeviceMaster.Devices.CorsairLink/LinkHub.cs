@@ -21,7 +21,7 @@ public sealed class LinkHubException : Exception
 /// An open session to one iCUE LINK System Hub. Transport and sequencing ported from
 /// EvanMulawski/FanControl.CorsairLink (MIT).
 /// Safety: construction refuses devices that aren't a positively identified Link hub;
-/// speed writes go through <see cref="LinkDutyPlanner"/> (pump always 100%, unknowns abort);
+/// speed writes go through <see cref="LinkDutyPlanner"/> (fans only, unknowns abort);
 /// Dispose restores hardware mode if this session put the hub into software mode.
 /// </summary>
 public sealed class LinkHub : IDisposable
@@ -165,25 +165,22 @@ public sealed class LinkHub : IDisposable
 
     /// <summary>
     /// Writes fixed duties for every populated channel (the hub expects the full map each time).
-    /// Pump channels get <paramref name="pumpDutyPercent"/> floored at 50%, and unknown devices
-    /// abort — see <see cref="LinkDutyPlanner"/>.
+    /// Unknown devices abort — see <see cref="LinkDutyPlanner"/>.
     /// </summary>
-    public IReadOnlyDictionary<int, byte> WriteFixedDuties(
-        IReadOnlyDictionary<int, int>? requestedDuties = null,
-        int pumpDutyPercent = Core.Safety.SafetyLimits.FailsafeDutyPercent)
+    public IReadOnlyDictionary<int, byte> WriteFixedDuties(IReadOnlyDictionary<int, int>? requestedDuties = null)
     {
         if (_channels.Count == 0)
         {
             throw new InvalidOperationException("Channels not enumerated — call EnumerateChannels first.");
         }
 
-        var duties = LinkDutyPlanner.BuildDutyMap(_channels, requestedDuties, pumpDutyPercent);
+        var duties = LinkDutyPlanner.BuildDutyMap(_channels, requestedDuties);
         var data = LinkHubPackets.CreateSoftwareSpeedFixedPercentData(duties);
         WriteEndpoint(LinkHubProtocol.Endpoints.SoftwareSpeedFixedPercent, LinkHubProtocol.DataTypes.SoftwareSpeedFixedPercent, data);
         return duties;
     }
 
-    /// <summary>Fans to the reference default (50%), pumps to 100% — a defined, safe state.</summary>
+    /// <summary>Fans to the reference default (50%) — a defined, safe state.</summary>
     public IReadOnlyDictionary<int, byte> WriteSafeDefaults() => WriteFixedDuties();
 
     // ---- RGB (ported from OpenLinkHub) ----
@@ -766,7 +763,7 @@ public sealed class LinkHub : IDisposable
     /// <summary>
     /// Forces the next color write to rebuild the whole color path: registry read, endpoint
     /// re-open, black reset frame + 40 ms. A chain device that renegotiated its hub link
-    /// (XD6 pump after a link blip, 2026-08-29) keeps ACK-ing re-streamed frames without
+    /// (seen after a link blip, 2026-08-29) keeps ACK-ing re-streamed frames without
     /// painting them — only this init sequence makes it accept color again.
     /// </summary>
     public void InvalidateColorPath()

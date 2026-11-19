@@ -104,22 +104,12 @@ public class FleetProfileTests
     public void LeavesMachineOnlySettingsAlone()
     {
         var settings = new ControlSettings { TurzxRotation = 180, StartWithWindows = false, SeenFanIds = ["a"] };
-        settings.ScreenConfig("pump-lcd", isPump: true).RotationDegrees = 90;
 
         new FleetProfile { TurzxScreen = LcdMode.Metrics }.ApplyTo(settings);
 
         Assert.Equal(180, settings.TurzxRotation);
         Assert.False(settings.StartWithWindows);
         Assert.Equal(["a"], settings.SeenFanIds);
-        Assert.Equal(90, settings.ScreenConfig("pump-lcd", isPump: true).RotationDegrees);
-    }
-
-    [Fact]
-    public void PumpDutyNeverBelowTheFloor()
-    {
-        var settings = new ControlSettings();
-        new FleetProfile { PumpDutyPercent = 10 }.ApplyTo(settings);
-        Assert.Equal(SafetyLimits.PumpMinimumDutyPercent, settings.PumpDutyPercent);
     }
 
     [Fact]
@@ -135,20 +125,20 @@ public class FleetProfileTests
     public void BlackoutKeepsTheIntendedLightingUnderneath()
     {
         var settings = new ControlSettings();
-        new FleetProfile { RgbEnabled = true, RgbOff = false, LcdScreens = LcdMode.Metrics, Blackout = true }.ApplyTo(settings);
+        new FleetProfile { RgbEnabled = true, RgbOff = false, TurzxScreen = LcdMode.Metrics, Blackout = true }.ApplyTo(settings);
 
         Assert.True(settings.BlackoutActive);
         Assert.True(settings.RgbOff); // painting black now
-        Assert.Equal(LcdMode.Off, settings.LcdScreens);
+        Assert.Equal(LcdMode.Off, settings.TurzxScreen);
 
         var seen = FleetProfile.From(settings); // reports the intended state, not the blackout
         Assert.False(seen.RgbOff);
-        Assert.Equal(LcdMode.Metrics, seen.LcdScreens);
+        Assert.Equal(LcdMode.Metrics, seen.TurzxScreen);
         Assert.True(seen.Blackout);
 
-        new FleetProfile { RgbEnabled = true, RgbOff = false, LcdScreens = LcdMode.Metrics, Blackout = false }.ApplyTo(settings);
+        new FleetProfile { RgbEnabled = true, RgbOff = false, TurzxScreen = LcdMode.Metrics, Blackout = false }.ApplyTo(settings);
         Assert.False(settings.RgbOff);
-        Assert.Equal(LcdMode.Metrics, settings.LcdScreens);
+        Assert.Equal(LcdMode.Metrics, settings.TurzxScreen);
     }
 
     [Fact]
@@ -166,15 +156,16 @@ public class FleetProfileTests
     [Fact]
     public void TheHottestSourceGetsTheDieTemperatureCurve()
     {
-        var settings = new ControlSettings(); // coolant by default
+        var settings = new ControlSettings { Source = CurveSource.Cpu };
         settings.SetSource(CurveSource.Hottest);
-        Assert.Equal(CurveRules.DefaultFor(coolant: false), settings.CurvePoints);
+        Assert.Equal(CurveRules.Default, settings.CurvePoints);
     }
 
     [Fact]
     public void TheWebApiAcceptsTheHottestSource()
     {
         var cfg = new HeadlessConfig();
+        cfg.Control.Source = CurveSource.Cpu;
         var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"source":3}""", out var invalid);
         Assert.False(invalid);
         Assert.NotEmpty(applied);

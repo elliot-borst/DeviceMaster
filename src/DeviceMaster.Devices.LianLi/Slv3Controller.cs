@@ -406,12 +406,14 @@ public sealed class Slv3Controller : IDisposable
     /// </summary>
     public byte SetFanDuty(Slv3Device device, int dutyPercent)
     {
+        if (device.IsAio)
+        {
+            throw new InvalidOperationException($"SL V3 device {device.MacText[..4]} is an AIO pump head — pump control is not supported");
+        }
+
         var clamped = SafetyGuard.ClampFanDuty(dutyPercent);
         var pwmValue = Slv3Protocol.DutyPercentToPwm(clamped);
-        var pwm = Slv3Protocol.ApplyPwmConstraints(
-            [pwmValue, pwmValue, pwmValue, pwmValue],
-            device.FanCount,
-            isAio: device.DeviceType is 10 or 11);
+        var pwm = Slv3Protocol.ApplyPwmConstraints([pwmValue, pwmValue, pwmValue, pwmValue], device.FanCount);
 
         var sequenceIndex = (byte)(Devices
             .Where(d => d.IsBoundTo(MasterMac) && d.DeviceType != 0xFF)
@@ -485,8 +487,8 @@ public sealed class Slv3Controller : IDisposable
         var compressed = TinyUz.Compress(raw);
 
         // real 2 ms gaps (#62): with Thread.Sleep(2) = ~15.6 ms on Windows a colour send took
-        // ~0.4 s per group, a full re-send ~1.7 s of the 1 Hz tick — so the per-tick colour heal
-        // after each fan-LCD push (which drops fans to firmware rainbow) landed seconds late
+        // ~0.4 s per group, a full re-send ~1.7 s of the 1 Hz tick — so colour confirmations
+        // landed seconds late
         lock (_staticDelayGate)
         {
             foreach (var payload in Slv3Protocol.BuildRgbRfPayloads(
@@ -578,11 +580,14 @@ public sealed class Slv3Controller : IDisposable
     public void SendMasterClock() =>
         SendRfChunks(Slv3Protocol.BuildMasterClockRfData(MasterMac), MasterChannel, 0xFF);
 
-    /// <summary>One keepalive round: heartbeat plus a PWM refresh for every bound device.</summary>
+    /// <summary>
+    /// One keepalive round: heartbeat plus a PWM refresh for every bound fan group. A wireless AIO
+    /// (pump head) is never driven — pump control is not supported, so it stays on its own firmware curve.
+    /// </summary>
     public void SendKeepalive(int dutyPercent)
     {
         SendMasterClock();
-        foreach (var device in Devices.Where(d => d.IsBoundTo(MasterMac)))
+        foreach (var device in Devices.Where(d => d.IsBoundTo(MasterMac) && !d.IsAio))
         {
             SetFanDuty(device, dutyPercent);
         }

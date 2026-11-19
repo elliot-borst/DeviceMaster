@@ -15,12 +15,11 @@ public sealed class HeadlessConfig
     public ControlSettings Control { get; set; } = new()
     {
         Mode = ControlMode.Curve,
-        Source = CurveSource.Coolant,
+        Source = CurveSource.Hottest,
         RgbEnabled = true,
         RgbR = 128,
         RgbG = 0,
         RgbB = 255,
-        LcdBrightness = 100,
     };
 
     /// <summary>PCI address of the GPU whose i2c bus carries the ENE RGB chip (e.g. "01:00.0"). Null = first NVIDIA adapter.</summary>

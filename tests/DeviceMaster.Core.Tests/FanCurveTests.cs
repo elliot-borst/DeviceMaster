@@ -48,7 +48,6 @@ public class FanCurveTests
     [Fact]
     public void DefaultCurves_EndAtFullDuty()
     {
-        Assert.Equal(100, FanCurve.DefaultCoolant.EvaluateDuty(100));
         Assert.Equal(100, FanCurve.DefaultCpuGpu.EvaluateDuty(100));
     }
 }

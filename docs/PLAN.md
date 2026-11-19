@@ -11,12 +11,9 @@ DeviceMaster.sln
 │   ├── DeviceMaster.Core/               abstractions, device registry (VID/PID truth),
 │   │                                    discovery, safety rules, conflict checker
 │   ├── DeviceMaster.Sensors/            LibreHardwareMonitor wrapper (ISensorSource)
-│   ├── DeviceMaster.Devices.CorsairLink/  iCUE Link hubs: fans, pump, coolant temp, RGB; LCD
+│   ├── DeviceMaster.Devices.CorsairLink/  iCUE Link hubs: fans, RGB
 │   ├── DeviceMaster.Devices.LianLi/     UNI FAN SL V3 wireless ecosystem (WinUSB)
 │   ├── DeviceMaster.Devices.Turzx/      Turing-family 8.8" screen (serial)
-│   ├── DeviceMaster.Rendering/          (added in Stage 4) shared display pipeline that
-│   │                                    renders metric layouts to both the Corsair LCD
-│   │                                    and the Turzx screen
 │   └── DeviceMaster.App/                composition root/host — console now, tray app later
 └── tests/
     └── DeviceMaster.Core.Tests/         registry, safety-clamp, and parsing tests
@@ -42,6 +39,11 @@ Revisit a service split only if pre-login control or multi-user support becomes 
 `App` stays a pure composition root so the split stays cheap.
 
 ## Stages
+
+> **2026-11 (#96): pump, coolant and pump/fan LCD support removed.** No machine in the fleet
+> is liquid-cooled or has LCD fans any more; the only screen driven is the Turzx. Stage 3 (pump
+> control), Stage 4 (Corsair pump LCD) and the SL V3 per-fan LCD half of Stage 5 below are
+> history. Curve sources are CPU, GPU and Hottest; a stored "Coolant" source loads as Hottest.
 
 - **Stage 0 — DONE (2026-07-06):** repo scaffolding, device enumeration (`discover`),
   LHM sensor polling (`monitor`), Serilog logging, safety primitives, unit tests.
@@ -132,15 +134,16 @@ vanished, colors stopped applying). The 60 s refresh is the healing mechanism.
 A stage is done when it builds, its tests pass, and it has been exercised against the real
 hardware.
 
-## Non-negotiable safety rules (water-cooled loop)
+## Non-negotiable safety rules
 
 Implemented in `DeviceMaster.Core.Safety` and enforced at the lowest write layer:
 
-1. **Pump floor:** pump duty is never written below `SafetyLimits.PumpMinimumDutyPercent`
-   (50%). Any error state ⇒ 100%.
+1. **No pumps:** pump control was removed (#96). Liquid-cooling Link devices are kept out of
+   `LinkDeviceCatalog`, so a chain carrying one is never written to; a Lian Li wireless AIO is
+   never sent a PWM. Any error state ⇒ fans 100%.
 2. **Sensor failure ⇒ failsafe:** if a curve's temperature source fails to read — including
    *implausible* values (LHM returns 0.0 °C for CPU when not elevated; treat ≤ 0 °C or
-   > 115 °C as failure) — fans and pump go to 100%.
+   > 115 °C as failure) — fans go to 100%.
 3. **Hardware fallback on crash/exit:** before shipping Stage 1, verify from
    FanControl.CorsairLink sources + live testing how the Link hub behaves when the host stops
    talking (keepalive interval, revert-to-hardware-mode timeout), and design writes so that
@@ -155,5 +158,4 @@ Implemented in `DeviceMaster.Core.Safety` and enforced at the lowest write layer
 ## Sensor sources
 
 - LHM (CPU/GPU temps, motherboard fans) — requires elevation for CPU temps.
-- Coolant temperature comes from the Link hub's own sensor once Stage 1 lands — it is a
-  first-class `ISensorSource`, usable as a curve input like any other.
+- Curve sources: CPU, GPU, or the hotter of the two (Hottest, the default).

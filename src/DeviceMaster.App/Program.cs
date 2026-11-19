@@ -116,14 +116,13 @@ static int RunDiscover()
     Console.WriteLine();
     Console.WriteLine("=== Stage 1 targets ===");
     var hubs = CorsairLinkFamily.FindHubs(scan.HidDevices).ToList();
-    var lcds = CorsairLinkFamily.FindLcdModules(scan.HidDevices).ToList();
-    var fanNodes = LianLiFamily.FindSlv3FanNodes(scan.UsbTree).ToList();
+
     var slv3Controllers = LianLiFamily.FindSlv3Controllers(scan.UsbTree).ToList();
     var screens = TurzxFamily.FindScreens(scan.SerialPorts).ToList();
     Console.WriteLine($"  Corsair Link hub HID interfaces : {hubs.Count}");
-    Console.WriteLine($"  Corsair LCD modules             : {lcds.Count}");
+
     Console.WriteLine($"  Lian Li SL V3 controllers (TX/RX): {slv3Controllers.Count}");
-    Console.WriteLine($"  Lian Li SL V3 fan nodes         : {fanNodes.Count}");
+
     Console.WriteLine($"  Turzx screens                   : {screens.Count} ({string.Join(", ", screens.Select(s => s.ComPort))})");
 
     Log.Information("Discovery complete: {UsbNodes} USB nodes, {Hid} HID interfaces, {Serial} serial ports",
@@ -142,7 +141,7 @@ static int RunMonitor(int seconds, int count)
     for (var i = 0; i < count; i++)
     {
         var interesting = source.Read()
-            .Where(r => r.Kind is SensorKind.Temperature or SensorKind.FanRpm or SensorKind.PumpRpm or SensorKind.FlowRate)
+            .Where(r => r.Kind is SensorKind.Temperature or SensorKind.FanRpm)
             .OrderBy(r => r.Kind)
             .ThenBy(r => r.Name, StringComparer.Ordinal)
             .ToList();

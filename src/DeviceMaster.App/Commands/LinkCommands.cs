@@ -337,7 +337,7 @@ internal static class LinkCommands
                 var temp = temperatures.TryGetValue(channel.Channel, out var t) && t.TemperatureCelsius is { } tc
                     ? $"{tc,5:F1} °C"
                     : "";
-                var tag = channel.IsPump ? " [PUMP]" : channel.IsKnown ? "" : " [UNKNOWN]";
+                var tag = channel.IsKnown ? "" : " [UNKNOWN]";
                 Console.WriteLine($"    ch{channel.Channel,2}  {channel.Name,-30}{tag,-10} {rpm}  {temp,-9} id={channel.Id}");
             }
 
@@ -388,7 +388,7 @@ internal static class LinkCommands
             }
 
             var requests = new Dictionary<int, int>();
-            foreach (var ch in hub.Channels.Where(c => !c.IsPump))
+            foreach (var ch in hub.Channels.Where(c => c.ControlsSpeed))
             {
                 if (channel is null || ch.Channel == channel)
                 {
@@ -398,7 +398,7 @@ internal static class LinkCommands
 
             if (requests.Count == 0)
             {
-                Log.Warning("No matching fan channel on hub {Serial} (pumps cannot be targeted in Stage 1)",
+                Log.Warning("No matching fan channel on hub {Serial}",
                     hub.SerialNumber);
                 continue;
             }
@@ -466,7 +466,7 @@ internal static class LinkCommands
         Console.WriteLine("usage:");
         Console.WriteLine("  link status                                    firmware, chain devices, RPMs, temps per hub");
         Console.WriteLine("  link set --duty P [--channel N] [--hub SERIALPREFIX] [--hold S]");
-        Console.WriteLine("      set fan duty (pumps always run 100% in Stage 1), watch RPMs for S seconds,");
+        Console.WriteLine("      set fan duty, watch RPMs for S seconds,");
         Console.WriteLine("      then restore hub-managed hardware mode");
         Console.WriteLine("  link ledreg [--channels 2,3,13,15] [--hub SERIALPREFIX] [--hold S]");
         Console.WriteLine("      show the hub's persisted LED registry; with --channels, write a registry");

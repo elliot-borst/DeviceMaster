@@ -7,8 +7,6 @@ namespace DeviceMaster.Sensors;
 /// LibreHardwareMonitor-backed sensor source for CPU/GPU/motherboard readings.
 /// Run elevated for full data — CPU package temperatures need LHM's kernel driver,
 /// which only loads with administrator rights.
-/// Coolant temperature is NOT read here; it comes from the iCUE Link hub's own
-/// temperature sensor once the CorsairLink device layer lands (Stage 1).
 /// </summary>
 public sealed class LhmSensorSource : ISensorSource
 {
@@ -212,7 +210,6 @@ public sealed class LhmSensorSource : ISensorSource
         SensorType.Fan => SensorKind.FanRpm,
         SensorType.Control => SensorKind.DutyCycle,
         SensorType.Load => SensorKind.Load,
-        SensorType.Flow => SensorKind.FlowRate,
         SensorType.Power => SensorKind.Power,
         SensorType.Clock => SensorKind.Clock,
         _ => null,

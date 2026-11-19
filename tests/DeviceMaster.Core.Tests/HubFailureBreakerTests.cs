@@ -5,7 +5,7 @@ namespace DeviceMaster.Core.Tests;
 
 /// <summary>
 /// Locks the #211 flap-recovery contract: a hub that fails 3 sessions in quick succession trips
-/// (the reopen-every-6-s loop that orphaned the pump hub on 2026-10-30 must not run forever),
+/// (the reopen-every-6-s loop that orphaned a hub on 2026-10-30 must not run forever),
 /// the trip backs the path off, spread-out failures never trip, and paths are independent.
 /// </summary>
 public class HubFailureBreakerTests

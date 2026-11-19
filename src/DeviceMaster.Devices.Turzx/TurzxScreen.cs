@@ -216,7 +216,7 @@ public sealed class TurzxScreen : IDisposable
     /// clear it. Returns null unless the panel is positively identified — same safety gate as
     /// <see cref="Find"/> (its <c>1A86:CA88</c> control port must be present and write-allowed).
     /// This is the panel's OWN function node; callers must NEVER reset its parent hub, which other
-    /// devices (including the coolant hub) can share.
+    /// devices (including a Link hub) can share.
     /// </summary>
     public static string? FindDataPortInstanceId()
     {

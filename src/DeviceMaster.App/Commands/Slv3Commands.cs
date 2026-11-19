@@ -61,9 +61,9 @@ internal static class Slv3Commands
         {
             var bound = device.IsBoundTo(controller.MasterMac) ? "bound" : "NOT BOUND to this dongle";
             var rpms = string.Join("/", device.FanRpms.Take(Math.Max((int)device.FanCount, 1)));
-            var coolant = device.CoolantTempC is { } t ? $"  coolant={t}°C" : "";
+            var aio = device.IsAio ? "  AIO (pump head, not driven)" : "";
             Console.WriteLine($"    [{device.ListIndex}] {device.MacText}  fans={device.FanCount}  rpm={rpms}  "
-                + $"pwm={device.CurrentPwm[0]}/255  type=0x{device.DeviceType:X2}  ch={device.Channel} rx={device.RxType}  ({bound}){coolant}");
+                + $"pwm={device.CurrentPwm[0]}/255  type=0x{device.DeviceType:X2}  ch={device.Channel} rx={device.RxType}  ({bound}){aio}");
         }
 
         Console.WriteLine();

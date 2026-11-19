@@ -21,16 +21,12 @@ public static class KnownDeviceRegistry
         // ---- Corsair iCUE LINK ----
         Entry(0x1B1C, 0x0C3F, DeviceKind.CorsairLinkHub, "Corsair iCUE LINK System Hub", supportPlanned: true,
             "*Composite HID, 2 interfaces. Speed/sensors: FanControl.CorsairLink; RGB: OpenLinkHub."),
-        Entry(0x1B1C, 0x0C43, DeviceKind.CorsairLcd, "Corsair pump/res LCD (self-reports 'XD5 ELITE LCD Pump')", supportPlanned: true,
-            "*Single HID interface; out=1024 in=512 feature=32 — matches OpenLinkHub's LCD image framing."),
 
         // ---- Lian Li SL V3 wireless ecosystem ----
         Entry(0x0416, 0x8040, DeviceKind.LianLiSlv3Controller, "Lian Li SL V3 wireless TX (SLV3TX)", supportPlanned: true,
             "*WinUSB. Nuvoton MCU. Protocol needs Stage 1 research — not covered by OpenRGB's Uni Hub code."),
         Entry(0x0416, 0x8041, DeviceKind.LianLiSlv3Controller, "Lian Li SL V3 wireless RX (SLV3RX)", supportPlanned: true,
             "*WinUSB. Nuvoton MCU."),
-        Entry(0x1CBE, 0x0005, DeviceKind.LianLiSlv3FanNode, "Lian Li UNI FAN SL V3 (per-fan USB node)", supportPlanned: true,
-            "*WinUSB. TI/Luminary MCU; one node per fan (LCD streaming only)."),
 
         // ---- Classic wired Lian Li Uni hubs (VID/PIDs from OpenRGB; recognized, not implemented) ----
         Entry(0x0CF2, 0x7750, DeviceKind.LianLiUniHub, "Lian Li Uni Hub SL", supportPlanned: false),

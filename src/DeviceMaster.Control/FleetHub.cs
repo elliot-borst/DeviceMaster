@@ -102,12 +102,10 @@ public sealed record MachineSnapshot
         SourceTemperatureC = Status?.SourceTemperatureC,
         CpuTemperatureC = Status?.CpuTemperatureC,
         GpuTemperatureC = Status?.GpuTemperatureC,
-        CoolantTemperatureC = Status?.CoolantTemperatureC,
         FanDutyPercent = Status?.TargetDutyPercent,
-        PumpDutyPercent = Status?.PumpDutyPercent,
         Failsafe = Status?.FailsafeActive ?? false,
         WarningCount = Status?.Warnings.Count ?? 0,
-        FanCount = Status?.Devices.Count(d => !d.IsPump && !d.IsScreen) ?? 0,
+        FanCount = Status?.Devices.Count ?? 0,
         InSync = InSync,
         PushError = PushError,
         Capabilities = Status?.Capabilities,
@@ -132,9 +130,7 @@ public sealed record MachineSummary
     public double? SourceTemperatureC { get; init; }
     public double? CpuTemperatureC { get; init; }
     public double? GpuTemperatureC { get; init; }
-    public double? CoolantTemperatureC { get; init; }
     public int? FanDutyPercent { get; init; }
-    public int? PumpDutyPercent { get; init; }
     public bool Failsafe { get; init; }
     public int WarningCount { get; init; }
     public int FanCount { get; init; }

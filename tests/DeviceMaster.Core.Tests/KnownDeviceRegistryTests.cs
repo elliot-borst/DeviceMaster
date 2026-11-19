@@ -25,7 +25,6 @@ public class KnownDeviceRegistryTests
     [Theory]
     [InlineData(0x0416, 0x8040, DeviceKind.LianLiSlv3Controller)]
     [InlineData(0x0416, 0x8041, DeviceKind.LianLiSlv3Controller)]
-    [InlineData(0x1CBE, 0x0005, DeviceKind.LianLiSlv3FanNode)]
     public void Identifies_LianLiSlv3Ecosystem(int vid, int pid, DeviceKind expected)
     {
         var device = KnownDeviceRegistry.Identify(new UsbId((ushort)vid, (ushort)pid));
@@ -45,6 +44,17 @@ public class KnownDeviceRegistryTests
     [Fact]
     public void WriteGate_DeniesRecognizedButOutOfScopeDevices() =>
         Assert.False(KnownDeviceRegistry.IsWriteAllowed(new UsbId(0x0CF2, 0x7750))); // classic Uni Hub — recognized, unimplemented
+
+    // pump/fan LCD support was removed: nothing may ever write to those devices again
+    [Theory]
+    [InlineData(0x1B1C, 0x0C43)] // Corsair pump/res LCD
+    [InlineData(0x1CBE, 0x0005)] // Lian Li SL V3 per-fan LCD node
+    public void WriteGate_DeniesRemovedLcdDevices(int vid, int pid)
+    {
+        var id = new UsbId((ushort)vid, (ushort)pid);
+        Assert.Null(KnownDeviceRegistry.Identify(id));
+        Assert.False(KnownDeviceRegistry.IsWriteAllowed(id));
+    }
 
     [Fact]
     public void WriteGate_AllowsIdentifiedTargets()

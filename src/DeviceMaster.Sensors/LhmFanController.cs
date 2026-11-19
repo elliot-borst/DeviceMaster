@@ -13,8 +13,8 @@ public sealed record HeaderFan(string Id, string Family, string Name, int? Rpm, 
 /// Safety: SuperIO has no hardware fallback — a crash leaves the last written duty in place —
 /// so writes are floored at <see cref="SafetyLimits.HeaderMinimumDutyPercent"/> and Dispose
 /// restores BIOS/driver-automatic control for every control we ever touched.
-/// The water-loop-critical devices (pump, radiator fans) are NOT driven through this class;
-/// they live on the Corsair/Lian Li paths which fail safe by design.
+/// The Corsair/Lian Li fans are NOT driven through this class; they live on paths that fail
+/// safe in hardware by design.
 /// </summary>
 public sealed class LhmFanController : IDisposable
 {

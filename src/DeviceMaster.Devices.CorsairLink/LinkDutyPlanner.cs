@@ -1,5 +1,4 @@
 using DeviceMaster.Core.Safety;
-using DeviceMaster.Devices.CorsairLink.Protocol;
 
 namespace DeviceMaster.Devices.CorsairLink;
 
@@ -8,11 +7,8 @@ public sealed record LinkChannel(int Channel, string Id, byte Model, byte Varian
 {
     public bool IsKnown => Info is not null;
 
-    /// <summary>Unknown devices are treated as pumps — maximum caution.</summary>
-    public bool IsPump => Info?.IsPump ?? true;
-
-    /// <summary>Screen modules (LCD) enumerate on the chain but have no speed to control.</summary>
-    public bool IsScreen => Info?.IsScreen ?? false;
+    /// <summary>A fan (or other cooler) whose speed this hub lets software set.</summary>
+    public bool ControlsSpeed => Info?.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed) == true;
 
     public string Name => Info?.Name ?? $"UNKNOWN (model=0x{Model:X2}, variant=0x{Variant:X2})";
 }
@@ -20,12 +16,12 @@ public sealed record LinkChannel(int Channel, string Id, byte Model, byte Varian
 /// <summary>
 /// Pure duty-map computation for a speed write. Every write to the hub covers all
 /// speed-controllable channels, so this is where the safety policy lives:
-/// - Pump channels get <paramref name="pumpDutyPercent"/> hard-floored at
-///   SafetyLimits.PumpMinimumDutyPercent — fan-duty requests never reach a pump.
-/// - Channels without a controllable speed (LCD modules, XC7 water blocks) are excluded.
+/// - Channels without a controllable speed are excluded.
 /// - Fan duties are clamped to [0, 100]; fans without an explicit request get the
 ///   reference default of 50%.
-/// - Any unknown device on the chain aborts the whole write (we cannot tell fan from pump).
+/// - Any unknown device on the chain aborts the whole write (it could be a pump or anything
+///   else we must not drive). Liquid-cooling devices are deliberately not catalogued, so a
+///   chain with a pump is never written to.
 /// </summary>
 public static class LinkDutyPlanner
 {
@@ -33,8 +29,7 @@ public static class LinkDutyPlanner
 
     public static IReadOnlyDictionary<int, byte> BuildDutyMap(
         IReadOnlyList<LinkChannel> channels,
-        IReadOnlyDictionary<int, int>? requestedDuties = null,
-        int pumpDutyPercent = SafetyLimits.FailsafeDutyPercent)
+        IReadOnlyDictionary<int, int>? requestedDuties = null)
     {
         var unknown = channels.Where(c => !c.IsKnown).ToList();
         if (unknown.Count > 0)
@@ -48,13 +43,7 @@ public static class LinkDutyPlanner
         var duties = new Dictionary<int, byte>(channels.Count);
         foreach (var channel in channels)
         {
-            if (channel.IsPump)
-            {
-                duties[channel.Channel] = (byte)SafetyGuard.ClampPumpDuty(pumpDutyPercent);
-                continue;
-            }
-
-            if (channel.Info is not { } info || !info.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed))
+            if (!channel.ControlsSpeed)
             {
                 continue;
             }

@@ -79,14 +79,6 @@ public sealed class MainWindow : Window
     private Border _fanDot = null!;
     private TextBlock _fanBadge = null!;
 
-    // pump card
-    private DmSlider _pumpSlider = null!;
-    private TextBlock _pumpLabel = null!;
-    private Border _pumpDot = null!;
-    private TextBlock _pumpBadge = null!;
-    private readonly TextBlock _pumpCoolant = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
-    private readonly StackPanel _pumpRows = new();
-
     // hardware page — summary count up top, then pills auto-grouped by family, three per row
     private readonly StackPanel _hardwareRows = new();
     private readonly TextBlock _hwSummary = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, VerticalAlignment = VerticalAlignment.Center };
@@ -129,7 +121,6 @@ public sealed class MainWindow : Window
         }
 
         Grid.SetIsSharedSizeScope(_fanRows, true);
-        Grid.SetIsSharedSizeScope(_pumpRows, true);
         Content = BuildLayout();
         if (Environment.GetEnvironmentVariable("DEVICEMASTER_PAGE") is { Length: > 0 } startPage
             && _pages.ContainsKey(startPage))
@@ -145,7 +136,6 @@ public sealed class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             UpdateControlStatus();
-            MaybeRebuildScreenList();
             if (_downloading)
             {
                 _checkLabel.Text = $"↻  Updating to {_pendingUpdate?.Tag}" + new string('.', 1 + _downloadDots++ % 3);
@@ -276,7 +266,6 @@ public sealed class MainWindow : Window
             ("dashboard", "⌂", "Dashboard"),
             ("cooling", "❄", "Cooling"),
             ("lighting", "◈", "Lighting"),
-            ("screens", "▣", "Screens"),
             ("turzx", "▤", "Turzx"),
             ("buttonart", "⛶", "Button Art"),
         };
@@ -309,7 +298,6 @@ public sealed class MainWindow : Window
         _pages["dashboard"] = WrapPage(BuildDashboardPage());
         _pages["cooling"] = WrapPage(BuildCoolingPage());
         _pages["lighting"] = WrapPage(BuildLightingPage());
-        _pages["screens"] = WrapPage(BuildScreensPage());
         _pages["turzx"] = WrapPage(BuildTurzxPage());
         _pages["buttonart"] = WrapPage(_buttonArtPage.Build());
 
@@ -391,8 +379,7 @@ public sealed class MainWindow : Window
     // ---------- pages ----------
 
     private readonly TextBlock _dashStatus = new() { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(2, 0, 0, 14) };
-    private TextBlock _tileCoolant = null!, _tileCoolantSub = null!;
-    private TextBlock _tilePump = null!, _tilePumpSub = null!;
+
     private TextBlock _tileFans = null!, _tileFansSub = null!;
     private TextBlock _tileDuty = null!, _tileDutySub = null!;
 
@@ -409,12 +396,10 @@ public sealed class MainWindow : Window
     private UIElement BuildDashboardPage()
     {
         var page = new StackPanel(); // full width — the dashboard fills the window
-        page.Children.Add(PageTitle("Dashboard", "the whole loop at a glance"));
+        page.Children.Add(PageTitle("Dashboard", "the whole machine at a glance"));
         page.Children.Add(_dashStatus);
 
-        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 4 };
-        tiles.Children.Add(StatTile("COOLANT", out _tileCoolant, out _tileCoolantSub));
-        tiles.Children.Add(StatTile("PUMP", out _tilePump, out _tilePumpSub));
+        var tiles = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
         tiles.Children.Add(StatTile("FANS", out _tileFans, out _tileFansSub));
         tiles.Children.Add(StatTile("DUTY", out _tileDuty, out _tileDutySub));
         page.Children.Add(tiles);
@@ -546,21 +531,9 @@ public sealed class MainWindow : Window
 
     private UIElement BuildCoolingPage()
     {
-        // two equal halves, equal heights (both cards stretch to the taller one)
         var page = new StackPanel();
-        page.Children.Add(PageTitle("Cooling", "fan duty or curve, and the pump"));
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var fan = BuildFanCard();
-        fan.Margin = new Thickness(0, 0, 8, 0);
-        Grid.SetColumn(fan, 0);
-        grid.Children.Add(fan);
-        var pump = BuildPumpCard();
-        pump.Margin = new Thickness(8, 0, 0, 0);
-        Grid.SetColumn(pump, 1);
-        grid.Children.Add(pump);
-        page.Children.Add(grid);
+        page.Children.Add(PageTitle("Cooling", "fan duty or curve"));
+        page.Children.Add(BuildFanCard());
 
         var curve = BuildCurveCard();
         curve.Margin = new Thickness(0, 16, 0, 0);
@@ -574,22 +547,6 @@ public sealed class MainWindow : Window
         var page = new StackPanel { MaxWidth = 860, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(PageTitle("Lighting", "static color or rainbow across every LED"));
         page.Children.Add(BuildRgbCard());
-        return page;
-    }
-
-    private Border _lcdControlCard = null!;
-
-    private UIElement BuildScreensPage()
-    {
-        // one two-column grid: Screen Control occupies the first cell (same width and row
-        // height as the group beside it), the group cards fill the rest
-        var page = new StackPanel();
-        page.Children.Add(PageTitle("Screens", "the pump LCD and every fan LCD"));
-        _lcdControlCard = BuildLcdCard();
-        _lcdControlCard.Margin = new Thickness(0, 0, 14, 14);
-        _lcdControlCard.VerticalAlignment = VerticalAlignment.Stretch; // match the pump card's row height
-        page.Children.Add(_screenList);
-        RebuildScreenList();
         return page;
     }
 
@@ -782,7 +739,7 @@ public sealed class MainWindow : Window
     private TextBlock _curveSubtitle = null!;
 
     private static readonly (CurveSource Source, string Label)[] CurveSources =
-        [(CurveSource.Coolant, "Coolant"), (CurveSource.Cpu, "CPU"), (CurveSource.Gpu, "GPU"), (CurveSource.Hottest, "CPU/GPU")];
+        [(CurveSource.Cpu, "CPU"), (CurveSource.Gpu, "GPU"), (CurveSource.Hottest, "CPU/GPU")];
 
     /// <summary>A row of pill buttons, the selected one filled (same look as the web's segmented control).</summary>
     private static void FillChips(StackPanel host, IReadOnlyList<string> labels, int selected, Action<int> onPick)
@@ -802,7 +759,7 @@ public sealed class MainWindow : Window
     private static string SourceLabel(string sourceName) =>
         CurveSources.FirstOrDefault(s => s.Source.ToString() == sourceName).Label ?? sourceName;
 
-        private void RefreshFanModeUi()
+    private void RefreshFanModeUi()
     {
         var curve = _controlSettings.Mode == ControlMode.Curve;
         FillChips(_modeChips, ["Fixed", "Curve"], curve ? 1 : 0, i =>
@@ -823,7 +780,7 @@ public sealed class MainWindow : Window
 
         _dutyRow.Visibility = curve ? Visibility.Collapsed : Visibility.Visible;
         _sourceRow.Visibility = curve ? Visibility.Visible : Visibility.Collapsed;
-        var sourceLabel = CurveSources.First(s => s.Source == _controlSettings.Source).Label;
+        var sourceLabel = CurveSources.FirstOrDefault(s => s.Source == _controlSettings.Source).Label ?? "CPU/GPU";
         _fanSubtitle.Text = curve ? $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system" : "one fixed duty · every fan in the system";
         _curveSubtitle.Text = (_controlSettings.Source == CurveSource.Hottest ? "Hotter of CPU and GPU" : sourceLabel)
             + " temperature → fan duty · drag a point to change it"
@@ -838,7 +795,7 @@ public sealed class MainWindow : Window
         _curveSubtitle = CardSubtitle(head);
         var reset = Theme.Btn("↺  Reset", primary: false, () =>
         {
-            _controlSettings.SetCurve(CurveRules.DefaultFor(_controlSettings.Source == CurveSource.Coolant));
+            _controlSettings.SetCurve(CurveRules.Default);
             RefreshFanModeUi();
             OnControlSettingChanged();
         });
@@ -856,7 +813,7 @@ public sealed class MainWindow : Window
         body.Children.Add(_curveEditor);
         body.Children.Add(new TextBlock
         {
-            Text = "Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan and the pump go to 100%.",
+            Text = "Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan goes to 100%.",
             FontSize = 11.5,
             Foreground = Theme.Faint,
             Margin = new Thickness(0, 8, 0, 0),
@@ -912,7 +869,7 @@ public sealed class MainWindow : Window
         _fanForgetLink = LinkText("forget missing", () =>
         {
             var status = _loop?.Status;
-            var present = (status?.Devices ?? []).Where(d => !d.IsPump)
+            var present = (status?.Devices ?? [])
                 .Select(f => f.Id ?? f.Name).ToHashSet();
             _controlSettings.SeenFanIds.RemoveAll(id => !present.Contains(id));
             TrySaveSettings();
@@ -991,29 +948,6 @@ public sealed class MainWindow : Window
         {
             // non-fatal — settings just won't persist
         }
-    }
-
-    private Border BuildPumpCard()
-    {
-        var card = Theme.CardShell("≋", "Pump Control", "independent duty · never below 50%", out var body, out var head);
-        var badge = Theme.StatusBadge("Off", Theme.Faint, out _pumpDot, out _pumpBadge);
-        badge.VerticalAlignment = VerticalAlignment.Top;
-        DockPanel.SetDock(badge, Dock.Right);
-        head.Children.Add(badge);
-
-        var controls = new WrapPanel { Orientation = Orientation.Horizontal };
-        _pumpSlider = new DmSlider(50, 100, Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100), 460);
-        _pumpSlider.ValueChanged += _ => OnControlSettingChanged();
-        _pumpLabel = new TextBlock { Text = $"{Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100)}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
-        var pumpRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        pumpRow.Children.Add(_pumpSlider);
-        pumpRow.Children.Add(_pumpLabel);
-        controls.Children.Add(LabelledInline("Pump duty", pumpRow));
-
-        body.Children.Add(controls);
-        body.Children.Add(_pumpCoolant);
-        body.Children.Add(_pumpRows);
-        return card;
     }
 
     // lighting card
@@ -1215,467 +1149,6 @@ public sealed class MainWindow : Window
             _rgbStatus.Text = $"Static color #{_controlSettings.RgbR:X2}{_controlSettings.RgbG:X2}{_controlSettings.RgbB:X2} "
                 + "on Corsair, Lian Li, motherboard ARGB, RAM and GPU LEDs.";
         }
-    }
-
-    // screens card
-    private readonly WrapPanel _lcdButtons = new() { Orientation = Orientation.Horizontal };
-    private readonly TextBlock _lcdStatus = new() { FontSize = 12, Foreground = Theme.Dim, Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
-
-    // display order and names are independent of the enum (which persists by name)
-    private static readonly (LcdMetric Metric, string Name)[] LcdMetricChoices =
-    [
-        (LcdMetric.Coolant, "Coolant °C"),
-        (LcdMetric.CpuTemp, "CPU °C"),
-        (LcdMetric.GpuTemp, "GPU °C"),
-        (LcdMetric.VramTemp, "VRAM °C"),
-        (LcdMetric.CpuLoad, "CPU %"),
-        (LcdMetric.GpuLoad, "GPU %"),
-        (LcdMetric.RamLoad, "RAM %"),
-        (LcdMetric.VramLoad, "VRAM %"),
-        (LcdMetric.CpuPower, "CPU W"),
-        (LcdMetric.GpuPower, "GPU W"),
-        (LcdMetric.GpuClock, "GPU MHz"),
-        (LcdMetric.FanDuty, "Fan %"),
-        (LcdMetric.FanRpm, "Fan RPM"),
-        (LcdMetric.PumpDuty, "Pump %"),
-        (LcdMetric.PumpRpm, "Pump RPM"),
-        (LcdMetric.Clock, "Clock"),
-        (LcdMetric.Date, "Date"),
-    ];
-
-    private static readonly string[] LcdMetricNames = LcdMetricChoices.Select(c => c.Name).ToArray();
-
-    private static int LcdMetricChoiceIndex(LcdMetric metric) =>
-        Math.Max(0, Array.FindIndex(LcdMetricChoices, c => c.Metric == metric));
-
-    // per-screen editor list (Screens page)
-    // two equal columns of group cards; rows size to their own content (a UniformGrid would
-    // stretch every row to the tallest group, leaving giant gaps under short rows)
-    private readonly Grid _screenList = new();
-    private string _screenListSignature = "?";
-
-    private static IReadOnlyList<(string Id, bool IsPump)> FakeScreens =>
-        Environment.GetEnvironmentVariable("DEVICEMASTER_FAKE_SCREENS") is { Length: > 0 }
-            ? [("pump-lcd", true), ("0B913822D5160A66", false), ("14E3F709651F17E6", false), ("522AEAB205160E66", false)]
-            : [];
-
-    private IReadOnlyList<(string Id, bool IsPump)> ScreenIds()
-    {
-        var ids = _loop?.LcdScreenIds ?? [];
-        return ids.Count > 0 ? ids : FakeScreens;
-    }
-
-    private void MaybeRebuildScreenList()
-    {
-        var ids = ScreenIds();
-        var signature = string.Join("|", ids.Select(s => s.Id));
-        if (signature != _screenListSignature)
-        {
-            RebuildScreenList();
-        }
-    }
-
-    private void RebuildScreenList()
-    {
-        var ids = ScreenIds();
-        _screenListSignature = string.Join("|", ids.Select(s => s.Id));
-        _screenList.Children.Clear();
-        _screenList.RowDefinitions.Clear();
-        if (_screenList.ColumnDefinitions.Count == 0)
-        {
-            _screenList.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            _screenList.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        }
-
-        var cell = 0;
-        void Place(UIElement element)
-        {
-            var row = cell / 2;
-            while (_screenList.RowDefinitions.Count <= row)
-            {
-                _screenList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            }
-
-            Grid.SetRow(element, row);
-            Grid.SetColumn(element, cell % 2);
-            _screenList.Children.Add(element);
-            cell++;
-        }
-
-        Place(_lcdControlCard); // first cell of the grid
-
-        if (ids.Count == 0)
-        {
-            Place(new TextBlock
-            {
-                Text = "Screens appear here once a screen mode is active (pick On above).",
-                Foreground = Theme.Dim,
-                FontSize = 12.5,
-            });
-            return;
-        }
-
-        // gather members with stable titles, then cluster by group name
-        var members = new List<(string Id, string Title, LcdScreenConfig Config)>();
-        var fanIndex = 0;
-        foreach (var (id, isPump) in ids)
-        {
-            var config = _controlSettings.ScreenConfig(id, isPump);
-            members.Add((id, isPump ? "Pump screen" : $"Fan screen {++fanIndex}", config));
-        }
-
-        // cluster related groups next to each other by sorting on the REVERSED words of the
-        // name — "bottom intake"/"side intake" pair up, "rear exhaust"/"top exhaust" pair up,
-        // and "pump" lands first (descending)
-        static string ClusterKey(string name) => string.Join(" ", name.Split(' ').Reverse());
-        var groups = members
-            .GroupBy(m => m.Config.Group.Trim(), StringComparer.OrdinalIgnoreCase) // "Front" == "front"
-            .OrderBy(g => g.Key.Length == 0) // named groups first, "Ungrouped" last
-            .ThenByDescending(g => ClusterKey(g.Key), StringComparer.OrdinalIgnoreCase);
-        foreach (var group in groups)
-        {
-            Place(ScreenGroupCard(group.Key, group.ToList()));
-        }
-    }
-
-    /// <summary>One group of screens: editable name, set-all controls, then the member rows.</summary>
-    private Border ScreenGroupCard(string groupName, List<(string Id, string Title, LcdScreenConfig Config)> members)
-    {
-        var body = new StackPanel();
-
-        // ---- header: name (editable), count, find-all ----
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10), LastChildFill = false };
-        var nameBox = GroupNameBox(groupName.Length == 0 ? "" : groupName, newName =>
-        {
-            foreach (var member in members)
-            {
-                member.Config.Group = newName;
-            }
-
-            TrySaveSettings();
-            RebuildScreenList();
-        });
-        DockPanel.SetDock(nameBox, Dock.Left);
-        header.Children.Add(nameBox);
-
-        var findAll = Theme.Btn("◎ Find all", primary: false, () =>
-        {
-            foreach (var member in members)
-            {
-                _loop?.IdentifyScreen(member.Id);
-            }
-        });
-        DockPanel.SetDock(findAll, Dock.Right);
-        header.Children.Add(findAll);
-        body.Children.Add(header);
-
-        // ---- table: column headers once, then the member rows ----
-        body.Children.Add(ScreenTableHeader());
-        foreach (var (id, title, config) in members)
-        {
-            body.Children.Add(ScreenRow(id, title, config));
-        }
-
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 14, 14),
-            Padding = new Thickness(16, 12, 16, 10),
-            CornerRadius = new CornerRadius(14),
-            Background = Theme.Card,
-            BorderBrush = Theme.Line,
-            BorderThickness = new Thickness(1),
-            Child = body,
-        };
-    }
-
-    private static readonly (byte R, byte G, byte B)[] FontSwatchColors =
-    [
-        (235, 235, 245), (255, 60, 60), (255, 170, 0), (80, 230, 120),
-        (80, 200, 255), (90, 120, 255), (200, 90, 255), (255, 80, 170),
-    ];
-
-    private static readonly string[] LcdColorNames =
-        ["White", "Red", "Orange", "Green", "Cyan", "Blue", "Purple", "Pink", "By temp"];
-
-    private static int LcdColorIndex(LcdScreenConfig config)
-    {
-        if (config.ColorByValue)
-        {
-            return 8; // By temp — green/amber/red as the value climbs
-        }
-
-        if (config.FontR is not { } r || config.FontG is not { } g || config.FontB is not { } b)
-        {
-            return 0; // unset = White
-        }
-
-        for (var i = 0; i < FontSwatchColors.Length; i++)
-        {
-            if (FontSwatchColors[i] == ((byte)r, (byte)g, (byte)b))
-            {
-                return i;
-            }
-        }
-
-        return 0;
-    }
-
-    /// <summary>Editable group name; commits on Enter or focus loss.</summary>
-    private static TextBox GroupNameBox(string text, Action<string> commit)
-    {
-        var box = new TextBox
-        {
-            Text = text,
-            Width = 190,
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            Background = Theme.Inset,
-            Foreground = Theme.Text,
-            CaretBrush = Theme.Text,
-            BorderBrush = Theme.Line2,
-            Padding = new Thickness(8, 5, 8, 5),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var original = text;
-        void Commit()
-        {
-            var value = box.Text.Trim();
-            if (value != original)
-            {
-                commit(value);
-            }
-        }
-
-        box.LostFocus += (_, _) => Commit();
-        box.KeyDown += (_, e) =>
-        {
-            if (e.Key == System.Windows.Input.Key.Enter)
-            {
-                Commit();
-            }
-        };
-        if (text.Length == 0)
-        {
-            box.Text = "";
-            box.ToolTip = "Type a group name (e.g. Front, Side, Top)";
-        }
-
-        return box;
-    }
-
-    // table columns shared by the header row and every screen row: Find, Name, ID, Metric,
-    // Rotate, Color, Group (star — fills the rest, so the group box is never clipped)
-    private static Grid ScreenTableGrid()
-    {
-        var grid = new Grid();
-        foreach (var width in new[] { 88.0, 110.0, 140.0, 128.0, 90.0, 112.0 })
-        {
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
-        }
-
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        return grid;
-    }
-
-    private static Grid ScreenTableHeader()
-    {
-        var grid = ScreenTableGrid();
-        grid.Margin = new Thickness(14, 0, 14, 4);
-        var column = 0;
-        foreach (var text in new[] { "", "NAME", "ID", "METRIC", "ROTATE", "COLOR", "GROUP" })
-        {
-            var block = new TextBlock
-            {
-                Text = text,
-                FontSize = 10,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Theme.Faint,
-                Margin = new Thickness(column >= 3 ? 10 : 2, 0, 0, 0),
-            };
-            Grid.SetColumn(block, column++);
-            grid.Children.Add(block);
-        }
-
-        return grid;
-    }
-
-    private Border ScreenRow(string id, string title, LcdScreenConfig config)
-    {
-        var row = ScreenTableGrid();
-
-        var find = Theme.Btn("◎ Find", primary: false, () => _loop?.IdentifyScreen(id));
-        find.HorizontalAlignment = HorizontalAlignment.Left;
-        Grid.SetColumn(find, 0);
-        row.Children.Add(find);
-
-        var name = new TextBlock
-        {
-            Text = title,
-            FontSize = 12.5,
-            Foreground = Theme.Text,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(2, 0, 0, 0),
-        };
-        Grid.SetColumn(name, 1);
-        row.Children.Add(name);
-
-        var idBlock = new TextBlock
-        {
-            Text = id, // full serial, no truncation
-            FontSize = 10,
-            Foreground = Theme.Faint,
-            FontFamily = Theme.Mono,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(2, 0, 0, 0),
-        };
-        Grid.SetColumn(idBlock, 2);
-        row.Children.Add(idBlock);
-
-        var metricDrop = new DmDropdown(LcdMetricNames, LcdMetricChoiceIndex(config.Metric), 116);
-        metricDrop.SelectionChanged += index =>
-        {
-            config.Metric = LcdMetricChoices[index].Metric;
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-        };
-        metricDrop.Margin = new Thickness(10, 0, 0, 0);
-        metricDrop.HorizontalAlignment = HorizontalAlignment.Left;
-        Grid.SetColumn(metricDrop, 3);
-        row.Children.Add(metricDrop);
-
-        var rotationDrop = new DmDropdown(["0°", "90°", "180°", "270°"], Math.Clamp(config.RotationDegrees / 90, 0, 3), 76);
-        rotationDrop.SelectionChanged += index =>
-        {
-            config.RotationDegrees = index * 90;
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-        };
-        rotationDrop.Margin = new Thickness(10, 0, 0, 0);
-        rotationDrop.HorizontalAlignment = HorizontalAlignment.Left;
-        Grid.SetColumn(rotationDrop, 4);
-        row.Children.Add(rotationDrop);
-
-        var colorDrop = new DmDropdown(LcdColorNames, LcdColorIndex(config), 98);
-        colorDrop.SelectionChanged += index =>
-        {
-            config.ColorByValue = index == 8;
-            (config.FontR, config.FontG, config.FontB) = index == 8
-                ? (null, null, null)
-                : ((int?)FontSwatchColors[index].R, (int?)FontSwatchColors[index].G, (int?)FontSwatchColors[index].B);
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-        };
-        colorDrop.Margin = new Thickness(10, 0, 0, 0);
-        colorDrop.HorizontalAlignment = HorizontalAlignment.Left;
-        Grid.SetColumn(colorDrop, 5);
-        row.Children.Add(colorDrop);
-
-        // move the screen to another group by typing its name; stretches to the row edge
-        var groupBox = new TextBox
-        {
-            Text = config.Group,
-            FontSize = 11.5,
-            Background = Theme.Inset,
-            Foreground = Theme.Text,
-            CaretBrush = Theme.Text,
-            BorderBrush = Theme.Line2,
-            Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(10, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "Group name — screens with the same name cluster together",
-        };
-        void CommitGroup()
-        {
-            var value = groupBox.Text.Trim();
-            if (value != config.Group)
-            {
-                config.Group = value;
-                TrySaveSettings();
-                RebuildScreenList();
-            }
-        }
-
-        groupBox.LostFocus += (_, _) => CommitGroup();
-        groupBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == System.Windows.Input.Key.Enter)
-            {
-                CommitGroup();
-            }
-        };
-        Grid.SetColumn(groupBox, 6);
-        row.Children.Add(groupBox);
-
-        return Theme.InsetRow(row);
-    }
-
-    private Border BuildLcdCard()
-    {
-        var card = Theme.CardShell("▣", "Screen Control", "every screen on or off · what each shows is set per group below", out var body, out _);
-        RebuildLcdButtons();
-        body.Children.Add(_lcdButtons);
-        var lcdBrightness = BrightnessRow(_controlSettings.LcdBrightness, v =>
-        {
-            _controlSettings.LcdBrightness = v; // pump + fan LCD backlight (Turzx has its own on its page)
-            TrySaveSettings();
-            _loop?.Apply(_controlSettings);
-        }, exposeSetter: set => _setLcdBrightness = set);
-        lcdBrightness.Margin = new Thickness(0, 14, 0, 4); // separate it from the On/Off buttons above
-        body.Children.Add(lcdBrightness);
-        UpdateLcdStatusText();
-        return card;
-    }
-
-    private void RebuildLcdButtons()
-    {
-        _lcdButtons.Children.Clear();
-        foreach (var (mode, label) in new[]
-        {
-            // just Off/On: On = live metrics; per-screen content is managed in the groups.
-            // (Black/White survive in the enum for config compatibility only.)
-            (LcdMode.Off, "Off"),
-            (LcdMode.Metrics, "On"),
-        })
-        {
-            var selected = _controlSettings.LcdScreens == mode;
-            var button = new Border
-            {
-                Padding = new Thickness(14, 7, 14, 7),
-                Margin = new Thickness(0, 0, 8, 0),
-                CornerRadius = new CornerRadius(9),
-                Background = selected ? Theme.Card2 : Theme.Inset,
-                BorderBrush = selected ? Theme.Accent : Theme.Line2,
-                BorderThickness = new Thickness(selected ? 2 : 1),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                Child = new TextBlock
-                {
-                    Text = label,
-                    FontSize = 12.5,
-                    FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
-                    Foreground = selected ? Theme.Text : Theme.Dim,
-                },
-            };
-            var chosen = mode;
-            button.MouseLeftButtonUp += (_, _) =>
-            {
-                _controlSettings.LcdScreens = chosen;
-                RebuildLcdButtons();
-                UpdateLcdStatusText();
-                OnControlSettingChanged();
-            };
-            _lcdButtons.Children.Add(button);
-        }
-    }
-
-    private void UpdateLcdStatusText()
-    {
-        _lcdStatus.Text = _controlSettings.LcdScreens switch
-        {
-            LcdMode.Off => "All screens off (backlight dark).",
-            LcdMode.Metrics => "Screens on — each shows the metric configured in its group below.",
-            _ => "Screens untouched — pick On or Off to take control.",
-        };
     }
 
     private Border BuildHardwareCard()
@@ -1930,7 +1403,7 @@ public sealed class MainWindow : Window
 
         try
         {
-            // Link-chain devices (fans/pump) aren't USB devices — take them from the running
+            // Link-chain devices (fans) aren't USB devices — take them from the running
             // control loop, or do a one-shot chain scan while control is off.
             var chainRows = new List<(string Name, string? Id, string Tag)>();
             var chainPending = false;
@@ -1939,7 +1412,7 @@ public sealed class MainWindow : Window
             {
                 foreach (var device in snapshot.Devices)
                 {
-                    var tag = device.IsPump ? "pump" : device.Family switch
+                    var tag = device.Family switch
                     {
                         "Corsair" => "fan",
                         "Lian Li" => "wireless",
@@ -1974,7 +1447,7 @@ public sealed class MainWindow : Window
                             foreach (var channel in hub.Channels)
                             {
                                 chainRows.Add(($"Corsair · {channel.Name} (ch{channel.Channel})", channel.Id,
-                                    channel.IsPump ? "pump" : channel.IsKnown ? "fan" : "?"));
+                                    channel.IsKnown ? "fan" : "?"));
                             }
 
                             if (hub.InSoftwareMode)
@@ -2001,11 +1474,6 @@ public sealed class MainWindow : Window
                 AddPill("Corsair", "Corsair iCUE LINK hub", Shorten(hub.SerialNumber), "HID", hub.SerialNumber);
             }
 
-            foreach (var lcd in scan.HidDevices.Where(d => d.Kind == DeviceKind.CorsairLcd))
-            {
-                AddPill("Corsair", "Corsair pump/res LCD", lcd.SerialNumber, "HID");
-            }
-
             foreach (var (name, id, tag) in chainRows)
             {
                 AddPill(ChainGroup(name), name, Shorten(id), tag, id ?? name);
@@ -2030,17 +1498,6 @@ public sealed class MainWindow : Window
             {
                 var role = dongle.UsbId!.Value.Pid == 0x8040 ? "TX · control" : "RX · telemetry";
                 AddPill("Lian Li", $"Lian Li SL V3 dongle ({role})", dongle.UsbId.ToString(), "WinUSB");
-            }
-
-            var fanNodes = scan.UsbTree
-                .Where(n => n.IsPhysicalDevice && n.UsbId is { } id
-                    && KnownDeviceRegistry.Identify(id)?.Kind == DeviceKind.LianLiSlv3FanNode)
-                .Select(n => n.PnpInstanceId.Split('\\').LastOrDefault() ?? "?")
-                .OrderBy(s => s, StringComparer.Ordinal)
-                .ToList();
-            for (var i = 0; i < fanNodes.Count; i++)
-            {
-                AddPill("Lian Li", $"SL V3 fan LCD node {i + 1}/{fanNodes.Count}", fanNodes[i], "WinUSB", fanNodes[i]);
             }
 
             foreach (var screen in scan.SerialPorts.Where(p => p.Identification?.Kind == DeviceKind.TurzxScreen))
@@ -2417,7 +1874,7 @@ public sealed class MainWindow : Window
     }
 
     // slider setters for the brightness rows (built by BrightnessRow, which keeps its own slider)
-    private Action<int>? _setRgbBrightness, _setLcdBrightness;
+    private Action<int>? _setRgbBrightness;
 
     /// <summary>
     /// Fleet (#33): applies a profile pushed by the hub through the agent API. Runs on the UI
@@ -2440,21 +1897,16 @@ public sealed class MainWindow : Window
     private void ReloadControlsFromSettings()
     {
         _dutySlider.Value = _controlSettings.ManualDutyPercent;
-        _pumpSlider.Value = Math.Clamp(_controlSettings.PumpDutyPercent, 50, 100);
         _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
-        _pumpLabel.Text = $"{_controlSettings.PumpDutyPercent}%";
         _rgbSpeedSlider.Value = _controlSettings.RgbSpeed;
         _turzxBrightnessSlider.Value = Math.Clamp(_controlSettings.TurzxBrightness, 0, 100);
         _turzxBrightnessLabel.Text = $"{Math.Clamp(_controlSettings.TurzxBrightness, 0, 100)}%";
         _setRgbBrightness?.Invoke(_controlSettings.RgbBrightness);
-        _setLcdBrightness?.Invoke(_controlSettings.LcdBrightness);
         RefreshFanModeUi();
         RefreshRgbEffectUi();
         RebuildSwatches();
-        RebuildLcdButtons();
         RebuildTurzxButtons();
         UpdateRgbStatusText();
-        UpdateLcdStatusText();
     }
 
     private void OnControlSettingChanged()
@@ -2465,9 +1917,7 @@ public sealed class MainWindow : Window
         }
 
         _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
-        _controlSettings.PumpDutyPercent = (int)Math.Round(_pumpSlider.Value);
         _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
-        _pumpLabel.Text = $"{_controlSettings.PumpDutyPercent}%";
 
         try
         {
@@ -2484,7 +1934,7 @@ public sealed class MainWindow : Window
 
     /// <summary>
     /// Movie mode: blacks out every LED (actively — Lian Li fans would rainbow if we merely
-    /// stopped) and turns every screen backlight off; toggling back restores what was set.
+    /// stopped) and turns the Turzx screen's backlight off; toggling back restores what was set.
     /// </summary>
     private void SetBlackout(bool on)
     {
@@ -2495,10 +1945,8 @@ public sealed class MainWindow : Window
 
         TrySaveSettings();
         RebuildSwatches();
-        RebuildLcdButtons();
         RebuildTurzxButtons();
         UpdateRgbStatusText();
-        UpdateLcdStatusText();
         _loop?.Apply(_controlSettings);
     }
 
@@ -2516,15 +1964,7 @@ public sealed class MainWindow : Window
             TrySaveSettings();
         }
 
-        // screens are Off or On (metrics) now — plain Black/White backgrounds retired
-        if (_controlSettings.LcdScreens is LcdMode.Black or LcdMode.White)
-        {
-            _controlSettings.LcdScreens = LcdMode.Metrics;
-            TrySaveSettings();
-        }
-
         _dutySlider.Enabled = true;
-        _pumpSlider.Enabled = true;
 
         if (NoControl)
         {
@@ -2577,10 +2017,6 @@ public sealed class MainWindow : Window
                     _fanRows.Children.Clear();
                     _fanRows.Children.Add(LoadingRow("Searching for fans…"));
                     _fanWarnings.Children.Clear();
-                    _pumpCoolant.Text = "Searching for the pump…";
-                    _pumpCoolant.Foreground = Theme.Dim;
-                    _pumpRows.Children.Clear();
-                    _pumpRows.Children.Add(LoadingRow("Searching for the pump…"));
                 }
 
                 return;
@@ -2594,9 +2030,6 @@ public sealed class MainWindow : Window
             _fanForgetLink.Visibility = Visibility.Collapsed;
             _fanRows.Children.Clear();
             _fanWarnings.Children.Clear();
-            _pumpCoolant.Text = "Control off — the pump follows the hub's own behaviour.";
-            _pumpCoolant.Foreground = Theme.Dim;
-            _pumpRows.Children.Clear();
             return;
         }
 
@@ -2632,14 +2065,14 @@ public sealed class MainWindow : Window
             CurveSource.Hottest => status.Mode == ControlMode.Curve
                 ? status.SourceTemperatureC
                 : HottestTemperature.Combine(status.CpuTemperatureC, status.GpuTemperatureC, gpuExpected: false),
-            _ => status.CoolantTemperatureC,
+            _ => null,
         };
         var curveDuty = status.Mode == ControlMode.Curve
             ? status.TargetDutyPercent
             : curveTemp is { } ct2 ? _controlSettings.Curve.EvaluateDuty(ct2) : (int?)null;
         _curveEditor.SetLive(status.FailsafeActive ? null : curveTemp, curveDuty);
 
-        var fans = status.Devices.Where(d => !d.IsPump).ToList();
+        var fans = status.Devices.ToList();
         var presentIds = fans.Select(f => f.Id ?? f.Name).Distinct().ToList();
         var learnedNew = false;
         foreach (var id in presentIds)
@@ -2682,21 +2115,6 @@ public sealed class MainWindow : Window
             _fanWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 4) });
         }
 
-        _pumpCoolant.Text = status.CoolantTemperatureC is { } coolant ? $"Coolant {coolant:F1} °C" : "Coolant temperature unavailable";
-        _pumpCoolant.Foreground = status.CoolantTemperatureC is null ? Theme.Dim : Theme.Text;
-
-        _pumpRows.Children.Clear();
-        foreach (var pump in status.Devices.Where(d => d.IsPump))
-        {
-            var rpm = pump.Rpm is { } r ? $"{r} rpm" : "no rpm";
-            _pumpRows.Children.Add(DeviceRow($"{pump.Family} · {pump.Name}", pump.Id, $"{rpm} @ {pump.AppliedDutyPercent}%", Theme.Accent2));
-        }
-
-        if (_pumpRows.Children.Count == 0)
-        {
-            _pumpRows.Children.Add(new TextBlock { Text = "No pump detected on the Link chain.", Foreground = Theme.Dim, FontSize = 12.5 });
-        }
-
         if (_trayIcon is not null)
         {
             var tip = status.FailsafeActive
@@ -2713,11 +2131,6 @@ public sealed class MainWindow : Window
         _fanBadge.Text = text;
         _fanBadge.Foreground = color;
         _fanDot.Background = color;
-
-        // the pump runs under the same loop — its badge mirrors the fan card's
-        _pumpBadge.Text = text;
-        _pumpBadge.Foreground = color;
-        _pumpDot.Background = color;
     }
 
     private void UpdateDashboard(ControlStatus? status)
@@ -2730,7 +2143,7 @@ public sealed class MainWindow : Window
             _dashStatus.Foreground = Theme.Dim;
             foreach (var (tile, sub) in new[]
             {
-                (_tileCoolant, _tileCoolantSub), (_tilePump, _tilePumpSub), (_tileFans, _tileFansSub), (_tileDuty, _tileDutySub),
+                (_tileFans, _tileFansSub), (_tileDuty, _tileDutySub),
                 (_cpuTemp, _cpuTempSub), (_cpuLoad, _cpuLoadSub), (_cpuPower, _cpuPowerSub), (_cpuRam, _cpuRamSub),
                 (_gpuTemp, _gpuTempSub), (_gpuLoad, _gpuLoadSub), (_gpuPower, _gpuPowerSub), (_gpuVram, _gpuVramSub),
             })
@@ -2751,15 +2164,9 @@ public sealed class MainWindow : Window
                 : $"Curve on {SourceLabel(status.SourceName)} → fans {status.TargetDutyPercent}%";
         _dashStatus.Foreground = status.FailsafeActive ? Theme.Warn : Theme.Text;
 
-        _tileCoolant.Text = status.CoolantTemperatureC is { } cool ? $"{cool:F1}°" : "—";
-        _tileCoolantSub.Text = "loop water";
         UpdateProcessorSections(status);
 
-        var pump = status.Devices.FirstOrDefault(d => d.IsPump);
-        _tilePump.Text = pump?.Rpm is { } rpm ? rpm.ToString() : "—";
-        _tilePumpSub.Text = pump is null ? "not detected" : $"rpm @ {pump.AppliedDutyPercent}%";
-
-        var fans = status.Devices.Where(d => !d.IsPump).ToList();
+        var fans = status.Devices.ToList();
         _tileFans.Text = $"{fans.Count}/{Math.Max(_controlSettings.SeenFanIds.Count, fans.Count)}";
         var silent = fans.Count(f => f.Rpm is null);
         _tileFansSub.Text = silent > 0 ? $"{silent} without rpm" : "all reporting";
