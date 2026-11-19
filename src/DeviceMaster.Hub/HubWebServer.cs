@@ -611,6 +611,7 @@ h1 { font-size:24px; font-weight:700; margin:0 0 4px 2px; }
 .stat .k { font-size:10.5px; font-weight:600; text-transform:uppercase; color:var(--faint); }
 .stat .v { font-size:22px; font-weight:700; line-height:1.2; white-space:nowrap; }
 .big .stat .v { font-size:32px; }
+.stat .l { font-size:11.5px; color:var(--dim); margin-top:2px; white-space:nowrap; }
 .banner { border-radius:11px; padding:10px 14px; margin:12px 0 0; font-weight:600; font-size:13px; }
 .banner.bad { background:#3a1214; color:#fca5a5; border:1px solid #5b1d20; }
 .banner.off { background:var(--inset); color:var(--dim); border:1px solid var(--line); }
@@ -662,6 +663,7 @@ let machines = [], selected = null, detail = null;
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
 const deg = v => v == null ? "—" : `${v.toFixed(0)} °C`;
 const pct = v => v == null ? "—" : `${v}%`;
+const load = v => v == null ? "load —" : `${Math.round(v)}% load`;
 const state = m => !m.Online ? "bad" : (m.Failsafe ? "bad" : (m.WarningCount ? "warn" : "ok"));
 const seen = m => m.Online ? "online" : (m.SecondsSinceSeen == null ? "never seen" : `offline · seen ${ago(m.SecondsSinceSeen)}`);
 const ago = s => s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : `${Math.round(s/3600)} h ago`;
@@ -682,8 +684,8 @@ function sidebar(){
 }
 function stats(m, big){
   return `<div class="stats${big ? " big" : ""}">
-    <div class="stat"><div class="k">CPU</div><div class="v">${deg(m.CpuTemperatureC)}</div></div>
-    <div class="stat"><div class="k">GPU</div><div class="v">${deg(m.GpuTemperatureC)}</div></div>
+    <div class="stat"><div class="k">CPU</div><div class="v">${deg(m.CpuTemperatureC)}</div><div class="l">${load(m.CpuLoadPercent)}</div></div>
+    <div class="stat"><div class="k">GPU</div><div class="v">${deg(m.GpuTemperatureC)}</div><div class="l">${load(m.GpuLoadPercent)}</div></div>
     <div class="stat"><div class="k">Fans</div><div class="v">${pct(m.FanDutyPercent)}</div></div>
   </div>`;
 }

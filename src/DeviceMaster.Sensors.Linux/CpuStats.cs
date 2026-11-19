@@ -23,9 +23,9 @@ public sealed class CpuStats(string procRoot = "/proc", string sysRoot = "/sys")
         {
             if (ParseProcStat(File.ReadLines(Path.Combine(procRoot, "stat")).First()) is { } cpu)
             {
-                if (_lastCpu is { } last && cpu.Total > last.Total)
+                if (_lastCpu is { } last)
                 {
-                    load = 100.0 * (cpu.Busy - last.Busy) / (cpu.Total - last.Total);
+                    load = LoadPercent(last, cpu);
                 }
 
                 _lastCpu = cpu;
@@ -91,6 +91,21 @@ public sealed class CpuStats(string procRoot = "/proc", string sysRoot = "/sys")
         var total = values.Aggregate(0UL, (a, b) => a + b);
         var idle = values[3] + (values.Length > 4 ? values[4] : 0);
         return (total - idle, total);
+    }
+
+    /// <summary>
+    /// CPU load in percent between two /proc/stat samples. Null when no time passed or the
+    /// counters went backwards (a reset / CPU hot-unplug) — never a negative or &gt;100 figure.
+    /// </summary>
+    public static double? LoadPercent((ulong Busy, ulong Total) previous, (ulong Busy, ulong Total) current)
+    {
+        if (current.Total <= previous.Total || current.Busy < previous.Busy)
+        {
+            return null;
+        }
+
+        var load = 100.0 * (current.Busy - previous.Busy) / (current.Total - previous.Total);
+        return Math.Clamp(load, 0, 100);
     }
 
     /// <summary>Watts from two RAPL energy readings, handling the counter wrapping at its range.</summary>

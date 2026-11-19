@@ -28,6 +28,24 @@ public static class HottestTemperature
 
         return Math.Max(cpuC!.Value, gpuC!.Value);
     }
+
+    /// <summary>
+    /// As <see cref="Combine(double?, double?, bool)"/>, with an optional integrated-GPU fallback
+    /// (#98). Only a discrete GPU can be "expected": once it has reported, losing it is failsafe
+    /// and the integrated reading never stands in for it (that would hide a hot card). The
+    /// integrated reading is used only on a machine that has never shown a discrete GPU, and a
+    /// missing or implausible integrated reading just falls back to the CPU — it never newly
+    /// triggers the failsafe.
+    /// </summary>
+    public static double? Combine(double? cpuC, double? discreteGpuC, double? integratedGpuC, bool discreteGpuExpected)
+    {
+        if (SensorValidity.IsPlausibleTemperature(discreteGpuC) || discreteGpuExpected)
+        {
+            return Combine(cpuC, discreteGpuC, discreteGpuExpected);
+        }
+
+        return Combine(cpuC, integratedGpuC, gpuExpected: false);
+    }
 }
 
 /// <summary>

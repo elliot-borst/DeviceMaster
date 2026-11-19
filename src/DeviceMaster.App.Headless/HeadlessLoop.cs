@@ -363,7 +363,17 @@ public sealed partial class HeadlessLoop : IDisposable
     private void Publish(HeadlessConfig cfg, double? sourceTemp, int duty,
         bool failsafe, List<DeviceReading> readings, List<string> warnings)
     {
-        var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
+        IReadOnlyList<HwmonTemp> temps;
+        try
+        {
+            temps = Hwmon.ReadTemperatures();
+        }
+        catch
+        {
+            temps = [];
+        }
+
+        var cpu = SafeRead(() => Hwmon.CpuTemperatureC(temps));
         var cpuStats = _cpuStats.Sample();
         GpuReading? gpu;
         try
@@ -375,6 +385,17 @@ public sealed partial class HeadlessLoop : IDisposable
             gpu = null;
         }
 
+        // no discrete GPU reporting: show the integrated GPU (or an AMD card) from sysfs (#98) —
+        // but never in place of a discrete GPU this machine has shown (that one just reads "—").
+        // Display only — the curve's own GPU handling is in ReadGpuForCurve / ReadHottest.
+        var gpuTemp = gpu?.TemperatureC;
+        var gpuLoad = gpu?.UtilizationPercent;
+        if (gpu is null && !_gpuTempSeen)
+        {
+            gpuTemp = IntegratedGpuTemp(temps);
+            gpuLoad = IntegratedGpu.BusyPercent();
+        }
+
         _status = new ControlStatus
         {
             Running = true,
@@ -382,8 +403,8 @@ public sealed partial class HeadlessLoop : IDisposable
             SourceName = cfg.Control.Mode == ControlMode.Manual ? "manual" : cfg.Control.Source.ToString(),
             SourceTemperatureC = sourceTemp,
             CpuTemperatureC = cpu,
-            GpuTemperatureC = gpu?.TemperatureC,
-            GpuLoadPercent = gpu?.UtilizationPercent,
+            GpuTemperatureC = gpuTemp,
+            GpuLoadPercent = gpuLoad,
             GpuPowerW = gpu?.PowerW,
             VramUsedGb = MbToGb(gpu?.MemoryUsedMb),
             VramTotalGb = MbToGb(gpu?.MemoryTotalMb),
@@ -410,7 +431,7 @@ public sealed partial class HeadlessLoop : IDisposable
                 FanRgb = _hubs.Count > 0,
                 Turzx = TurzxPresent(),
                 CpuTemperature = SensorValidity.IsPlausibleTemperature(cpu),
-                GpuTemperature = SensorValidity.IsPlausibleTemperature(gpu?.TemperatureC),
+                GpuTemperature = SensorValidity.IsPlausibleTemperature(gpuTemp),
             },
             // Corsair channels are read before the duty is decided, so their duty is filled in
             // here: what the fans were actually asked for (#66)
@@ -565,22 +586,53 @@ public sealed partial class HeadlessLoop : IDisposable
         return cfg.Control.Source switch
         {
             CurveSource.Cpu => Hwmon.CpuTemperatureC(),
-            CurveSource.Gpu => ReadGpu(cfg)?.TemperatureC,
+            CurveSource.Gpu => ReadGpuForCurve(cfg),
             CurveSource.Hottest => ReadHottest(cfg),
             _ => null,
         };
     }
 
-    // CurveSource.Hottest: spike smoothing, and whether this machine has shown a GPU temperature
+    // CurveSource.Hottest: spike smoothing, and whether this machine has shown a (discrete) GPU temperature
     private readonly TemperatureSmoother _hottestSmoother = new();
     private bool _gpuTempSeen;
+
+    /// <summary>The discrete GPU's temperature (nvidia-smi path); latches "this machine has a GPU" once seen.</summary>
+    private double? ReadDiscreteGpuTemp(HeadlessConfig cfg)
+    {
+        var gpu = ReadGpu(cfg)?.TemperatureC;
+        _gpuTempSeen |= SensorValidity.IsPlausibleTemperature(gpu); // once seen, a GPU must keep reporting
+        return gpu;
+    }
+
+    /// <summary>
+    /// CurveSource.Gpu: the discrete GPU, else (only on a machine that has never shown one) the
+    /// integrated GPU (#98). A discrete GPU that stops reporting stays a failsafe.
+    /// </summary>
+    private double? ReadGpuForCurve(HeadlessConfig cfg)
+    {
+        var discrete = ReadDiscreteGpuTemp(cfg);
+        return SensorValidity.IsPlausibleTemperature(discrete) || _gpuTempSeen ? discrete : IntegratedGpuTemp();
+    }
 
     private double? ReadHottest(HeadlessConfig cfg)
     {
         var cpu = Hwmon.CpuTemperatureC();
-        var gpu = ReadGpu(cfg)?.TemperatureC;
-        _gpuTempSeen |= SensorValidity.IsPlausibleTemperature(gpu); // once seen, a GPU must keep reporting
-        return _hottestSmoother.Next(HottestTemperature.Combine(cpu, gpu, _gpuTempSeen), Environment.TickCount64);
+        var gpu = ReadDiscreteGpuTemp(cfg);
+        var integrated = SensorValidity.IsPlausibleTemperature(gpu) || _gpuTempSeen ? null : IntegratedGpuTemp();
+        return _hottestSmoother.Next(HottestTemperature.Combine(cpu, gpu, integrated, _gpuTempSeen), Environment.TickCount64);
+    }
+
+    /// <summary>The integrated GPU's (or an AMD card's) hwmon temperature; null when none or unreadable.</summary>
+    private static double? IntegratedGpuTemp(IReadOnlyList<HwmonTemp>? temps = null)
+    {
+        try
+        {
+            return IntegratedGpu.TemperatureC(temps ?? Hwmon.ReadTemperatures());
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private readonly CpuStats _cpuStats = new(); // load/power are rates: keeps the previous tick's counters
