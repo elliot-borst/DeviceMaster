@@ -40,6 +40,7 @@ header .date { font-size:2.2vh; color:var(--dim); }
 .k { font-size:1.4vh; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); }
 .v { font-size:4.6vh; font-weight:700; line-height:1.1; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .v small { font-size:2vh; color:var(--dim); font-weight:600; }
+.ld { font-size:1.5vh; color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .alert { font-size:1.5vh; color:var(--warn); margin-top:.6vh; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .alert.bad { color:#fca5a5; }
 h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); margin-bottom:1.2vh; }
@@ -92,6 +93,7 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
 const deg = v => v == null ? "—" : Math.round(v) + "°";
+const load = v => v == null ? "load —" : Math.round(v) + "% load";
 function up(s){ if (s == null) return "—"; const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
 function bytes(b){ const u = ["B","KB","MB","GB","TB","PB"]; let i = 0; while (b >= 1024 && i < u.length-1) { b /= 1024; i++; } return (b >= 100 ? b.toFixed(0) : b.toFixed(1)) + " " + u[i]; }
 function tick(){ // date beside the time, both on the one header row
@@ -180,8 +182,8 @@ function machine(m){
     ${alert}
     ${m.Online && hottest.length ? heat(Math.max(...hottest), m.FanCount) : ""}
     <div class="big">
-      <div><div class="k">CPU</div><div class="v">${deg(m.CpuTemperatureC)}</div></div>
-      <div><div class="k">GPU</div><div class="v">${deg(m.GpuTemperatureC)}</div></div>
+      <div><div class="k">CPU</div><div class="v">${deg(m.CpuTemperatureC)}</div>${m.Online ? `<div class="ld">${load(m.CpuLoadPercent)}</div>` : ""}</div>
+      <div><div class="k">GPU</div><div class="v">${deg(m.GpuTemperatureC)}</div>${m.Online ? `<div class="ld">${load(m.GpuLoadPercent)}</div>` : ""}</div>
       <div><div class="k">Fans</div><div class="v">${m.FanDutyPercent == null ? "—" : m.FanDutyPercent + "<small>%</small>"}</div></div>
     </div></div>`;
 }

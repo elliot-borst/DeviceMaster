@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -25,8 +26,12 @@ public sealed class ServersPage
 
     private readonly StackPanel _sidebarList = new();
     private readonly StackPanel _content = new();
-    private TextBox _hubBox = null!;
+    private TextBlock _hubAddress = null!;
     private TextBlock _hubStatus = null!;
+
+    /// <summary>Overview tiles: one column per this many pixels of page width, 1–3 columns.</summary>
+    private const double TileTargetWidth = 520;
+    private UniformGrid? _tiles;
 
     private List<MachineSummary> _machines = [];
     private ControlStatus? _detail;
@@ -62,36 +67,37 @@ public sealed class ServersPage
 
     public UIElement Build()
     {
-        var page = new StackPanel { MaxWidth = 1100, HorizontalAlignment = HorizontalAlignment.Left };
+        // fills the window: the overview tiles size themselves from the page width
+        var page = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
         page.Children.Add(MainWindow.PageTitle("Servers", "every DeviceMaster machine on your tailnet"));
 
-        var card = Theme.CardShell("⇄", "Fleet hub", "found automatically on your tailnet · change it only if your hub lives elsewhere", out var body, out _);
-        var row = new DockPanel { LastChildFill = true };
-        var save = Theme.Btn("Save", primary: true, () =>
+        // the hub is found automatically on the tailnet (an address set in the settings file still wins)
+        var card = Theme.CardShell("⇄", "Fleet hub", "found automatically on your tailnet", out var body, out var head);
+        card.Margin = new Thickness(0, 0, 0, 16);
+        head.Margin = new Thickness(0);
+        _hubStatus = new TextBlock { FontSize = 12.5, Foreground = Theme.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0), MaxWidth = 560, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Right };
+        DockPanel.SetDock(_hubStatus, Dock.Right);
+        head.Children.Add(_hubStatus);
+        _hubAddress = new TextBlock
         {
-            _setHubUrl(_hubBox.Text.Trim());
-            _ = RefreshAsync();
-        });
-        save.Margin = new Thickness(8, 0, 0, 0);
-        DockPanel.SetDock(save, Dock.Right);
-        row.Children.Add(save);
-        _hubBox = new TextBox
-        {
-            Text = _getHubUrl(),
-            FontSize = 12.5,
-            Background = Theme.Inset,
-            Foreground = Theme.Text,
-            BorderBrush = Theme.Line2,
-            CaretBrush = Theme.Text,
-            Padding = new Thickness(8, 6, 8, 6),
+            FontSize = 13,
+            FontFamily = Theme.Mono,
+            Foreground = Theme.Dim,
+            Margin = new Thickness(24, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        row.Children.Add(_hubBox);
-        body.Children.Add(Theme.InsetRow(row));
-        _hubStatus = new TextBlock { FontSize = 12, Foreground = Theme.Faint, Margin = new Thickness(2, 8, 0, 0), TextWrapping = TextWrapping.Wrap };
-        body.Children.Add(_hubStatus);
+        DockPanel.SetDock(_hubAddress, Dock.Left);
+        head.Children.Add(_hubAddress);
         page.Children.Add(card);
         page.Children.Add(_content);
+        _content.SizeChanged += (_, e) =>
+        {
+            if (e.WidthChanged && _tiles is not null)
+            {
+                _tiles.Columns = Columns(e.NewSize.Width);
+            }
+        };
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         timer.Tick += (_, _) => _ = RefreshAsync();
@@ -202,15 +208,14 @@ public sealed class ServersPage
             var (found, suffix) = await DiscoverHubAsync();
             if (found is not null)
             {
-                _setHubUrl(found); // remembered; the box stays as an override
-                _ = _dispatcher.InvokeAsync(() => _hubBox.Text = found);
+                _setHubUrl(found); // remembered in the settings file
                 _ = RefreshAsync();
                 return;
             }
 
             _error = suffix is null
-                ? "Tailscale isn't running here, so the fleet hub can't be found. Start Tailscale, or enter the hub's address."
-                : $"No fleet hub answered at {HubHostName}.{suffix}. Enter its address if it lives elsewhere.";
+                ? "Tailscale isn't running here, so the fleet hub can't be found. Start Tailscale."
+                : $"No fleet hub answered at {HubHostName}.{suffix}.";
             _ = _dispatcher.InvokeAsync(Render);
             return;
         }
@@ -269,29 +274,35 @@ public sealed class ServersPage
 
     private static Ellipse Dot(Brush brush) => new() { Width = 8, Height = 8, Fill = brush, VerticalAlignment = VerticalAlignment.Center };
 
+    private static int Columns(double width) => Math.Clamp((int)(width / TileTargetWidth), 1, 3);
+
     private void Render()
     {
+        var hub = _getHubUrl().TrimEnd('/');
+        _hubAddress.Text = hub.Length > 0 ? hub : "searching…";
         _hubStatus.Text = _error ?? $"{_machines.Count(m => m.Online)} of {_machines.Count} online";
         _hubStatus.Foreground = _error is null ? Theme.Faint : Theme.Warn;
         RenderSidebar();
         _content.Children.Clear();
+        _tiles = null;
         if (_machines.FirstOrDefault(m => m.Name == _selected) is { } machine)
         {
-            _content.Children.Add(MachineCard(machine, detailed: true));
+            var detail = MachineCard(machine, detailed: true);
+            detail.Margin = new Thickness(0);
+            _content.Children.Add(detail);
             return;
         }
 
-        var grid = new WrapPanel();
+        _tiles = new UniformGrid { Columns = Columns(_content.ActualWidth), VerticalAlignment = VerticalAlignment.Top };
         foreach (var m in _machines)
         {
             var card = MachineCard(m, detailed: false);
-            card.Width = 330;
             card.Cursor = System.Windows.Input.Cursors.Hand;
             card.MouseLeftButtonUp += (_, _) => Select(m.Name);
-            grid.Children.Add(card);
+            _tiles.Children.Add(card);
         }
 
-        _content.Children.Add(grid);
+        _content.Children.Add(_tiles);
     }
 
     private void RenderSidebar()
@@ -342,37 +353,82 @@ public sealed class ServersPage
 
     private Border MachineCard(MachineSummary m, bool detailed)
     {
-        var meta = string.Join(" · ", new[] { Seen(m), m.Platform, m.Version?.Split('+')[0] is { Length: > 0 } v ? $"v{v.Split('.')[0]}" : null }
+        var meta = string.Join(" · ", new[]
+            {
+                m.Online && m.UptimeSeconds is { } up ? $"up {Uptime(up)}" : Seen(m),
+                m.Platform,
+                m.Version?.Split('+')[0] is { Length: > 0 } v ? $"v{v.Split('.')[0]}" : null,
+            }
             .Where(s => !string.IsNullOrEmpty(s)));
         var card = Theme.CardShell("●", m.Name, meta, out var body, out var head);
-        card.Margin = new Thickness(0, 0, 12, 12);
-        var dot = Dot(StateBrush(m));
-        dot.Margin = new Thickness(0, 0, 4, 0);
-        DockPanel.SetDock(dot, Dock.Right);
-        head.Children.Add(dot);
+        card.Margin = new Thickness(0, 0, 16, 16);
+        card.Padding = new Thickness(24, 20, 24, 22);
+        card.VerticalAlignment = VerticalAlignment.Stretch;
+        head.Margin = new Thickness(0, 0, 0, 18);
 
-        var stats = new WrapPanel();
-        void Stat(string k, string v)
+        var badges = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (m.Online && m.WarningCount > 0)
         {
-            var tile = new StackPanel { Margin = new Thickness(0, 0, 18, 6), MinWidth = detailed ? 110 : 80 };
-            tile.Children.Add(new TextBlock { Text = k, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
-            tile.Children.Add(new TextBlock { Text = v, FontSize = detailed ? 28 : 20, FontWeight = FontWeights.Bold, Foreground = Theme.Text });
-            stats.Children.Add(tile);
+            badges.Children.Add(Chip($"{m.WarningCount} warning{(m.WarningCount == 1 ? "" : "s")}", Theme.Warn));
         }
 
-        Stat("CPU", Deg(m.CpuTemperatureC));
-        Stat("GPU", Deg(m.GpuTemperatureC));
-        Stat("FANS", m.FanDutyPercent is { } d ? $"{d}%" : "—");
+        if (m.Online && m.InSync is { } inSync)
+        {
+            badges.Children.Add(Chip(inSync ? "in sync" : "differs from fleet", inSync ? Theme.Good : Theme.Warn));
+        }
 
-        body.Children.Add(stats);
+        var dot = Dot(StateBrush(m));
+        dot.Width = dot.Height = 10;
+        dot.Margin = new Thickness(6, 0, 2, 0);
+        badges.Children.Add(dot);
+        DockPanel.SetDock(badges, Dock.Right);
+        head.Children.Add(badges);
+
+        // headline figures: temperatures with their load underneath, then the fans
+        var figures = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
+        figures.Children.Add(Figure("CPU", Deg(m.CpuTemperatureC), Load(m.CpuLoadPercent), detailed));
+        figures.Children.Add(Figure("GPU", Deg(m.GpuTemperatureC), Load(m.GpuLoadPercent), detailed));
+        figures.Children.Add(Figure("FANS", m.FanDutyPercent is { } d ? $"{d}%" : "—",
+            m.FanCount > 0 ? $"{m.FanCount} fan{(m.FanCount == 1 ? "" : "s")}" : "no fans", detailed));
+        body.Children.Add(figures);
 
         if (!m.Online)
         {
             body.Children.Add(Note($"Not answering{(m.Error is null ? "" : $" — {m.Error}")}. It keeps running on its own settings.", Theme.Dim));
+            return card;
         }
-        else if (m.Failsafe)
+
+        if (m.Failsafe)
         {
             body.Children.Add(Note("Failsafe: fans at 100 % (temperature unreadable)", Theme.Danger));
+        }
+
+        // secondary facts in an inset strip: memory, containers, uptime
+        var facts = new UniformGrid { Columns = 3 };
+        facts.Children.Add(Fact("MEMORY", m.RamUsedGb is { } used && m.RamTotalGb is { } total ? $"{used:F1} / {total:F0} GB" : "—"));
+        facts.Children.Add(Fact("CONTAINERS", m.Docker is { } dk ? $"{dk.Running} / {dk.Total} running" : "—"));
+        facts.Children.Add(Fact("UPTIME", m.UptimeSeconds is { } secs ? Uptime(secs) : "—"));
+        var strip = Theme.InsetRow(facts);
+        strip.Margin = new Thickness(0, 12, 0, 0);
+        strip.Padding = new Thickness(14, 10, 14, 10);
+        body.Children.Add(strip);
+
+        // storage: the biggest few filesystems with a bar each
+        var disks = m.Storage.Where(s => s.TotalBytes > 0).OrderByDescending(s => s.TotalBytes).Take(detailed ? 12 : 3).ToList();
+        foreach (var disk in disks)
+        {
+            body.Children.Add(DiskRow(disk));
+        }
+
+        if (m.Docker is { Stopped.Count: > 0 } docker)
+        {
+            body.Children.Add(Note($"Stopped: {string.Join(", ", docker.Stopped.Take(detailed ? 50 : 4))}{(!detailed && docker.Stopped.Count > 4 ? " …" : "")}", Theme.Warn));
+        }
+
+        body.Children.Add(Note($"Fans follow {m.Source ?? "—"}{(m.SourceTemperatureC is { } st ? $" at {st:F1} °C" : "")} · {m.Mode ?? "—"}", Theme.Faint));
+        if (m.PushError is { Length: > 0 } pushError)
+        {
+            body.Children.Add(Note("Fleet settings not delivered: " + pushError, Theme.Warn));
         }
 
         if (!detailed)
@@ -380,26 +436,16 @@ public sealed class ServersPage
             return card;
         }
 
-        body.Children.Add(Note($"Fans follow {m.Source ?? "—"}{(m.SourceTemperatureC is { } st ? $" at {st:F1} °C" : "")} · {m.Mode}", Theme.Faint));
         if (m.Capabilities is { } c)
         {
-            var chips = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            var chips = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
             foreach (var (on, label) in new[]
             {
                 (c.CorsairHubs, "Corsair"), (c.LianLiFans, "Lian Li"), (c.MotherboardFans, "Board fans"),
                 (c.MotherboardRgb, "Board RGB"), (c.RamRgb, "RAM RGB"), (c.GpuRgb, "GPU RGB"), (c.Turzx, "Turzx"),
             }.Where(x => x.Item1))
             {
-                chips.Children.Add(new Border
-                {
-                    Background = Theme.Card2,
-                    BorderBrush = Theme.Line,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(99),
-                    Padding = new Thickness(10, 2, 10, 2),
-                    Margin = new Thickness(0, 0, 6, 6),
-                    Child = new TextBlock { Text = label, FontSize = 11.5, Foreground = Theme.Dim },
-                });
+                chips.Children.Add(Chip(label, Theme.Dim, new Thickness(0, 0, 6, 6)));
             }
 
             body.Children.Add(chips);
@@ -421,6 +467,100 @@ public sealed class ServersPage
         return card;
     }
 
+    private static string Load(double? percent) => percent is { } p ? $"{p:F0}% load" : "load —";
+
+    internal static string Uptime(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : t.TotalHours >= 1 ? $"{t.Hours}h {t.Minutes}m" : $"{t.Minutes}m";
+    }
+
+    internal static string Bytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB", "PB"];
+        double value = bytes;
+        var i = 0;
+        while (value >= 1024 && i < units.Length - 1)
+        {
+            value /= 1024;
+            i++;
+        }
+
+        return $"{(value >= 100 ? value.ToString("F0") : value.ToString("F1"))} {units[i]}";
+    }
+
+    private static StackPanel Figure(string label, string value, string sub, bool detailed)
+    {
+        var tile = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+        tile.Children.Add(new TextBlock { Text = label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
+        tile.Children.Add(new TextBlock
+        {
+            Text = value,
+            FontSize = detailed ? 40 : 32,
+            FontWeight = FontWeights.Bold,
+            Foreground = Theme.Text,
+            Margin = new Thickness(0, 2, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        tile.Children.Add(new TextBlock { Text = sub, FontSize = 12, Foreground = Theme.Dim });
+        return tile;
+    }
+
+    private static StackPanel Fact(string label, string value)
+    {
+        var tile = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
+        tile.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Theme.Faint });
+        tile.Children.Add(new TextBlock
+        {
+            Text = value,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Theme.Text,
+            Margin = new Thickness(0, 2, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        return tile;
+    }
+
+    private static StackPanel DiskRow(StorageInfo disk)
+    {
+        var used = Math.Clamp(disk.UsedPercent, 0, 100);
+        var row = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var label = new DockPanel();
+        var right = new TextBlock { Text = $"{Bytes(disk.UsedBytes)} / {Bytes(disk.TotalBytes)} · {used:F0}%", FontSize = 12, Foreground = Theme.Dim };
+        DockPanel.SetDock(right, Dock.Right);
+        label.Children.Add(right);
+        label.Children.Add(new TextBlock { Text = disk.Name, FontSize = 12.5, Foreground = Theme.Text, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 10, 0) });
+        row.Children.Add(label);
+
+        var bar = new Grid { Height = 7, Margin = new Thickness(0, 5, 0, 0) };
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(used, GridUnitType.Star) });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100 - used, GridUnitType.Star) });
+        var track = new Border { CornerRadius = new CornerRadius(4), Background = Theme.Inset, BorderBrush = Theme.Line, BorderThickness = new Thickness(1) };
+        Grid.SetColumnSpan(track, 2);
+        bar.Children.Add(track);
+        var fill = new Border
+        {
+            CornerRadius = new CornerRadius(4),
+            Background = used >= 95 ? Theme.Danger : used >= 85 ? Theme.Warn : Theme.AccentGrad(),
+        };
+        bar.Children.Add(fill);
+        row.Children.Add(bar);
+        return row;
+    }
+
+    private static Border Chip(string text, Brush foreground, Thickness? margin = null) => new()
+    {
+        Background = Theme.Card2,
+        BorderBrush = Theme.Line,
+        BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(99),
+        Padding = new Thickness(10, 2, 10, 3),
+        Margin = margin ?? new Thickness(6, 0, 0, 0),
+        VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock { Text = text, FontSize = 11.5, Foreground = foreground },
+    };
+
     private static TextBlock Note(string text, Brush brush) =>
-        new() { Text = text, FontSize = 12.5, Foreground = brush, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
+        new() { Text = text, FontSize = 12.5, Foreground = brush, Margin = new Thickness(0, 10, 0, 0), TextWrapping = TextWrapping.Wrap };
 }

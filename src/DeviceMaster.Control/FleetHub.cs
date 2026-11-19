@@ -102,6 +102,10 @@ public sealed record MachineSnapshot
         SourceTemperatureC = Status?.SourceTemperatureC,
         CpuTemperatureC = Status?.CpuTemperatureC,
         GpuTemperatureC = Status?.GpuTemperatureC,
+        CpuLoadPercent = Status?.CpuLoadPercent,
+        GpuLoadPercent = Status?.GpuLoadPercent,
+        RamUsedGb = Status?.RamUsedGb,
+        RamTotalGb = Status?.RamTotalGb,
         FanDutyPercent = Status?.TargetDutyPercent,
         Failsafe = Status?.FailsafeActive ?? false,
         WarningCount = Status?.Warnings.Count ?? 0,
@@ -130,6 +134,12 @@ public sealed record MachineSummary
     public double? SourceTemperatureC { get; init; }
     public double? CpuTemperatureC { get; init; }
     public double? GpuTemperatureC { get; init; }
+
+    /// <summary>CPU / GPU load and memory in use (#98); null = the machine doesn't report it.</summary>
+    public double? CpuLoadPercent { get; init; }
+    public double? GpuLoadPercent { get; init; }
+    public double? RamUsedGb { get; init; }
+    public double? RamTotalGb { get; init; }
     public int? FanDutyPercent { get; init; }
     public bool Failsafe { get; init; }
     public int WarningCount { get; init; }
