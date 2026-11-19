@@ -49,7 +49,7 @@ h2 { font-size:1.6vh; font-weight:600; letter-spacing:.08em; text-transform:uppe
 .bar i { display:block; height:100%; background:linear-gradient(90deg,var(--a1),var(--a2)); }
 .bar i.warn { background:var(--warn); } .bar i.bad { background:var(--bad); }
 .hero { font-size:6.5vh; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
-.hero small { font-size:3vh; color:var(--dim); font-weight:600; }
+.hero small { font-size:inherit; color:var(--dim); font-weight:800; }
 .list { font-size:1.6vh; color:var(--dim); margin-top:1vh; overflow:hidden; }
 .speed { font-size:7vh; font-weight:800; line-height:1; background:linear-gradient(90deg,var(--a1),var(--a2),var(--a3)); -webkit-background-clip:text; color:transparent; font-variant-numeric:tabular-nums; }
 .dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.8vw; margin-top:auto; }
