@@ -82,17 +82,13 @@ public class LinkLedCatalogTests
     [InlineData((byte)LinkDeviceModel.FanLxSeries, (byte)0x00, 18)]
     [InlineData((byte)LinkDeviceModel.FanRxMaxRgbSeries, (byte)0x00, 8)]
     [InlineData((byte)LinkDeviceModel.FanRxRgbSeries, (byte)0x00, 8)]
-    [InlineData((byte)LinkDeviceModel.PumpXd5Series, (byte)0x00, 22)]
-    [InlineData((byte)LinkDeviceModel.PumpXd6Series, (byte)0x00, 22)]
-    [InlineData((byte)LinkDeviceModel.WaterBlockXc7Series, (byte)0x00, 24)]
-    [InlineData((byte)LinkDeviceModel.LiquidCoolerHSeries, (byte)0x02, 20)]
+
     public void RgbModels_HaveReferenceLedCounts(byte model, byte variant, int expectedLeds) =>
         Assert.Equal(expectedLeds, LinkDeviceCatalog.Find(model, variant)!.LedCount);
 
     [Theory]
     [InlineData((byte)LinkDeviceModel.FanRxSeries, (byte)0x00)]        // non-RGB RX
     [InlineData((byte)LinkDeviceModel.FanRxMaxSeries, (byte)0x00)]     // non-RGB RX MAX
-    [InlineData((byte)LinkDeviceModel.LcdXd5Elite, (byte)0x00)]        // display module
     [InlineData((byte)LinkDeviceModel.CommanderDuoSeries, (byte)0x00)] // dynamic count via endpoint 0x20
     public void NonRgbModels_HaveZeroLeds(byte model, byte variant) =>
         Assert.Equal(0, LinkDeviceCatalog.Find(model, variant)!.LedCount);
@@ -119,7 +115,7 @@ public class LinkLedRegistryTests
     }
 
     [Fact]
-    public void ParseLedRegistry_PumpHubSingleDevice()
+    public void ParseLedRegistry_SingleDevice()
     {
         var packet = new byte[64];
         Convert.FromHexString("000008000D000F000000000000000000000000000001110000").CopyTo(packet, 0);

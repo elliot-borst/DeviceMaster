@@ -131,7 +131,7 @@ public sealed partial class HeadlessLoop
             foreach (var header in _mbFans.Headers().Where(h => _mbFans.Controlled.Contains(h.Index)))
             {
                 readings.Add(new DeviceReading("motherboard", header.Label, header.Rpm,
-                    off ? 0 : Math.Max(duty, Core.Safety.SafetyLimits.HeaderMinimumDutyPercent), IsPump: false, Id: $"{_mbFans.Chip}:pwm{header.Index}"));
+                    off ? 0 : Math.Max(duty, Core.Safety.SafetyLimits.HeaderMinimumDutyPercent), Id: $"{_mbFans.Chip}:pwm{header.Index}"));
             }
         }
         catch (Exception ex)
@@ -456,7 +456,7 @@ public sealed partial class HeadlessLoop
     {
         var llm = FreshLlm();
         var fan = status.Devices.FirstOrDefault(d => d.Family == "motherboard" && d.Rpm is > 0)
-            ?? status.Devices.FirstOrDefault(d => !d.IsPump && !d.IsScreen && d.Rpm is > 0);
+            ?? status.Devices.FirstOrDefault(d => d.Rpm is > 0);
         _dashboard = new TurzxDashboardData
         {
             HasLlm = cfg.StrataUrl is { Length: > 0 },

@@ -66,22 +66,13 @@ public class Slv3ProtocolTests
     [Fact]
     public void PwmConstraints_RaiseNonzeroBelowFloor_AndZeroUnusedSlots()
     {
-        var result = Slv3Protocol.ApplyPwmConstraints([10, 10, 200, 200], fanCount: 3, isAio: false);
+        var result = Slv3Protocol.ApplyPwmConstraints([10, 10, 200, 200], fanCount: 3);
 
         var floor = (byte)(Slv3Protocol.MinimumDutyPercent / 100.0 * 255.0);
         Assert.Equal(floor, result[0]);
         Assert.Equal(floor, result[1]);
         Assert.Equal(200, result[2]);
-        Assert.Equal(0, result[3]); // beyond fan count, not an AIO pump slot
-    }
-
-    [Fact]
-    public void PwmConstraints_PreserveAioPumpSlot()
-    {
-        var result = Slv3Protocol.ApplyPwmConstraints([200, 200, 0, 180], fanCount: 2, isAio: true);
-
-        Assert.Equal(0, result[2]);
-        Assert.Equal(180, result[3]);
+        Assert.Equal(0, result[3]); // beyond fan count
     }
 
     [Fact]

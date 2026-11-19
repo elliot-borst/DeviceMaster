@@ -5,7 +5,7 @@ namespace DeviceMaster.Sensors.Linux;
 /// <summary>
 /// <see cref="ISensorSource"/> backed by the kernel hwmon tree (CPU) and nvidia-smi (GPU).
 /// Throws on total failure — the control loop treats that as the failsafe trigger
-/// (fans/pump to 100%), exactly like the Windows LHM source does.
+/// (fans to 100%), exactly like the Windows LHM source does.
 /// </summary>
 public sealed class LinuxSensorSource : ISensorSource
 {

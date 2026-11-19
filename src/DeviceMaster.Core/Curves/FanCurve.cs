@@ -56,11 +56,8 @@ public sealed class FanCurve
         return Points[^1].DutyPercent;
     }
 
-    /// <summary>Radiator-fan curve driven by loop coolant temperature (defined once, in <see cref="CurveRules"/>).</summary>
-    public static FanCurve DefaultCoolant { get; } = new(CurveRules.DefaultFor(coolant: true));
-
-    /// <summary>Fallback curve for CPU/GPU temperature sources.</summary>
-    public static FanCurve DefaultCpuGpu { get; } = new(CurveRules.DefaultFor(coolant: false));
+    /// <summary>Factory curve for the CPU/GPU temperature sources (defined once, in <see cref="CurveRules"/>).</summary>
+    public static FanCurve DefaultCpuGpu { get; } = new(CurveRules.Default);
 }
 
 /// <summary>Plausibility gate for temperature readings (failed sensors often read 0 or garbage).</summary>

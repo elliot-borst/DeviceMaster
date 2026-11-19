@@ -13,18 +13,22 @@ public enum ControlMode
     Curve,
 }
 
+/// <summary>
+/// The temperature a fan curve follows. The numbers are stable on the wire (web patches, older
+/// configs): 0 was the removed coolant source, which loads as <see cref="Hottest"/> (see
+/// <see cref="CurveSourceJsonConverter"/>).
+/// </summary>
+[JsonConverter(typeof(CurveSourceJsonConverter))]
 public enum CurveSource
 {
-    /// <summary>Loop coolant temperature from the iCUE Link chain — the right source for radiator fans.</summary>
-    Coolant = 0,
-    Cpu,
-    Gpu,
+    Cpu = 1,
+    Gpu = 2,
 
     /// <summary>
     /// The hotter of CPU and GPU (smoothed) — the fleet-wide default (#33): fans ramp when either
     /// works hard. A machine with a GPU whose reading fails goes to failsafe, never CPU-only.
     /// </summary>
-    Hottest,
+    Hottest = 3,
 }
 
 public enum LcdMode
@@ -37,75 +41,90 @@ public enum LcdMode
     Metrics,
 }
 
+/// <summary>
+/// A screen metric. The numbers are stable on the wire; the removed coolant and pump metrics
+/// (0, 7, 12) load as <see cref="CpuTemp"/> (see <see cref="LcdMetricJsonConverter"/>).
+/// </summary>
+[JsonConverter(typeof(LcdMetricJsonConverter))]
 public enum LcdMetric
 {
-    Coolant = 0,
-    CpuTemp,
-    GpuTemp,
-    CpuLoad,
-    GpuLoad,
-    Clock,
-    RamLoad,
-    PumpRpm,
-    FanDuty,
-    Date,
-    VramLoad,
-    FanRpm,
-    PumpDuty,
-    GpuPower,
-    CpuPower,
-    GpuClock,
-    VramTemp,
-}
-
-/// <summary>Per-screen display configuration (metric, rotation, font color).</summary>
-public sealed class LcdScreenConfig
-{
-    /// <summary>"pump-lcd" or the fan LCD node's serial.</summary>
-    public string Id { get; set; } = "";
-
-    /// <summary>User-chosen group name ("Front", "Side floor", …); empty = ungrouped.</summary>
-    public string Group { get; set; } = "";
-
-    public LcdMetric Metric { get; set; } = LcdMetric.CpuTemp;
-
-    /// <summary>0, 90, 180 or 270 — applied when rendering the frame.</summary>
-    public int RotationDegrees { get; set; }
-
-    /// <summary>Fixed font color; all three null = plain white.</summary>
-    public int? FontR { get; set; }
-    public int? FontG { get; set; }
-    public int? FontB { get; set; }
-
-    /// <summary>Color the value by temperature/load thresholds (green/amber/red) instead.</summary>
-    public bool ColorByValue { get; set; }
+    CpuTemp = 1,
+    GpuTemp = 2,
+    CpuLoad = 3,
+    GpuLoad = 4,
+    Clock = 5,
+    RamLoad = 6,
+    FanDuty = 8,
+    Date = 9,
+    VramLoad = 10,
+    FanRpm = 11,
+    GpuPower = 13,
+    CpuPower = 14,
+    GpuClock = 15,
+    VramTemp = 16,
 }
 
 /// <summary>User-facing control configuration, persisted as JSON under %LOCALAPPDATA%\DeviceMaster.</summary>
-public sealed class ControlSettings
+/// <remarks>
+/// Settings written before pump/coolant support was removed load safely: unknown properties
+/// (PumpDutyPercent, the pump/fan LCD fields) are ignored, and a "Coolant" curve source becomes
+/// <see cref="CurveSource.Hottest"/> with the Hottest curve — a coolant curve (25–38 °C) would
+/// pin CPU-driven fans at 100% (see <see cref="OnDeserialized"/>).
+/// </remarks>
+public sealed class ControlSettings : IJsonOnDeserialized
 {
     public ControlMode Mode { get; set; } = ControlMode.Off;
     public int ManualDutyPercent { get; set; } = 50;
 
-    /// <summary>Pump duty, controlled separately from fans; hard-floored at 50% by the write layer.</summary>
-    public int PumpDutyPercent { get; set; } = 100;
+    [JsonIgnore]
+    public CurveSource Source { get; set; } = CurveSource.Hottest;
 
-    public CurveSource Source { get; set; } = CurveSource.Coolant;
+    /// <summary>The JSON form of <see cref="Source"/>: spots a legacy "Coolant" (or 0) so its curve is replaced too.</summary>
+    [JsonInclude]
+    [JsonPropertyName(nameof(Source))]
+    private JsonElement SourceJson
+    {
+        get => JsonSerializer.SerializeToElement(Source.ToString());
+        set
+        {
+            _legacySource = !CurveSourceJsonConverter.TryParse(value, out var source);
+            Source = source;
+        }
+    }
+
+    private bool _legacySource;
+
     /// <summary>The active curve — always repaired to the shared two-point rules, including when a
     /// settings file written by an older build (4–5 points) is loaded.</summary>
     public List<CurvePoint> CurvePoints
     {
         get => _curvePoints;
-        set => _curvePoints = CurveRules.Normalize(value) ?? CurveRules.DefaultFor(coolant: true).ToList();
+        set => _curvePoints = CurveRules.Normalize(value) ?? CurveRules.Default.ToList();
     }
 
-    private List<CurvePoint> _curvePoints = CurveRules.DefaultFor(coolant: true).ToList();
+    private List<CurvePoint> _curvePoints = CurveRules.Default.ToList();
 
     /// <summary>
-    /// Curves remembered for the sources that aren't active (key = source name). A coolant curve
-    /// (25–38 °C) would pin a CPU at 100%, so each source keeps its own; <see cref="SetSource"/> swaps them.
+    /// Curves remembered for the sources that aren't active (key = source name); <see cref="SetSource"/> swaps them.
     /// </summary>
     public Dictionary<string, List<CurvePoint>> SourceCurves { get; set; } = [];
+
+    /// <summary>Migrates a legacy coolant source: Hottest with its remembered (or default) curve.</summary>
+    void IJsonOnDeserialized.OnDeserialized() => OnDeserialized();
+
+    private void OnDeserialized()
+    {
+        if (_legacySource)
+        {
+            _legacySource = false;
+            Source = CurveSource.Hottest;
+            CurvePoints = SourceCurves.TryGetValue(nameof(CurveSource.Hottest), out var hottest) && CurveRules.Normalize(hottest) is { } repaired
+                ? repaired
+                : CurveRules.Default.ToList();
+        }
+
+        SourceCurves.Remove("Coolant");
+    }
 
     /// <summary>Switches the curve source, saving the current curve and loading the new source's (or its default).</summary>
     public bool SetSource(CurveSource source)
@@ -119,7 +138,7 @@ public sealed class ControlSettings
         Source = source;
         CurvePoints = SourceCurves.TryGetValue(source.ToString(), out var saved) && CurveRules.Normalize(saved) is { } repaired
             ? repaired
-            : CurveRules.DefaultFor(source == CurveSource.Coolant).ToList();
+            : CurveRules.Default.ToList();
         return true;
     }
 
@@ -168,27 +187,13 @@ public sealed class ControlSettings
     [JsonIgnore]
     public bool RainbowActive => RgbEnabled && !RgbOff && RgbEffect == RgbEffect.Rainbow;
 
-    /// <summary>Pump LCD + per-fan LCD screens: leave alone, backlight off, a solid background, or metrics.</summary>
-    public LcdMode LcdScreens { get; set; } = LcdMode.Unmanaged;
-
-    /// <summary>Pump + fan LCD backlight brightness 0–100 (the Turzx screen keeps its own <see cref="TurzxBrightness"/>).</summary>
-    public int LcdBrightness { get; set; } = 100;
-
-    /// <summary>Metric shown on the pump screen while <see cref="LcdScreens"/> is Metrics (default for new configs).</summary>
-    public LcdMetric PumpScreenMetric { get; set; } = LcdMetric.Coolant;
-
-    /// <summary>Metric shown on every fan screen while <see cref="LcdScreens"/> is Metrics (default for new configs).</summary>
-    public LcdMetric FanScreenMetric { get; set; } = LcdMetric.CpuTemp;
-
-    /// <summary>Per-screen overrides; screens without an entry fall back to the defaults above.</summary>
-    public List<LcdScreenConfig> LcdScreenConfigs { get; set; } = [];
-
-    // ---- Turzx 8.8" serial screen (independent of the Corsair/Lian Li JPEG screens above) ----
+    // ---- Turzx 8.8" serial screen ----
 
     /// <summary>Turzx 8.8" screen: leave alone, backlight off, a solid background, or live metrics.</summary>
     public LcdMode TurzxScreen { get; set; } = LcdMode.Unmanaged;
 
     /// <summary>Metric shown on the Turzx screen while <see cref="TurzxScreen"/> is Metrics.</summary>
+    [JsonConverter(typeof(LcdMetricJsonConverter))]
     public LcdMetric TurzxMetric { get; set; } = LcdMetric.CpuTemp;
 
     /// <summary>Turzx backlight brightness 0–100.</summary>
@@ -201,7 +206,6 @@ public sealed class ControlSettings
     public bool BlackoutActive { get; set; }
     public bool BlackoutPrevRgbEnabled { get; set; } = true;
     public bool BlackoutPrevRgbOff { get; set; }
-    public LcdMode BlackoutPrevLcd { get; set; } = LcdMode.Metrics;
     public LcdMode BlackoutPrevTurzx { get; set; } = LcdMode.Unmanaged;
 
     /// <summary>
@@ -220,36 +224,20 @@ public sealed class ControlSettings
         {
             BlackoutPrevRgbEnabled = RgbEnabled;
             BlackoutPrevRgbOff = RgbOff;
-            BlackoutPrevLcd = LcdScreens;
             BlackoutPrevTurzx = TurzxScreen;
             RgbEnabled = true; // paint black, don't just stop controlling
             RgbOff = true;
-            LcdScreens = LcdMode.Off;
             TurzxScreen = LcdMode.Off;
         }
         else
         {
             RgbEnabled = BlackoutPrevRgbEnabled;
             RgbOff = BlackoutPrevRgbOff;
-            LcdScreens = BlackoutPrevLcd;
             TurzxScreen = BlackoutPrevTurzx;
         }
 
         BlackoutActive = on;
         return true;
-    }
-
-    /// <summary>Finds (or creates, unsaved) the config for a screen id.</summary>
-    public LcdScreenConfig ScreenConfig(string id, bool isPump)
-    {
-        var config = LcdScreenConfigs.FirstOrDefault(c => c.Id == id);
-        if (config is null)
-        {
-            config = new LcdScreenConfig { Id = id, Metric = isPump ? PumpScreenMetric : FanScreenMetric };
-            LcdScreenConfigs.Add(config);
-        }
-
-        return config;
     }
 
     /// <summary>Fleet hub address for the Servers page (#33), e.g. https://devicemaster.&lt;tailnet&gt;.ts.net. Machine-only.</summary>
@@ -283,8 +271,7 @@ public sealed class ControlSettings
         {
             if (File.Exists(ConfigPath))
             {
-                return JsonSerializer.Deserialize<ControlSettings>(File.ReadAllText(ConfigPath), JsonOptions)
-                    ?? new ControlSettings();
+                return FromJson(File.ReadAllText(ConfigPath));
             }
         }
         catch
@@ -295,9 +282,16 @@ public sealed class ControlSettings
         return new ControlSettings();
     }
 
+    /// <summary>Reads settings JSON as <see cref="Load"/> does (throws on malformed JSON).</summary>
+    public static ControlSettings FromJson(string json) =>
+        JsonSerializer.Deserialize<ControlSettings>(json, JsonOptions) ?? new ControlSettings();
+
+    /// <summary>The settings as <see cref="Save"/> writes them.</summary>
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
     public void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-        File.WriteAllText(ConfigPath, JsonSerializer.Serialize(this, JsonOptions));
+        File.WriteAllText(ConfigPath, ToJson());
     }
 }

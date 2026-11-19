@@ -3,10 +3,12 @@
 Custom Windows app replacing Corsair iCUE, Lian Li L-Connect, and Turzx software — raw
 HID/WinUSB/serial to the hardware. C#/.NET (`net9.0-windows`), Serilog, HidSharp, LHM.
 
-## Non-negotiable safety rules (water-cooled loop!)
+## Non-negotiable safety rules
 
-- Pump duty never below `SafetyLimits.PumpMinimumDutyPercent` (50%); any error ⇒ 100%.
-- Sensor read failure or implausible value (≤ 0 °C, > 115 °C) ⇒ fans/pump to 100%.
+- Air cooling only: pump, coolant and pump/fan LCD support were removed (#96). Never drive a
+  pump — liquid-cooling Link devices stay out of `LinkDeviceCatalog` (an unknown chain device
+  makes the whole hub do-not-write) and a Lian Li wireless AIO never gets a PWM.
+- Sensor read failure or implausible value (≤ 0 °C, > 115 °C) ⇒ fans to 100%; any error ⇒ 100%.
 - Never write to a device unless `KnownDeviceRegistry.IsWriteAllowed(vid:pid)`. The registry
   in `DeviceMaster.Core` is the single source of truth for identification.
 - Verify hub keepalive/hardware-fallback semantics before shipping any speed control.

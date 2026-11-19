@@ -13,7 +13,7 @@
          and Publisher (Company), same convention as StarMaster. -->
     <AssemblyTitle>DeviceMaster</AssemblyTitle>
     <Product>DeviceMaster</Product>
-    <Description>PC fan, pump, RGB and LCD control</Description>
+    <Description>PC fan, RGB and LCD control</Description>
     <Company>Elliot Borst</Company>
     <Copyright>Elliot Borst</Copyright>
     <!-- WFO0003: the WinForms analyzer wants DPI configured via Application.SetHighDpiMode, but

@@ -21,14 +21,14 @@ public class ConfigPatcherTests
     }
 
     [Fact]
-    public void PumpDutyIsHardFlooredAtSafetyMinimum()
+    public void RemovedPumpAndLcdFieldsAreIgnored()
     {
+        // an older web page may still send these: pump and pump/fan LCD control is gone
         var cfg = NewConfig();
-        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"pumpDuty":10}""", out var invalid);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control,
+            """{"pumpDuty":10,"lcdScreens":4,"lcdBrightness":20,"pumpScreenMetric":7}""", out var invalid);
         Assert.False(invalid);
-        // SafetyLimits.PumpMinimumDutyPercent = 50 — the patch must never write below it
-        Assert.Equal(50, cfg.Control.PumpDutyPercent);
-        Assert.Contains("pumpDuty=50", applied);
+        Assert.Empty(applied);
     }
 
     [Fact]
@@ -42,15 +42,17 @@ public class ConfigPatcherTests
     }
 
     [Fact]
-    public void ModeAndSourceAndLcdEnumsAreValidated()
+    public void ModeAndSourceEnumsAreValidated()
     {
         var cfg = NewConfig();
-        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"mode":9,"source":2,"lcdScreens":4,"pumpScreenMetric":7}""", out var invalid);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"mode":9,"source":2}""", out var invalid);
         Assert.False(invalid);
         Assert.Equal(ControlMode.Curve, cfg.Control.Mode);         // mode 9 rejected, stays headless default
         Assert.Equal(CurveSource.Gpu, cfg.Control.Source);
-        Assert.Equal(LcdMode.Metrics, cfg.Control.LcdScreens);
-        Assert.Equal(LcdMetric.PumpRpm, cfg.Control.PumpScreenMetric);
+
+        // 0 was the removed coolant source: rejected, the source stays as it was
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg.Control, """{"source":0}""", out _));
+        Assert.Equal(CurveSource.Gpu, cfg.Control.Source);
     }
 
     [Fact]
@@ -89,13 +91,15 @@ public class ConfigPatcherTests
         var cfg = NewConfig();
         cfg.I2cDevice = "/dev/i2c-10";
         cfg.GpuSensorFile = "/var/run/gpu-sensors.jsonl";
-        cfg.Control.PumpDutyPercent = 80;
+        cfg.Control.ManualDutyPercent = 80;
+        cfg.Control.Source = CurveSource.Cpu;
         var json = cfg.Save();
 
         var reloaded = HeadlessConfig.Deserialize(json);
         Assert.NotNull(reloaded);
         Assert.Equal("/dev/i2c-10", reloaded.I2cDevice);
-        Assert.Equal(80, reloaded.Control.PumpDutyPercent);
+        Assert.Equal(80, reloaded.Control.ManualDutyPercent);
+        Assert.Equal(CurveSource.Cpu, reloaded.Control.Source);
     }
 
     [Fact]
@@ -104,19 +108,19 @@ public class ConfigPatcherTests
         var cfg = NewConfig();
         cfg.Control.RgbEnabled = true;
         cfg.Control.RgbOff = false;
-        cfg.Control.LcdScreens = LcdMode.Metrics;
+        cfg.Control.TurzxScreen = LcdMode.Metrics;
 
         var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"blackout":true}""", out _);
         Assert.Equal(["blackout=True"], applied);
         Assert.True(cfg.Control.RgbOff);
-        Assert.Equal(LcdMode.Off, cfg.Control.LcdScreens);
+        Assert.Equal(LcdMode.Off, cfg.Control.TurzxScreen);
 
         Assert.Empty(ConfigPatcher.ApplyPatch(cfg.Control, """{"blackout":true}""", out _)); // already on: no change
 
         ConfigPatcher.ApplyPatch(cfg.Control, """{"blackout":false}""", out _);
         Assert.False(cfg.Control.BlackoutActive);
         Assert.False(cfg.Control.RgbOff);
-        Assert.Equal(LcdMode.Metrics, cfg.Control.LcdScreens);
+        Assert.Equal(LcdMode.Metrics, cfg.Control.TurzxScreen);
     }
 
     [Fact]

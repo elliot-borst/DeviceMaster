@@ -4,28 +4,21 @@ using DeviceMaster.Core.Safety;
 using DeviceMaster.Core.Sensors;
 using DeviceMaster.Control;
 using DeviceMaster.Devices.CorsairLink;
-using DeviceMaster.Devices.CorsairLink.Protocol;
 using DeviceMaster.Devices.EneRgb;
-using DeviceMaster.Lcd.Skia;
 using DeviceMaster.Platform.Linux;
 using DeviceMaster.Sensors.Linux;
-
-// The Control project's LcdFrames/LcdMetricRenderer use System.Drawing, which is
-// Windows-only on .NET 9 — the headless loop renders through the SkiaSharp copies.
-using LcdFrames = DeviceMaster.Lcd.Skia.SkiaLcdFrames;
-using LcdMetricRenderer = DeviceMaster.Lcd.Skia.SkiaLcdMetricRenderer;
 
 namespace DeviceMaster.App.Headless;
 
 /// <summary>
 /// The headless (Linux/container) control loop. Same 1 Hz policy as the Windows loop, scoped
-/// to the device set that exists on the Linux host: every iCUE LINK hub found (fans + pump,
-/// all hubs), the GPU's ENE RGB chip over raw i2c, and the pump LCD. Reuses the exact same
-/// device sessions (LinkHub, EneRgbDevice, CorsairLcdDevice) and safety primitives as the
-/// Windows app — no protocol code is duplicated.
+/// to the device set that exists on the Linux host: every iCUE LINK hub found (fans, all hubs),
+/// the GPU's ENE RGB chip over raw i2c, RAM/board RGB, motherboard fan headers and the Turzx
+/// screen. Reuses the exact same device sessions (LinkHub, EneRgbDevice) and safety primitives
+/// as the Windows app — no protocol code is duplicated.
 ///
-/// Safety (mirrors CLAUDE.md): pump duty hard-floored, sensor failure ⇒ 100%, hub writes only
-/// through LinkHub (VID/PID-identified), Stop() restores hardware mode on every hub.
+/// Safety (mirrors CLAUDE.md): sensor failure ⇒ 100%, hub writes only through LinkHub
+/// (VID/PID-identified, fans only), Stop() restores hardware mode on every hub.
 /// </summary>
 public sealed partial class HeadlessLoop : IDisposable
 {
@@ -33,15 +26,11 @@ public sealed partial class HeadlessLoop : IDisposable
     private const int TickMs = 1000;
     private const int CorsairRefreshTicks = 10;   // rewrite unchanged duties every N ticks
     private const int CorsairRescanTicks = 30;    // re-enumerate the chains every N ticks
-    private const int LcdKeepaliveMs = 10_000; // matches the Windows loop (PumpLcdKeepaliveMs): the panel reasserts its own screen when frames stop
     private const int RgbPersistSettleMs = 10_000;
 
     // v91 hub-color policy: color writes are ACKed with no readback, so colors re-stream on a
-    // steady cadence; pump-bearing hubs additionally get a periodic DEEP repaint (software-mode
-    // re-assert + full color-path rebuild) — the only proven heal for a link-blipped device
-    // that ACKs frames without painting them (2026-08-29).
+    // steady cadence.
     private const int HubRgbRefreshMs = 20_000;
-    private const int HubDeepRepaintMs = 3 * 60_000;
 
     private readonly object _gate = new();
     private readonly Action<string> _log;
@@ -61,7 +50,6 @@ public sealed partial class HeadlessLoop : IDisposable
     private readonly Dictionary<string, long> _hubOpenNotBefore = []; // serial -> cooldown (failed opens)
     private readonly HashSet<string> _hubOpenWarned = [];             // warned about this serial's failures
     private readonly Dictionary<string, int> _hubReceivedDuty = [];   // serial -> last duty that reached it
-    private readonly Dictionary<string, long> _hubDeepRepaintDue = []; // serial -> next deep-repaint deadline
     private readonly Dictionary<string, string> _appliedHubRgb = [];
     private readonly Dictionary<string, long> _hubRgbRetryAt = [];
     private readonly Dictionary<string, long> _hubRgbRefreshDue = []; // serial -> next steady re-stream
@@ -75,14 +63,6 @@ public sealed partial class HeadlessLoop : IDisposable
     private bool _gpuSensorStale;
     private DateTime _gpuSensorLastWriteUtc = DateTime.MinValue;
     private long _gpuPersistDue;
-
-    private CorsairLcdDevice? _lcd;
-    private long _lcdRetryAt;
-    private long _lcdFrameDue;
-    private long _lcdKeepaliveDue;
-    private bool _lcdKeepaliveLogged;
-    private string _lcdShownKey = "";
-    private int _appliedLcdBrightness = -1;
 
     private int _ticksSinceWrite;
     private int _ticksSinceRescan;
@@ -225,10 +205,9 @@ public sealed partial class HeadlessLoop : IDisposable
         EnsureHubs(cfg, warnings);
         EnsureGpuRgb(cfg, warnings);
         EnsureRamRgb(cfg);
-        EnsureLcd(cfg, warnings);
 
         var readings = new List<DeviceReading>();
-        var coolant = TryReadCoolant(readings);
+        ReadHubTelemetry(readings);
 
         // Mode Off: leave the hardware's own curves in charge — exit software mode if we entered it
         if (cfg.Control.Mode == ControlMode.Off)
@@ -249,10 +228,7 @@ public sealed partial class HeadlessLoop : IDisposable
             }
 
             ApplyMotherboardFans(cfg, 0, off: true, readings, warnings);
-            var sourceTempForStatus = cfg.Control.Source == CurveSource.Coolant
-                ? coolant
-                : ReadSourceTemperature(cfg);
-            Publish(cfg, sourceTempForStatus, coolant, 0, null, false, readings, warnings);
+            Publish(cfg, ReadSourceTemperature(cfg), 0, false, readings, warnings);
             return;
         }
 
@@ -279,8 +255,6 @@ public sealed partial class HeadlessLoop : IDisposable
             }
         }
 
-        var pumpDuty = SafetyGuard.ClampPumpDuty(cfg.Control.PumpDutyPercent);
-
         // ---- write duties (per-hub write-on-change + periodic refresh, per-hub error isolation) ----
         // Per-hub tracking (not global) so a hub that just (re)opened gets its duty THIS tick —
         // the v90 fix: a reopened hub must not wait for the next refresh window.
@@ -296,31 +270,7 @@ public sealed partial class HeadlessLoop : IDisposable
 
         foreach (var hub in _hubs.ToList())
         {
-            // deep repaint (pump-bearing hubs): a link-blipped device ACKs re-streamed frames
-            // without painting them and gives no protocol-visible signal, so run the
-            // app-restart init sequence on a timer — the only proven heal
-            var deepRepaint = hub.Channels.Any(c => c.IsPump)
-                && Environment.TickCount64 >= _hubDeepRepaintDue.GetValueOrDefault(hub.SerialNumber);
-            if (deepRepaint)
-            {
-                _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
-                try
-                {
-                    hub.EnterSoftwareMode(); // re-assert even though already in software mode
-                    hub.InvalidateColorPath();
-                    _appliedHubRgb.Remove(hub.SerialNumber);
-                    _log($"hub {hub.SerialNumber[..8]}… deep repaint: software mode re-asserted, "
-                        + "color path invalidated — colors re-stream this tick");
-                }
-                catch (Exception ex)
-                {
-                    _log($"hub {hub.SerialNumber[..8]}… deep repaint failed: {ex.Message}");
-                }
-            }
-
-            var needsWrite = _hubReceivedDuty.GetValueOrDefault(hub.SerialNumber) != duty
-                || refreshDue
-                || deepRepaint; // re-assert duties right behind the mode re-entry
+            var needsWrite = _hubReceivedDuty.GetValueOrDefault(hub.SerialNumber) != duty || refreshDue;
             if (!needsWrite)
             {
                 continue;
@@ -328,20 +278,12 @@ public sealed partial class HeadlessLoop : IDisposable
 
             try
             {
-                var requested = new Dictionary<int, int>();
-                foreach (var channel in hub.Channels)
-                {
-                    if (!channel.IsPump && channel.Info is { Flags: var f } && f.HasFlag(LinkDeviceFlags.ControlsSpeed))
-                    {
-                        requested[channel.Channel] = duty;
-                    }
-                }
-
-                var written = hub.WriteFixedDuties(requested, pumpDuty);
+                var requested = hub.Channels.Where(c => c.ControlsSpeed).ToDictionary(c => c.Channel, _ => duty);
+                var written = hub.WriteFixedDuties(requested);
                 _hubReceivedDuty[hub.SerialNumber] = duty;
-                if (failsafe || deepRepaint || refreshDue)
+                if (failsafe || refreshDue)
                 {
-                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% pump={pumpDuty}% ({written.Count} channels)"
+                    _log($"hub {hub.SerialNumber[..8]}… duties written: fans={duty}% ({written.Count} channels)"
                         + (failsafe ? " (FAILSAFE)" : ""));
                 }
             }
@@ -407,9 +349,6 @@ public sealed partial class HeadlessLoop : IDisposable
         ApplyAura(cfg, warnings);
         ApplyMysticLight(cfg, warnings);
 
-        // ---- pump LCD ----
-        ApplyLcd(cfg, coolant, sourceTemp, duty, pumpDuty, readings, warnings);
-
         // ---- telemetry into readings (RPMs) + publish ----
         if (_gpuSensorStale)
         {
@@ -418,11 +357,11 @@ public sealed partial class HeadlessLoop : IDisposable
                 : $"GPU sensor file stale ({(DateTime.UtcNow - _gpuSensorLastWriteUtc).TotalMinutes:F0} min since last update) — GPU figures may be unavailable");
         }
 
-        Publish(cfg, sourceTemp, coolant, duty, pumpDuty, failsafe, readings, warnings);
+        Publish(cfg, sourceTemp, duty, failsafe, readings, warnings);
     }
 
-    private void Publish(HeadlessConfig cfg, double? sourceTemp, double? coolant, int duty,
-        int? pumpDuty, bool failsafe, List<DeviceReading> readings, List<string> warnings)
+    private void Publish(HeadlessConfig cfg, double? sourceTemp, int duty,
+        bool failsafe, List<DeviceReading> readings, List<string> warnings)
     {
         var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
         var cpuStats = _cpuStats.Sample();
@@ -442,7 +381,6 @@ public sealed partial class HeadlessLoop : IDisposable
             Mode = cfg.Control.Mode,
             SourceName = cfg.Control.Mode == ControlMode.Manual ? "manual" : cfg.Control.Source.ToString(),
             SourceTemperatureC = sourceTemp,
-            CoolantTemperatureC = coolant,
             CpuTemperatureC = cpu,
             GpuTemperatureC = gpu?.TemperatureC,
             GpuLoadPercent = gpu?.UtilizationPercent,
@@ -458,30 +396,25 @@ public sealed partial class HeadlessLoop : IDisposable
             GpuFanPercent = gpu?.FanPercent ?? (gpu is not null ? _gpuFanPercent : null),
             GpuFanRpm = gpu is not null ? _gpuFanRpm : null,
             TargetDutyPercent = duty,
-            PumpDutyPercent = readings.Any(r => r.IsPump) ? pumpDuty : null, // no pump on this machine: nothing to report
             FailsafeActive = failsafe,
             UptimeSeconds = SystemInfo.UptimeSeconds(),
             Storage = _storage.Get(cfg.StoragePaths),
             Docker = cfg.DockerSocket is { Length: > 0 } sock ? (_docker ??= new DockerProbe(sock)).Get() : null,
             Capabilities = new MachineCapabilities
             {
-                Pump = readings.Any(r => r.IsPump),
                 CorsairHubs = _hubs.Count > 0,
                 MotherboardFans = _mbFans is { Controlled.Count: > 0 },
                 MotherboardRgb = _aura is not null || _msi is not null,
                 RamRgb = _ramRgb.Count > 0,
                 GpuRgb = _gpuRgb is not null,
                 FanRgb = _hubs.Count > 0,
-                PumpLcd = _lcd is not null,
                 Turzx = TurzxPresent(),
                 CpuTemperature = SensorValidity.IsPlausibleTemperature(cpu),
                 GpuTemperature = SensorValidity.IsPlausibleTemperature(gpu?.TemperatureC),
-                CoolantTemperature = SensorValidity.IsPlausibleTemperature(coolant),
             },
-            // Corsair channels are read before the duty is decided (the coolant feeds the curve), so
-            // their duty is filled in here: what the fans and pump were actually asked for (#66)
-            Devices = readings.Select(r => r.Family != "corsair-link" || r.IsScreen ? r
-                : r with { AppliedDutyPercent = r.IsPump ? pumpDuty ?? 0 : duty }).ToList(),
+            // Corsair channels are read before the duty is decided, so their duty is filled in
+            // here: what the fans were actually asked for (#66)
+            Devices = readings.Select(r => r.Family != "corsair-link" ? r : r with { AppliedDutyPercent = duty }).ToList(),
             Warnings = warnings,
             Notes = MotherboardFanNotes(),
             RgbDiagnostics = RgbDiagnostics(),
@@ -551,7 +484,6 @@ public sealed partial class HeadlessLoop : IDisposable
                 _appliedHubRgb.Remove(hub.SerialNumber);
                 _hubRgbRefreshDue.Remove(hub.SerialNumber);
                 _hubReceivedDuty.Remove(hub.SerialNumber); // first duty write lands this tick
-                _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
                 _hubOpenNotBefore.Remove(hub.SerialNumber);
                 _log($"headless: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
 
@@ -605,7 +537,6 @@ public sealed partial class HeadlessLoop : IDisposable
         _appliedHubRgb.Remove(hub.SerialNumber);
         _hubRgbRefreshDue.Remove(hub.SerialNumber);
         _hubReceivedDuty.Remove(hub.SerialNumber);
-        _hubDeepRepaintDue.Remove(hub.SerialNumber);
         _hubOpenNotBefore[hub.SerialNumber] = Environment.TickCount64 + 5_000;
         warnings.Add($"hub {hub.SerialNumber[..8]}…: {reason}");
     }
@@ -633,7 +564,6 @@ public sealed partial class HeadlessLoop : IDisposable
     {
         return cfg.Control.Source switch
         {
-            CurveSource.Coolant => TryReadCoolant(null),
             CurveSource.Cpu => Hwmon.CpuTemperatureC(),
             CurveSource.Gpu => ReadGpu(cfg)?.TemperatureC,
             CurveSource.Hottest => ReadHottest(cfg),
@@ -701,41 +631,20 @@ public sealed partial class HeadlessLoop : IDisposable
         return NvidiaSmi.ReadFirst(cfg.NvidiaSmiPath);
     }
 
-    /// <summary>Loop coolant temperature from the hub chain's pump channel (all hubs, first live reading).</summary>
-    private double? TryReadCoolant(List<DeviceReading>? readings)
+    /// <summary>Fan RPMs from every hub's chain (the duty is filled in at publish).</summary>
+    private void ReadHubTelemetry(List<DeviceReading> readings)
     {
-        double? coolant = null;
-        foreach (var hub in _hubs)
+        foreach (var hub in _hubs.ToList())
         {
             try
             {
                 var speeds = hub.ReadSpeeds();
-                var temps = hub.ReadTemperatures();
-
-                if (readings is not null)
+                foreach (var channel in hub.Channels.Where(c => c.ControlsSpeed))
                 {
-                    foreach (var channel in hub.Channels)
-                    {
-                        var speed = speeds.FirstOrDefault(s => s.Channel == channel.Channel);
-                        var temp = temps.FirstOrDefault(t => t.Channel == channel.Channel);
-                        readings.Add(new DeviceReading(
-                            "corsair-link", channel.Name, speed.IsAvailable ? speed.Rpm : null,
-                            0, channel.IsPump,
-                            HubSerial: hub.SerialNumber, Channel: channel.Channel, IsScreen: channel.IsScreen));
-                    }
-                }
-
-                if (coolant is null)
-                {
-                    foreach (var channel in hub.Channels.Where(c => c.IsPump))
-                    {
-                        var reading = temps.FirstOrDefault(t => t.Channel == channel.Channel && t.IsAvailable);
-                        if (reading.TemperatureCelsius is { } t)
-                        {
-                            coolant = t;
-                            break;
-                        }
-                    }
+                    var speed = speeds.FirstOrDefault(s => s.Channel == channel.Channel);
+                    readings.Add(new DeviceReading(
+                        "corsair-link", channel.Name, speed is { IsAvailable: true } ? speed.Rpm : null, 0,
+                        HubSerial: hub.SerialNumber, Channel: channel.Channel));
                 }
             }
             catch (Exception ex)
@@ -744,8 +653,6 @@ public sealed partial class HeadlessLoop : IDisposable
                 DropHub(hub, $"telemetry read failed: {ex.Message}", []);
             }
         }
-
-        return coolant;
     }
 
     // ---- hub RGB ----
@@ -950,144 +857,6 @@ public sealed partial class HeadlessLoop : IDisposable
         }
     }
 
-    // ---- pump LCD ----
-
-    private void EnsureLcd(HeadlessConfig cfg, List<string> warnings)
-    {
-        if (cfg.Control.LcdScreens == LcdMode.Unmanaged || _lcd is not null)
-        {
-            return;
-        }
-
-        if (Environment.TickCount64 < _lcdRetryAt)
-        {
-            return;
-        }
-
-        try
-        {
-            _lcd = CorsairLcdDevice.FindDevices().FirstOrDefault() is { } device
-                ? CorsairLcdDevice.Open(device)
-                : null;
-            if (_lcd is not null)
-            {
-                _log($"headless: opened pump LCD (serial {_lcd.SerialNumber})");
-            }
-        }
-        catch (Exception ex)
-        {
-            _lcdRetryAt = Environment.TickCount64 + 10_000;
-            warnings.Add($"pump LCD open failed: {ex.Message}");
-        }
-    }
-
-    private void ApplyLcd(HeadlessConfig cfg, double? coolant, double? sourceTemp, int duty,
-        int pumpDuty, List<DeviceReading> readings, List<string> warnings)
-    {
-        var lcd = _lcd;
-        if (lcd is null || cfg.Control.LcdScreens == LcdMode.Unmanaged)
-        {
-            return;
-        }
-
-        try
-        {
-            var brightness = cfg.Control.LcdScreens == LcdMode.Off ? 0 : Math.Clamp(cfg.Control.LcdBrightness, 0, 100);
-            if (_appliedLcdBrightness != brightness)
-            {
-                lcd.SetBrightness(brightness);
-                _appliedLcdBrightness = brightness;
-            }
-
-            var accent = ((byte)128, (byte)0, (byte)255); // house purple
-            switch (cfg.Control.LcdScreens)
-            {
-                case LcdMode.Black:
-                case LcdMode.White:
-                    var solid = cfg.Control.LcdScreens == LcdMode.Black
-                        ? LcdFrames.Solid(480, 480, 0, 0, 0)
-                        : LcdFrames.Solid(480, 480, 255, 255, 255);
-                    // the panel reasserts its own liquid-temp screen when frames stop — keep the
-                    // solid background alive (same keepalive as the Windows loop)
-                    if (_lcdShownKey != cfg.Control.LcdScreens.ToString()
-                        || Environment.TickCount64 >= _lcdKeepaliveDue)
-                    {
-                        lcd.SendJpegFrame(solid);
-                        _lcdShownKey = cfg.Control.LcdScreens.ToString();
-                        _lcdKeepaliveDue = Environment.TickCount64 + LcdKeepaliveMs;
-                    }
-
-                    break;
-
-                case LcdMode.Metrics:
-                    if (Environment.TickCount64 < _lcdFrameDue)
-                    {
-                        break;
-                    }
-
-                    var (label, value, unit) = MetricValue(cfg.Control.PumpScreenMetric, coolant, sourceTemp, duty, pumpDuty, readings);
-                    var key = $"{label}|{value}|{unit}";
-                    // Windows streams the metrics frame on content change AND re-sends it on a
-                    // keepalive cadence — without that the panel reverts to its own screen once
-                    // the values settle.
-                    if (key != _lcdShownKey || Environment.TickCount64 >= _lcdKeepaliveDue)
-                    {
-                        var frame = LcdMetricRenderer.Render(480, 480, label, value, unit, accent);
-                        lcd.SendJpegFrame(frame);
-                        if (key == _lcdShownKey && !_lcdKeepaliveLogged)
-                        {
-                            _lcdKeepaliveLogged = true;
-                            _log("headless: pump LCD metrics keepalive active (stable values, frames re-sent)");
-                        }
-                        _lcdShownKey = key;
-                        _lcdFrameDue = Environment.TickCount64 + 2_000; // ~0.5 fps content churn
-                        _lcdKeepaliveDue = Environment.TickCount64 + LcdKeepaliveMs;
-                    }
-
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            _log($"headless: pump LCD write failed: {ex.Message} — reopening");
-            try
-            {
-                lcd.Dispose();
-            }
-            catch
-            {
-            }
-
-            _lcd = null;
-            _appliedLcdBrightness = -1;
-            _lcdRetryAt = Environment.TickCount64 + 10_000;
-            warnings.Add($"pump LCD write failed: {ex.Message}");
-        }
-    }
-
-    private (string Label, string Value, string Unit) MetricValue(
-        LcdMetric metric, double? coolant, double? sourceTemp, int duty, int pumpDuty, List<DeviceReading> readings)
-    {
-        var cpu = SafeRead(() => Hwmon.CpuTemperatureC());
-        var gpu = SafeRead(() => ReadGpu(_config)?.TemperatureC);
-        var pumpRpm = readings.FirstOrDefault(d => d.IsPump)?.Rpm;
-
-        return metric switch
-        {
-            LcdMetric.Coolant => ("COOLANT", F(coolant), "°C"),
-            LcdMetric.CpuTemp => ("CPU", F(cpu), "°C"),
-            LcdMetric.GpuTemp => ("GPU", F(gpu), "°C"),
-            LcdMetric.FanDuty => ("FAN DUTY", duty.ToString(), "%"),
-            LcdMetric.PumpDuty => ("PUMP DUTY", pumpDuty.ToString(), "%"),
-            LcdMetric.PumpRpm => ("PUMP", pumpRpm?.ToString() ?? "--", "RPM"),
-            LcdMetric.FanRpm => ("FAN", readings.Where(d => !d.IsPump).Select(d => d.Rpm).FirstOrDefault()?.ToString() ?? "--", "RPM"),
-            LcdMetric.Date => (DateTime.Now.ToString("ddd"), DateTime.Now.ToString("HH:mm"), DateTime.Now.ToString("MMM dd")),
-            _ => ("COOLANT", F(coolant), "°C"),
-        };
-
-        static string F(double? v) => v is { } x ? x.ToString("0") : "--";
-    }
-
     // ---- teardown ----
 
     private void ReleaseHardware()
@@ -1118,18 +887,6 @@ public sealed partial class HeadlessLoop : IDisposable
 
         try
         {
-            _lcd?.Dispose();
-        }
-        catch
-        {
-        }
-
-        _lcd = null;
-        _appliedLcdBrightness = -1;
-        _lcdShownKey = "";
-
-        try
-        {
             _gpuBus?.Dispose();
         }
         catch
@@ -1143,7 +900,6 @@ public sealed partial class HeadlessLoop : IDisposable
         _gpuRgbScanned = false;
 
         _hubReceivedDuty.Clear();
-        _hubDeepRepaintDue.Clear();
         _hubRgbRefreshDue.Clear();
     }
 }

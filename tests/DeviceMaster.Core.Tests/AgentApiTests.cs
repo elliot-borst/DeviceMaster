@@ -17,7 +17,7 @@ public sealed class AgentApiTests : IDisposable
     {
         public ControlSettings Settings { get; } = new();
 
-        public ControlStatus Status { get; } = new() { Running = true, Capabilities = new MachineCapabilities { MachineName = "test-box", Pump = true } };
+        public ControlStatus Status { get; } = new() { Running = true, Capabilities = new MachineCapabilities { MachineName = "test-box", CorsairHubs = true } };
 
         public FleetProfile ReadProfile() => FleetProfile.From(Settings);
 
@@ -97,19 +97,19 @@ public sealed class AgentApiTests : IDisposable
         var info = await (await _client.SendAsync(Request(HttpMethod.Get, "info"))).Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(AgentApi.ApiVersion, info.GetProperty("apiVersion").GetInt32());
         Assert.Equal("test-box", info.GetProperty("name").GetString());
-        Assert.True(info.GetProperty("capabilities").GetProperty("Pump").GetBoolean());
+        Assert.True(info.GetProperty("capabilities").GetProperty("CorsairHubs").GetBoolean());
     }
 
     [Fact]
     public async Task PutAppliesThroughTheLocalClamps()
     {
-        var profile = FleetProfile.From(_host.Settings) with { PumpDutyPercent = 10, RgbEffect = RgbEffect.Rainbow };
+        var profile = FleetProfile.From(_host.Settings) with { ManualDutyPercent = 150, RgbEffect = RgbEffect.Rainbow };
         var response = await _client.SendAsync(Request(HttpMethod.Put, "profile", body: profile));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var answer = await response.Content.ReadFromJsonAsync<JsonElement>(AgentApi.Json);
         Assert.True(answer.GetProperty("changed").GetBoolean());
-        Assert.Equal(SafetyLimits.PumpMinimumDutyPercent, _host.Settings.PumpDutyPercent); // never below the floor
+        Assert.Equal(100, _host.Settings.ManualDutyPercent); // clamped to the fan range
         Assert.Equal(RgbEffect.Rainbow, _host.Settings.RgbEffect);
 
         // the revision the agent reports is the one for what now runs

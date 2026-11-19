@@ -1,7 +1,6 @@
 using System.Text.Json;
 using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Lighting;
-using DeviceMaster.Core.Safety;
 
 namespace DeviceMaster.Control;
 
@@ -56,14 +55,7 @@ public static class ConfigPatcher
                         applied.Add($"fanDuty={duty}");
                     }
                     break;
-                case "pumpDuty":
-                    // hard floor — a low pump duty can damage the loop
-                    if (TryInt(prop.Value, SafetyLimits.PumpMinimumDutyPercent, 100, out var pump))
-                    {
-                        s.PumpDutyPercent = pump;
-                        applied.Add($"pumpDuty={pump}");
-                    }
-                    break;
+
                 case "source":
                     // each source keeps its own curve: switching swaps the active curve too
                     if (TryEnum(prop.Value, out var source) && Enum.IsDefined(typeof(CurveSource), source)
@@ -133,23 +125,6 @@ public static class ConfigPatcher
                     {
                         s.RgbSpeed = speed;
                         applied.Add($"rgbSpeed={speed}");
-                    }
-                    break;
-                case "lcdScreens":
-                    if (TryEnum(prop.Value, out var lcd) && Enum.IsDefined(typeof(LcdMode), lcd))
-                    {
-                        s.LcdScreens = (LcdMode)lcd;
-                        applied.Add($"lcdScreens={(int)s.LcdScreens}");
-                    }
-                    break;
-                case "lcdBrightness":
-                    if (TryInt(prop.Value, 0, 100, out var lb)) { s.LcdBrightness = lb; applied.Add($"lcdBrightness={lb}"); }
-                    break;
-                case "pumpScreenMetric":
-                    if (TryEnum(prop.Value, out var metric) && Enum.IsDefined(typeof(LcdMetric), metric))
-                    {
-                        s.PumpScreenMetric = (LcdMetric)metric;
-                        applied.Add($"pumpScreenMetric={(int)s.PumpScreenMetric}");
                     }
                     break;
                 case "blackout":

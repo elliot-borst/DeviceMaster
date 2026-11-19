@@ -31,11 +31,7 @@ public class CurveRulesTests
     [Fact]
     public void Defaults_PassTheirOwnRules()
     {
-        foreach (var coolant in new[] { true, false })
-        {
-            var defaults = CurveRules.DefaultFor(coolant);
-            Assert.Equal(defaults, CurveRules.Normalize(defaults));
-        }
+        Assert.Equal(CurveRules.Default, CurveRules.Normalize(CurveRules.Default));
     }
 
     [Fact]
@@ -49,11 +45,11 @@ public class CurveRulesTests
     [Fact]
     public void SetSource_KeepsACurvePerSource()
     {
-        var settings = new ControlSettings { Source = CurveSource.Coolant };
+        var settings = new ControlSettings { Source = CurveSource.Gpu };
         settings.SetCurve([new(25, 35), new(40, 100)]);
         settings.SetSource(CurveSource.Cpu);
-        Assert.Equal(CurveRules.DefaultFor(coolant: false), settings.CurvePoints);   // first visit: CPU default
-        settings.SetSource(CurveSource.Coolant);
+        Assert.Equal(CurveRules.Default, settings.CurvePoints);   // first visit: CPU default
+        settings.SetSource(CurveSource.Gpu);
         Assert.Equal([new CurvePoint(25, 35), new CurvePoint(40, 100)], settings.CurvePoints); // edits came back
     }
 
@@ -61,7 +57,7 @@ public class CurveRulesTests
     public void Patch_AcceptsAndRepairsCurvePoints()
     {
         var cfg = new HeadlessConfig();
-        cfg.Control.Source = CurveSource.Coolant;
+        cfg.Control.Source = CurveSource.Cpu;
         var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"curvePoints":[[30,40],[45,30],[60,90]]}""", out var invalid);
         Assert.False(invalid);
         Assert.Equal(["curvePoints=30:40;60:90"], applied); // middle point dropped: first and last kept

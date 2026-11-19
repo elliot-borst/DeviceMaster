@@ -35,7 +35,6 @@ public static class CurveRules
         return [new CurvePoint(lowTemp, lowDuty), new CurvePoint(highTemp, highDuty)];
     }
 
-    /// <summary>The factory curve for a source.</summary>
-    public static IReadOnlyList<CurvePoint> DefaultFor(bool coolant) =>
-        coolant ? [new(25, 30), new(38, 100)] : [new(40, 30), new(85, 100)];
+    /// <summary>The factory curve (every source is a CPU/GPU temperature).</summary>
+    public static IReadOnlyList<CurvePoint> Default { get; } = [new(40, 30), new(85, 100)];
 }

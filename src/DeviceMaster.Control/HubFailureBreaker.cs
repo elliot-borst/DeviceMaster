@@ -2,8 +2,8 @@ namespace DeviceMaster.Control;
 
 /// <summary>
 /// Circuit breaker for Link hub sessions. The 2026-10-30 incident (ServerStack #211): after a
-/// 5 s USB blip the pump hub reopened fine but EVERY telemetry read threw, so the hub was
-/// disposed and reopened every ~6 s forever — no duty ever reached the pump and the fan hub's
+/// 5 s USB blip a hub reopened fine but EVERY telemetry read threw, so the hub was
+/// disposed and reopened every ~6 s forever — no duty ever reached its chain and the other hub's
 /// hardware failsafe sat at 100%. Rediscovery cannot tell that loop from a slow bus, so this
 /// breaker counts recent session failures per hub path and trips after a threshold within a
 /// sliding window. While tripped, the path is backed off (no reopen hammering, hardware failsafe

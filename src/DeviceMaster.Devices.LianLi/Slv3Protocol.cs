@@ -16,7 +16,7 @@ public sealed record Slv3Device
     public required byte[] CurrentPwm { get; init; }
     public required byte CmdSeq { get; init; }
     public required byte ListIndex { get; init; }
-    public byte? CoolantTempC { get; init; }
+
     public required byte[] EffectIndex { get; init; }
 
     public string MacText => Convert.ToHexString(Mac).ToLowerInvariant();
@@ -25,6 +25,9 @@ public sealed record Slv3Device
 
     /// <summary>SL V3 fan-type bytes are 20–26 (LED models 20–23, LCD models 24–26).</summary>
     public bool IsSlv3Family => FanTypes.Any(t => t is >= 20 and <= 26);
+
+    /// <summary>A wireless AIO (device types 10/11): its slot 3 is the pump, so it is never sent a PWM.</summary>
+    public bool IsAio => DeviceType is 10 or 11;
 }
 
 /// <summary>
@@ -297,18 +300,17 @@ public static class Slv3Protocol
     }
 
     /// <summary>
-    /// Enforce firmware PWM rules: slots beyond the fan count are zeroed (except the AIO pump
-    /// slot 3) and nonzero values below the 14% floor are raised to it.
+    /// Enforce firmware PWM rules: slots beyond the fan count are zeroed and nonzero values
+    /// below the 14% floor are raised to it.
     /// </summary>
-    public static byte[] ApplyPwmConstraints(ReadOnlySpan<byte> pwm, byte fanCount, bool isAio)
+    public static byte[] ApplyPwmConstraints(ReadOnlySpan<byte> pwm, byte fanCount)
     {
         var minPwm = (byte)(MinimumDutyPercent / 100.0 * 255.0);
         var result = pwm.ToArray();
 
         for (var i = 0; i < result.Length; i++)
         {
-            var isPumpSlot = i == 3 && isAio;
-            if (i >= fanCount && !isPumpSlot)
+            if (i >= fanCount)
             {
                 result[i] = 0;
                 continue;
@@ -380,7 +382,7 @@ public static class Slv3Protocol
     /// <summary>
     /// 42-byte record: [0-5]=MAC, [6-11]=master MAC, [12]=channel, [13]=rx type,
     /// [14-17]=system time, [18]=device type, [19]=fan count, [20-23]=effect index,
-    /// [24-27]=fan types (byte 27 doubles as coolant °C on AIOs), [28-35]=4× RPM u16 BE,
+    /// [24-27]=fan types, [28-35]=4× RPM u16 BE,
     /// [36-39]=current PWM, [40]=cmd sequence, [41]=0x1C marker.
     /// </summary>
     public static Slv3Device? ParseDeviceRecord(ReadOnlySpan<byte> record, byte listIndex)
@@ -396,7 +398,6 @@ public static class Slv3Protocol
             return null; // the master/dongle itself
         }
 
-        var isAio = deviceType is 10 or 11;
         return new Slv3Device
         {
             Mac = record[..6].ToArray(),
@@ -407,7 +408,7 @@ public static class Slv3Protocol
             FanCount = Math.Min(record[19], (byte)4),
             EffectIndex = record.Slice(20, 4).ToArray(),
             FanTypes = record.Slice(24, 4).ToArray(),
-            CoolantTempC = isAio && record[27] > 0 ? record[27] : null,
+
             FanRpms =
             [
                 BinaryPrimitives.ReadUInt16BigEndian(record.Slice(28, 2)),

@@ -8,10 +8,14 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 | Device | VID:PID | Transport |
 |---|---|---|
 | iCUE LINK System Hub | `1B1C:0C3F` | Composite HID (command interface = the one with output reports) |
-| Pump/res LCD module (XD5 Elite LCD family) | `1B1C:0C43` | Single HID interface, 1024-byte output reports |
 
+- **Fans only.** Pump, coolant and pump-LCD support was removed: liquid-cooling chain devices
+  (H-series/TITAN AIOs, XC7/XG3 water blocks, XD5/XD6 pumps, the XD5 Elite LCD module) are
+  deliberately absent from `LinkDeviceCatalog`, so a hub whose chain carries one counts as
+  having unrecognized devices and is never written to (it stays on its hardware curve). The
+  pump/res LCD (`1B1C:0C43`) is no longer in the device registry, so nothing writes to it.
 - Hub protocol: 512-byte packets, software/hardware mode, endpoint open/read/write sequence.
-  Speed + telemetry ported from FanControl.CorsairLink; RGB/LCD framing from OpenLinkHub.
+  Speed + telemetry ported from FanControl.CorsairLink; RGB from OpenLinkHub.
 - **RGB quirks (fw 3.10.636):** the hub answers the color-endpoint open (`0x0d 0x00` + `0x22`)
   with error `0x03` even in software mode, yet subsequent color writes succeed. Treat that
   handshake as best-effort (the vendor references never check it); only fail on the write.
@@ -23,7 +27,7 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - **LED registry (endpoint `0x1E`) — the hub's flash-persisted enrollment table.** Layout
   (read via the color handle, data type `0x0D 0x00`): `[6]` = slot count (max channel + 1),
   then per channel either `0x00` (no LED device) or `0x01` + the device's LED command code
-  (read back live: RX MAX RGB fan = `0x19`, XD6 pump = `0x11`). The color stream is consumed
+  (read back live: RX MAX RGB fan = `0x19`). The color stream is consumed
   strictly by registry slot in ascending channel order — **a channel missing from the
   registry never lights**, regardless of what the color buffer carries, and entries with a
   wrong/zeroed command code don't light either.
@@ -42,29 +46,17 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   command codes: `link ledreg --hub <serial-prefix> --channels <list>` (never writes zero
   or invented codes, then paints per-channel test colors for visual confirmation).
 - **Color writes are ACKed with no readback of the painted state.** A chain device that
-  resets its own LED controller (observed live: XD6 pump after a link blip) silently reverts
-  to its firmware-default effect while the rest of the chain keeps its colors, and nothing in
-  the protocol reveals this. Worse, **re-streaming frames does not repaint such a device**:
-  the hub keeps ACKing frames it no longer delivers to the renegotiated device (verified
-  live — a reverted XD6 sat through continuous 20 s re-streams, endpoint re-opens included,
-  without repainting). What does repaint it is the session-init sequence: software-mode
-  re-assert plus a full color-path rebuild (endpoint re-open, black reset frame + 40 ms —
-  the same reset-frame quirk QX/RX chains need before accepting color). The control loop
-  therefore re-streams the current frame every 20 s (`ControlLoop.HubRgbRefreshMs`) for
-  ordinary paint loss, and runs that deep-repaint sequence on pump-bearing hubs every 3 min
-  (`ControlLoop.HubDeepRepaintMs`) — cost: ~40 ms of black on that hub's chain per pass.
-  Deliberately scoped to pump-bearing hubs: fan link blips manifest as tach loss, which the
-  loop already detects and heals (LED-power pulse + repaint when the tach returns), while a
-  pump's tach never wavers through its blip — so only pumps need the blind timer. Widen the
-  scope only if a fan is ever seen reverting with its tach alive; the reset frame's black
-  blink is not worth adding to chains that don't exhibit the failure.
+  resets its own LED controller after a link blip silently reverts to its firmware-default
+  effect while the rest of the chain keeps its colors, and nothing in the protocol reveals
+  this. The control loop therefore re-streams the current frame every 20 s
+  (`ControlLoop.HubRgbRefreshMs`). Fan link blips manifest as tach loss, which the loop
+  detects and heals (LED-power pulse + repaint when the tach returns). (A blipped pump was
+  once seen ignoring re-streams until a full colour-path rebuild — `LinkHub.InvalidateColorPath`
+  — but pumps are no longer driven.)
 - Hardware-mode endpoint reads are rejected (error `0x03`) — enumeration and telemetry
   require software mode. Graceful exit must restore hardware mode (implemented).
-- Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`.
-  Model `0x0E` = XD5 Elite LCD display module as a chain device (no controllable speed).
-- Pump-bearing chain devices (H-series, TITAN, XD5/XD6 family) are duty-floored and,
-  until dedicated pump control ships, always driven at 100% in software mode.
-- Coolant temperature is read from pump-bearing chain devices.
+- Chain devices are identified by (model, variant) bytes — see `LinkDeviceCatalog`. Anything
+  not in the catalog (including every liquid-cooling model) aborts all speed writes to that hub.
 
 ## Lian Li UNI FAN SL V3 wireless
 
@@ -72,7 +64,10 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 |---|---|---|
 | SL V3 wireless TX dongle (control) | `0416:8040` | WinUSB, 64-byte packets, EP 0x01/0x81 |
 | SL V3 wireless RX dongle (telemetry) | `0416:8041` | WinUSB |
-| SL V3 per-fan LCD node | `1CBE:0005` | WinUSB bulk (LCD streaming only — Stage 5) |
+
+- The LCD fans' per-fan screen nodes (`1CBE:0005`) are not supported and not in the device
+  registry — nothing writes to them (the fans themselves are driven through the dongles). A
+  wireless AIO (device type 10/11) is never sent a PWM: pump control is not supported.
 
 - Windows binds these to WINUSB with device interface GUID
   `{1D4B2365-4749-48EA-B38A-7C6FDDDD7E26}`; DeviceMaster uses its own dependency-free
@@ -197,7 +192,7 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - **The ~3.7 MB frame must be written in paced ~24,900-byte chunks (≈1 ms apart), never one
   blast** — a single large write stalls the CDC endpoint ("semaphore timeout"). Do not enlarge
   the driver's `WriteBufferSize`. A full frame takes ~2.3 s over this Full-Speed link; the push
-  runs on a dedicated worker thread and never blocks the 1 Hz fan/pump loop.
+  runs on a dedicated worker thread and never blocks the 1 Hz fan loop.
 - **Partial updates** (rev_c `UPDATE_BITMAP`, `0xcc`) keep a live dashboard refreshing in ~1 s:
   after the first full frame each frame is diffed against the last in native row-major space and
   only the changed pixel spans are sent — each span is `[3-byte BE address = row*480 + col]
@@ -219,7 +214,8 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 ## Sensors
 
 - LibreHardwareMonitor for CPU/GPU/motherboard (elevation required for CPU temperatures).
-- Coolant temperature comes from the iCUE Link chain (see above).
+- Fan curves follow CPU, GPU, or the hotter of the two (Hottest). A config that still says
+  `Coolant` loads as Hottest with its Hottest curve.
 
 ---
 

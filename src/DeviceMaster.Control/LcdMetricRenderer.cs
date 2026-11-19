@@ -6,10 +6,9 @@ using System.Drawing.Text;
 namespace DeviceMaster.Control;
 
 /// <summary>
-/// Renders a single metric (label, big value, unit line) as a JPEG frame for the round LCD
-/// screens. Text is auto-sized to fill the panel; rotation happens at render time so both
-/// screen families behave identically. Frames are cached by their full content key, so an
-/// unchanged value costs nothing and identical fan screens share one encode.
+/// Renders a single metric (label, big value, unit line) as a JPEG frame (the Turzx test
+/// pattern). Text is auto-sized to fill the panel; rotation happens at render time. Frames are
+/// cached by their full content key, so an unchanged value costs nothing.
 /// </summary>
 public static class LcdMetricRenderer
 {

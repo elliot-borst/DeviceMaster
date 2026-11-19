@@ -19,7 +19,7 @@ public sealed class FleetHubTests : IDisposable
             CpuTemperatureC = 52,
             GpuTemperatureC = 61,
             TargetDutyPercent = 47,
-            Devices = [new DeviceReading("motherboard", "CPU Fan", 1200, 47, IsPump: false)],
+            Devices = [new DeviceReading("motherboard", "CPU Fan", 1200, 47)],
             Warnings = ["pwm3 handed back"],
             Capabilities = new MachineCapabilities { MachineName = "box-a", MotherboardFans = true },
         };

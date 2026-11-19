@@ -15,8 +15,8 @@ using DeviceMaster.Sensors;
 namespace DeviceMaster.Control;
 
 public sealed record DeviceReading(
-    string Family, string Name, int? Rpm, int AppliedDutyPercent, bool IsPump,
-    string? Id = null, string? HubSerial = null, int? Channel = null, bool IsScreen = false);
+    string Family, string Name, int? Rpm, int AppliedDutyPercent,
+    string? Id = null, string? HubSerial = null, int? Channel = null);
 
 /// <summary>Immutable snapshot of the loop's last tick, safe to read from any thread.</summary>
 public sealed record ControlStatus
@@ -28,9 +28,6 @@ public sealed record ControlStatus
     public ControlMode Mode { get; init; }
     public string SourceName { get; init; } = "";
     public double? SourceTemperatureC { get; init; }
-
-    /// <summary>Loop coolant temperature, read every tick regardless of the curve source.</summary>
-    public double? CoolantTemperatureC { get; init; }
 
     /// <summary>CPU/GPU temperatures, sampled every couple of seconds (for dashboard tiles).</summary>
     public double? CpuTemperatureC { get; init; }
@@ -57,9 +54,6 @@ public sealed record ControlStatus
     public int? GpuFanRpm { get; init; }
 
     public int TargetDutyPercent { get; init; }
-
-    /// <summary>Pump duty actually written to the chain (null = hubs in hardware mode).</summary>
-    public int? PumpDutyPercent { get; init; }
     public bool FailsafeActive { get; init; }
 
     /// <summary>Turzx 8.8" screen connection state for the UI ("Connected · COM3", "Not detected", …); null = not managed.</summary>
@@ -97,7 +91,7 @@ public sealed record ControlStatus
 /// <summary>
 /// The 1 Hz control loop. Each tick: read the selected temperature source, evaluate the curve
 /// (or take the manual duty), and drive every fan on both families — Corsair Link hubs
-/// (write-on-change plus a periodic refresh; pumps always 100%) and Lian Li SL V3 wireless
+/// (write-on-change plus a periodic refresh) and Lian Li SL V3 wireless
 /// (keepalive PWM every tick, as the firmware requires).
 /// Failsafe: a missing or implausible source reading forces 100% everywhere.
 /// Stop() restores Corsair hubs to hardware mode; SL V3 fans revert on their own.
@@ -257,12 +251,12 @@ public sealed class ControlLoop : IDisposable
             _keepaliveThread.Start();
 
             // SL V3 rainbow loops are ~100 RF payloads per group — far too long to send on the
-            // tick (it stalled fan/pump control ~30 s, #28); a worker sends them gate-per-payload
+            // tick (it stalled fan control ~30 s, #28); a worker sends them gate-per-payload
             _slv3UploadThread = new Thread(() => RunSlv3Upload(_cts.Token)) { IsBackground = true, Name = "DeviceMaster SL V3 RGB upload" };
             _slv3UploadThread.Start();
 
             // the Turzx screen gets its own worker: a full 480×1920 serial frame takes seconds
-            // to push, which must never stall the 1 Hz fan/pump tick.
+            // to push, which must never stall the 1 Hz fan tick.
             _turzxThread = new Thread(() => RunTurzx(_cts.Token)) { IsBackground = true, Name = "DeviceMaster Turzx screen" };
             _turzxThread.Start();
         }
@@ -542,9 +536,8 @@ public sealed class ControlLoop : IDisposable
         }
 
         Lap("duty");
-        var pumpDuty = SafetyGuard.ClampPumpDuty(settings.PumpDutyPercent);
         var readings = new List<DeviceReading>();
-        ApplyCorsair(duty, pumpDuty, readings, warnings);
+        ApplyCorsair(duty, readings, warnings);
         Lap("corsair");
         ApplySlv3(duty, readings, warnings);
         Lap("slv3");
@@ -560,17 +553,11 @@ public sealed class ControlLoop : IDisposable
         }
 
         Lap("rgb");
-        ApplyLcd(settings, readings, duty, warnings);
-        Lap("lcd");
-        ApplyTurzx(settings, readings, duty);
+        ApplyTurzx(settings);
         Lap("turzx");
         SampleDashboardTemps();
         Lap("dash");
         _lastTickBreakdown = string.Join(" ", phases);
-
-        var coolant = settings.Mode == ControlMode.Curve && settings.Source == CurveSource.Coolant
-            ? sourceTemp
-            : TryReadCoolant();
 
         _status = new ControlStatus
         {
@@ -578,7 +565,6 @@ public sealed class ControlLoop : IDisposable
             Mode = settings.Mode,
             SourceName = settings.Mode == ControlMode.Manual ? "manual" : settings.Source.ToString(),
             SourceTemperatureC = sourceTemp,
-            CoolantTemperatureC = coolant,
             CpuTemperatureC = _dashCpuTemp,
             GpuTemperatureC = _dashGpuTemp,
             GpuLoadPercent = _dashGpuLoad,
@@ -592,10 +578,9 @@ public sealed class ControlLoop : IDisposable
             RamTotalGb = _dashRamTotal,
             GpuName = _dashGpuName,
             TargetDutyPercent = duty,
-            PumpDutyPercent = readings.Any(r => r.IsPump) ? pumpDuty : null, // the fleet overview shows it (#33)
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
-            Capabilities = BuildCapabilities(readings, coolant),
+            Capabilities = BuildCapabilities(),
             UptimeSeconds = SystemInfo.UptimeSeconds(),
             Storage = _storage.Get(),
             Devices = readings,
@@ -608,7 +593,7 @@ public sealed class ControlLoop : IDisposable
     private readonly StorageSampler _storage = new();
     private long _turzxProbeDue;
 
-    private MachineCapabilities BuildCapabilities(IReadOnlyList<DeviceReading> readings, double? coolant)
+    private MachineCapabilities BuildCapabilities()
     {
         if (_turzx is not null)
         {
@@ -630,7 +615,6 @@ public sealed class ControlLoop : IDisposable
         var lianLi = _slv3 is { } slv3 && !_slv3Dead && slv3.Devices.Count > 0;
         return new MachineCapabilities
         {
-            Pump = readings.Any(r => r.IsPump),
             CorsairHubs = _hubs.Count > 0,
             LianLiFans = lianLi,
             MotherboardFans = _headers is not null,
@@ -638,12 +622,9 @@ public sealed class ControlLoop : IDisposable
             RamRgb = _ramRgb.Count > 0,
             GpuRgb = _gpuRgb.Any(g => g.Ene is not null),
             FanRgb = _hubs.Count > 0 || lianLi,
-            PumpLcd = _corsairLcd is not null,
-            FanLcds = _lcdNodes.Count > 0,
             Turzx = _turzxSeen,
             CpuTemperature = SensorValidity.IsPlausibleTemperature(_dashCpuTemp),
             GpuTemperature = SensorValidity.IsPlausibleTemperature(_dashGpuTemp),
-            CoolantTemperature = SensorValidity.IsPlausibleTemperature(coolant),
         };
     }
 
@@ -693,9 +674,8 @@ public sealed class ControlLoop : IDisposable
 
     // A failed hub is closed and removed mid-session (ApplyCorsair's catch), so rediscovery
     // must run even while OTHER hubs are healthy: gating it on _hubs.Count == 0 left a
-    // two-hub rig with the pump hub permanently closed after one bad tick — no duty writes,
-    // and the hub's keepalive lapsed into hardware mode (default lighting) with nothing to
-    // heal it, because the v89 deep repaint only reaches open hubs.
+    // two-hub rig with one hub permanently closed after one bad tick — no duty writes, and
+    // the hub's keepalive lapsed into hardware mode (default lighting) with nothing to heal it.
     private const int HubRediscoverMs = 15_000;
     private long _hubRediscoverDue;
 
@@ -704,7 +684,7 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, long> _hubPathRetryNotBefore = [];
 
     // #211 circuit breaker: a hub whose session fails repeatedly (reopened fine but every
-    // telemetry read throws, 2026-10-30: NRE every ~6 s forever, pump hub orphaned, fans at
+    // telemetry read throws, 2026-10-30: NRE every ~6 s forever, a hub orphaned, fans at
     // 100%) gets backed off instead of flapped, and the caller escalates to a software USB replug
     private readonly HubFailureBreaker _hubBreaker = new();
 
@@ -740,7 +720,6 @@ public sealed class ControlLoop : IDisposable
 
                     _hubs.Add(hub);
                     _appliedHubRgb.Remove(hub.SerialNumber); // reapply color after a reconnect
-                    _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
                     _lastWrittenCorsairDuty = -1; // duties must reach the reopened hub this tick, not next refresh
                     _log?.Invoke($"control: opened Link hub {hub.SerialNumber[..8]}… fw {hub.FirmwareVersion}: [{hub.ChannelSignature()}]");
                     try
@@ -1005,17 +984,6 @@ public sealed class ControlLoop : IDisposable
         _gpuRgb = [];
         _chipRgbScanned = false;
 
-        _corsairLcd?.Dispose(); // panels keep showing their last frame on their own
-        _corsairLcd = null;
-        foreach (var node in _lcdNodes)
-        {
-            node.Dispose();
-        }
-
-        _lcdNodes.Clear();
-        _appliedLcd.Clear();
-        _appliedLcdBrightness.Clear();
-
         _headers?.Dispose(); // restores BIOS/driver-automatic control on every touched header
         _headers = null;
 
@@ -1037,20 +1005,10 @@ public sealed class ControlLoop : IDisposable
     private readonly Dictionary<string, long> _hubRgbRefreshDue = [];
 
     // Hub color writes are ACKed with no readback of what's painted: a chain device that
-    // resets its own LED controller (XD6 pump after a link blip, 2026-08-29) reverts to its
+    // resets its own LED controller (after a link blip, 2026-08-29) reverts to its
     // firmware-default effect and stays there for as long as we trust the one write that
-    // "took". Steady re-stream keeps ordinary paint loss at bay cheaply — but a blipped
-    // device ACKs re-streamed frames WITHOUT painting them (proven live: a reverted pump
-    // sat through continuous 20 s re-streams), so pump-bearing hubs additionally get a
-    // periodic deep repaint (see HubDeepRepaintMs in ApplyCorsair).
+    // "took". Steady re-stream keeps ordinary paint loss at bay cheaply.
     private const int HubRgbRefreshMs = 20_000;
-
-    // Deep-repaint cadence for pump-bearing hubs: software-mode re-assert + full color-path
-    // rebuild (endpoint re-open, black reset frame + 40 ms) + re-stream — the app-restart
-    // init sequence, the only thing proven to repaint a link-blipped device. Cost per pass:
-    // ~0.5 s of tick time and ~40 ms of black on that hub's chain.
-    private const int HubDeepRepaintMs = 3 * 60_000;
-    private readonly Dictionary<string, long> _hubDeepRepaintDue = [];
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
 
@@ -1279,10 +1237,10 @@ public sealed class ControlLoop : IDisposable
         // once every surface carries the current color and it has settled, persist it so it
         // survives power cycles (Aura commit + ENE flash saves — one write per color, total)
         // (and never mid rainbow upload: SaveConfig would store the fans' half-received effect)
-        // (#80) and never while the fan radios are deaf after fan-screen traffic (a heal burst in
-        // progress): a group that misses the SaveConfig keeps the factory rainbow in its flash and
-        // shows it at every firmware hiccup. A second save follows a couple of minutes later.
-        var slv3RadiosSettled = _slv3HealReason is null && _slv3ConfirmSendsLeft == 0;
+        // (#80) and never while colour confirmations are still going out: a group that misses the
+        // SaveConfig keeps the factory rainbow in its flash and shows it at every firmware hiccup.
+        // A second save follows a couple of minutes later.
+        var slv3RadiosSettled = _slv3ConfirmSendsLeft == 0;
         if (_persistedRgb == key && _slv3ResaveDue > 0 && Environment.TickCount64 >= _slv3ResaveDue && slv3RadiosSettled && !Slv3UploadBusy)
         {
             _slv3ResaveDue = 0;
@@ -1357,16 +1315,7 @@ public sealed class ControlLoop : IDisposable
             // A rainbow on the air holds refreshes/confirmations back until it has landed, so
             // they never supersede it — a new setting (different key) still goes out at once.
             var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue && !(rainbow && Slv3UploadBusy);
-
-            // the fan-LCD heal burst asks for 8 re-sends — cheap for a static colour, but 8 rainbow
-            // uploads (~11 s each) kept the radio busy non-stop, since the screens refresh every
-            // minute. Each upload outlasts the deaf window by itself, so two are plenty.
-            if (rainbow && _slv3ConfirmSendsLeft > 1)
-            {
-                _slv3ConfirmSendsLeft = 1;
-            }
             var sentAny = false;
-            var roundStarted = Environment.TickCount64;
             var uploads = new List<(Slv3Device Device, List<byte[]> Payloads)>();
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
             {
@@ -1403,11 +1352,6 @@ public sealed class ControlLoop : IDisposable
                 QueueSlv3Upload(new Slv3UploadJob(_slv3, key, uploads));
             }
 
-            if (sentAny && !rainbow)
-            {
-                TrackSlv3HealSend(Environment.TickCount64 - roundStarted);
-            }
-
             // The RF uplink is fire-and-forget and drops roughly one group per few changes —
             // a group that missed chunks shows its rainbow fallback. Every fresh upload is
             // followed by TWO confirmation re-sends ~1.5 s apart (a fixed, finite burst —
@@ -1430,8 +1374,6 @@ public sealed class ControlLoop : IDisposable
                 }
                 else
                 {
-                    FinishSlv3Heal();
-
                     // 10 s steady-state refresh (was 20 s; #80): one group has demonstrably weak RF reception
                     // and drops its stored effect — bound-time-to-heal beats airtime here
                     // (still nowhere near the v17 continuous-resend flood). A rainbow loop is a
@@ -1442,309 +1384,10 @@ public sealed class ControlLoop : IDisposable
         }
     }
 
-    // ---- SL V3 colour-heal log (#64) ----
-    // Fan-screen traffic drops the fans to firmware rainbow until the colour re-sends land, so
-    // each heal cycle gets ONE log line: when the screens were touched, when the first colour
-    // re-send went out, how many, and the slowest. A flash the owner sees at hh:mm:ss can then
-    // be matched to a cycle — and a slow or failed cycle is flagged on its own.
-    private const int Slv3HealSlowSendMs = 300;
-    private string? _slv3HealReason;
-    private long _slv3HealStartedAt;
-    private long _slv3HealFirstSendAt;
-    private int _slv3HealSends;
-    private long _slv3HealSlowestMs;
-
-    private void NoteSlv3Heal(string reason)
-    {
-        if (_slv3HealReason is not null)
-        {
-            return; // one cycle at a time: a push during a burst extends the same burst
-        }
-
-        _slv3HealReason = reason;
-        _slv3HealStartedAt = Environment.TickCount64;
-        _slv3HealFirstSendAt = 0;
-        _slv3HealSends = 0;
-        _slv3HealSlowestMs = 0;
-    }
-
-    private void TrackSlv3HealSend(long elapsedMs)
-    {
-        if (_slv3HealReason is null)
-        {
-            return;
-        }
-
-        if (_slv3HealFirstSendAt == 0)
-        {
-            _slv3HealFirstSendAt = Environment.TickCount64;
-        }
-
-        _slv3HealSends++;
-        _slv3HealSlowestMs = Math.Max(_slv3HealSlowestMs, elapsedMs);
-    }
-
-    private void FinishSlv3Heal()
-    {
-        if (_slv3HealReason is null)
-        {
-            return;
-        }
-
-        var first = _slv3HealFirstSendAt == 0 ? "never" : $"{_slv3HealFirstSendAt - _slv3HealStartedAt} ms";
-        var span = (Environment.TickCount64 - _slv3HealStartedAt) / 1000.0;
-        var flag = _slv3HealSends == 0 || _slv3HealSlowestMs > Slv3HealSlowSendMs || _slv3HealFirstSendAt - _slv3HealStartedAt > 2_000
-            ? " — SLOW (rainbow may have shown)"
-            : "";
-        _log?.Invoke($"SL V3 heal: {_slv3HealReason} at {DateTime.Now.AddSeconds(-span):HH:mm:ss} → colour re-sent {_slv3HealSends}× over {span:0.0} s "
-            + $"(first after {first}, slowest {_slv3HealSlowestMs} ms){flag}");
-        _slv3HealReason = null;
-    }
-
-    // ---- LCD screens (pump LCD + SL V3 per-fan LCDs) ----
-
-    private CorsairLcdDevice? _corsairLcd;
-    private readonly List<Slv3LcdNode> _lcdNodes = [];
-    private readonly Dictionary<string, LcdMode> _appliedLcd = [];
-    private readonly Dictionary<string, int> _appliedLcdBrightness = [];
-    private long _lcdRetryAt;
-    private bool _lcdOpenFailedWarned;
-
-    /// <summary>Screens currently open (id, isPump) — for the UI's per-screen editors.</summary>
-    public IReadOnlyList<(string Id, bool IsPump)> LcdScreenIds
-    {
-        get
-        {
-            var list = new List<(string, bool)>();
-            if (_corsairLcd is not null)
-            {
-                list.Add(("pump-lcd", true));
-            }
-
-            list.AddRange(_lcdNodes.Select(n => (n.Serial, false)));
-            return list;
-        }
-    }
-
-    // "find this screen": flash a big index frame on one screen for a few seconds
-    private readonly Dictionary<string, long> _lcdIdentifyUntil = [];
-
-    public void IdentifyScreen(string id, int seconds = 8)
-    {
-        lock (_lcdIdentifyUntil)
-        {
-            _lcdIdentifyUntil[id] = Environment.TickCount64 + seconds * 1000L;
-        }
-
-        _lcdShownKey.Remove(id); // force an immediate re-push on the next metric round
-
-        _lcdMetricsDue = 0;
-        _wake.Set();
-    }
-
-    private bool IsIdentifying(string id)
-    {
-        lock (_lcdIdentifyUntil)
-        {
-            if (_lcdIdentifyUntil.TryGetValue(id, out var until))
-            {
-                if (Environment.TickCount64 <= until)
-                {
-                    return true;
-                }
-
-                _lcdIdentifyUntil.Remove(id);
-                _lcdShownKey.Remove(id); // restore the metric right away
-        
-            }
-
-            return false;
-        }
-    }
-
-    private void ApplyLcd(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
-    {
-        var mode = settings.LcdScreens;
-        if (mode == LcdMode.Unmanaged || Environment.TickCount64 < _lcdRetryAt)
-        {
-            return;
-        }
-
-        // Off forces the backlight dark; every other mode uses the user's brightness. Tracked
-        // per screen so a brightness change re-applies without re-sending frames (Metrics/Off
-        // set the backlight only — no JPEG, so no SL V3 RGB disruption on a slider drag).
-        var lcdBrightness = mode == LcdMode.Off ? 0 : Math.Clamp(settings.LcdBrightness, 0, 100);
-
-        // open screens lazily, only once the user actually manages them
-        if (_corsairLcd is null && CorsairLcdDevice.FindDevices().FirstOrDefault() is { } lcdHid)
-        {
-            try
-            {
-                _corsairLcd = CorsairLcdDevice.Open(lcdHid);
-                _appliedLcd.Remove("pump-lcd");
-                _appliedLcdBrightness.Remove("pump-lcd");
-                _log?.Invoke($"control: opened the pump LCD (serial {_corsairLcd.SerialNumber})");
-            }
-            catch (Exception ex)
-            {
-                if (!_lcdOpenFailedWarned)
-                {
-                    _lcdOpenFailedWarned = true;
-                    _log?.Invoke($"pump LCD open failed: {ex.Message}");
-                }
-
-                warnings.Add($"pump LCD open failed: {ex.Message}");
-            }
-        }
-
-        // open every fan screen that isn't open: at start, and again after a write failure dropped
-        // one (#78 — this used to run only with NO screen open, so one failed screen among eleven was
-        // never reopened and kept showing its picture through Lights out/Blackout)
-        if (_lcdNodes.Count == 0 || Environment.TickCount64 >= _lcdReopenDue)
-        {
-            _lcdReopenDue = Environment.TickCount64 + 15_000;
-            var openBefore = _lcdNodes.Count;
-            foreach (var (path, serial) in Slv3LcdNode.FindNodes().Where(n => _lcdNodes.All(o => o.Serial != n.Serial)))
-            {
-                try
-                {
-                    _lcdNodes.Add(Slv3LcdNode.Open(path, serial));
-                    _appliedLcd.Remove(serial); // re-apply the current mode to it
-                    _appliedLcdBrightness.Remove(serial);
-                }
-                catch (Exception ex)
-                {
-                    warnings.Add($"fan LCD {serial[..Math.Min(6, serial.Length)]} open failed: {ex.Message}");
-                }
-            }
-
-            if (_lcdNodes.Count > openBefore)
-            {
-                _log?.Invoke(openBefore == 0
-                    ? $"control: opened {_lcdNodes.Count} fan LCD node(s)"
-                    : $"control: reopened {_lcdNodes.Count - openBefore} fan LCD node(s) ({_lcdNodes.Count} open)");
-            }
-        }
-
-        if (_corsairLcd is { } pumpLcd
-            && (_appliedLcd.GetValueOrDefault("pump-lcd") != mode
-                || _appliedLcdBrightness.GetValueOrDefault("pump-lcd", -1) != lcdBrightness))
-        {
-            try
-            {
-                ApplyLcdMode(mode,
-                    jpeg => pumpLcd.SendJpegFrame(jpeg),
-                    percent => pumpLcd.SetBrightness(percent),
-                    lcdBrightness,
-                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
-                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight);
-                _appliedLcd["pump-lcd"] = mode;
-                _appliedLcdBrightness["pump-lcd"] = lcdBrightness;
-                _log?.Invoke($"pump LCD set to {mode}");
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"pump LCD write failed: {ex.Message} — reopening");
-                _log?.Invoke($"pump LCD write failed: {ex.Message} — reopening");
-                _corsairLcd.Dispose();
-                _corsairLcd = null;
-                _lcdRetryAt = Environment.TickCount64 + 10_000;
-            }
-        }
-
-        var applied = 0;
-        foreach (var node in _lcdNodes.ToList())
-        {
-            if (_appliedLcd.GetValueOrDefault(node.Serial) == mode
-                && _appliedLcdBrightness.GetValueOrDefault(node.Serial, -1) == lcdBrightness)
-            {
-                continue;
-            }
-
-            try
-            {
-                ApplyLcdMode(mode,
-                    node.SendJpegFrame,
-                    node.SetBrightness,
-                    lcdBrightness,
-                    Slv3LcdProtocol.ScreenWidth,
-                    Slv3LcdProtocol.ScreenHeight);
-                _appliedLcd[node.Serial] = mode;
-                _appliedLcdBrightness[node.Serial] = lcdBrightness;
-                applied++;
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
-                _log?.Invoke($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening in ~10 s");
-                node.Dispose();
-                _lcdNodes.Remove(node);
-                _lcdRetryAt = Environment.TickCount64 + 10_000;
-                _lcdReopenDue = Math.Min(_lcdReopenDue, Environment.TickCount64 + 10_000);
-            }
-        }
-
-        if (applied > 0)
-        {
-            _log?.Invoke($"{applied} fan LCD(s) set to {mode}");
-
-            // the LCD node lives inside the fan — LCD commands reset the fan's stored RGB
-            // effect AND leave its radio deaf for several seconds (observed live twice on the
-            // weakest group). Re-push colours starting on the very next tick, one per tick, so
-            // the colour returns the instant the radio wakes (see Slv3LcdHealConfirms).
-            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
-            NoteSlv3Heal($"fan screens set to {mode}");
-        }
-
-        // the pump panel reasserts its own liquid-temp screen ~30 s after frames stop —
-        // keep the solid background alive with a periodic re-send (HID only, no RF impact)
-        if (_corsairLcd is { } keepalivePump && mode is LcdMode.Black or LcdMode.White
-            && Environment.TickCount64 >= _pumpLcdKeepaliveDue)
-        {
-            _pumpLcdKeepaliveDue = Environment.TickCount64 + PumpLcdKeepaliveMs;
-            try
-            {
-                var (r, g, b) = mode == LcdMode.Black ? ((byte)0, (byte)0, (byte)0) : ((byte)255, (byte)255, (byte)255);
-                keepalivePump.SendJpegFrame(LcdFrames.Solid(
-                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
-                    Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight, r, g, b));
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"pump LCD keepalive failed: {ex.Message} — reopening");
-                _corsairLcd.Dispose();
-                _corsairLcd = null;
-                _lcdRetryAt = Environment.TickCount64 + 10_000;
-            }
-        }
-
-        if (mode == LcdMode.Metrics)
-        {
-            StreamLcdMetrics(settings, readings, duty, warnings);
-        }
-    }
-
-    private static void ApplyLcdMode(LcdMode mode, Action<byte[]> sendFrame, Action<int> setBrightness, int brightness, int width, int height)
-    {
-        switch (mode)
-        {
-            case LcdMode.Black:
-                sendFrame(LcdFrames.Solid(width, height, 0, 0, 0));
-                break;
-            case LcdMode.White:
-                sendFrame(LcdFrames.Solid(width, height, 255, 255, 255));
-                break;
-        }
-
-        // Off passes brightness 0; Metrics streams its frames elsewhere — set the backlight only.
-        setBrightness(brightness);
-    }
-
     // ---- Turzx 8.8" serial screen ----
     // The serial port is owned exclusively by the Turzx worker thread (RunTurzx). The tick
     // thread only renders the desired frame and publishes desired state under _turzxGate; it
-    // never touches the port, so a multi-second full-frame push can't stall fan/pump control.
+    // never touches the port, so a multi-second full-frame push can't stall fan control.
     private const int TurzxLandscapeWidth = 1920;
     private const int TurzxLandscapeHeight = 480;
 
@@ -1802,7 +1445,7 @@ public sealed class ControlLoop : IDisposable
     private const int TurzxFullFrameMinIdleMs = 600;
 
     /// <summary>Tick-thread half: render the desired Turzx frame (fast, cached) and publish desired state.</summary>
-    private void ApplyTurzx(ControlSettings settings, List<DeviceReading> readings, int duty)
+    private void ApplyTurzx(ControlSettings settings)
     {
         byte[]? frame = null;
         string? key = null;
@@ -2088,7 +1731,7 @@ public sealed class ControlLoop : IDisposable
                 // "succeeding" while nothing ever displays — the historical fix was a manual USB
                 // replug. So once a plain reopen has failed twice, do the software equivalent:
                 // disable/enable the panel's OWN data-port device node to force it to re-enumerate.
-                // Never its parent hub (other devices — including the coolant hub — can share it).
+                // Never its parent hub (other devices — including a Link hub — can share it).
                 // Rate-limited so a persistent hardware fault can't thrash the USB stack.
                 if (_turzxWriteFailures >= 2 && Environment.TickCount64 >= _turzxUsbReplugAfter)
                 {
@@ -2107,7 +1750,7 @@ public sealed class ControlLoop : IDisposable
     /// <summary>
     /// Software "replug" of a wedged Turzx panel: disable/enable its OWN data-port USB node so it
     /// re-enumerates and clears the back-pressured CDC endpoint. Targets only the panel's function
-    /// node (never its parent hub, which the coolant hub may share) and needs elevation — every
+    /// node (never its parent hub, which a Link hub may share) and needs elevation — every
     /// failure degrades to a logged message and the ordinary reopen retry.
     /// </summary>
     private void TryReplugTurzx()
@@ -2131,231 +1774,8 @@ public sealed class ControlLoop : IDisposable
         }
     }
 
-    // The pump panel's firmware reasserts its own liquid-temp screen ~30 s after frames stop
-    // (observed live), so it needs a periodic frame keepalive. The SL V3 fan panels hold
-    // their frame indefinitely — and their radios dislike LCD traffic — so they stay
-    // change-only.
-    private const int PumpLcdKeepaliveMs = 10_000;
-
-    // Fan-LCD refreshes are the main disruptor of SL V3 RGB: writing a frame to a fan's LCD node
-    // resets that fan's stored lighting effect (it drops to firmware rainbow) and leaves its radio
-    // deaf for several seconds, so the colour re-assert can't land right away. To keep the colour
-    // rock-solid we refresh the fan screens rarely (once a minute) — their metrics just lag a
-    // little — and heal each reset with a wider colour-confirmation burst (see Slv3LcdHealConfirms).
-    private const int FanLcdBatchMs = 60_000;
-
-    // Colour re-sends queued after a fan-LCD push, one PER TICK (~1 s). The push drops the fan to
-    // rainbow immediately, so the visible flash lasts until the first re-colour lands AFTER the
-    // radio wakes — a tick-paced burst that starts on the very next tick lands a colour within ~1 s
-    // of recovery (v64 waited 3 s before the first attempt, so the flash was ~3 s every minute).
-    // The burst spans ~8 s to cover the whole deaf window plus a couple of reinforcing sends for
-    // the weak-RF group. Bounded burst — NOT a continuous loop (that flooded the RF network in v17).
-    private const int Slv3LcdHealConfirms = 8;
-
-    private long _pumpLcdKeepaliveDue;
-    private long _lcdMetricsDue;
-    private readonly Dictionary<string, string> _lcdShownKey = [];
-    private long _fanLcdBatchDue;
-    private long _lcdReopenDue;
-
-    private void StreamLcdMetrics(ControlSettings settings, List<DeviceReading> readings, int duty, List<string> warnings)
-    {
-        if (Environment.TickCount64 < _lcdMetricsDue)
-        {
-            return;
-        }
-
-        _lcdMetricsDue = Environment.TickCount64 + 2_000;
-        IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings = null;
-
-        if (_corsairLcd is { } pump)
-        {
-            var config = settings.ScreenConfig("pump-lcd", isPump: true);
-            var frame = ComposeScreenFrame("pump-lcd", ordinal: 0, config,
-                Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenWidth,
-                Devices.CorsairLink.Protocol.CorsairLcdPackets.ScreenHeight,
-                readings, duty, ref lhmReadings, out var key);
-            var keepaliveDue = Environment.TickCount64 >= _pumpLcdKeepaliveDue;
-            if (frame is not null && (_lcdShownKey.GetValueOrDefault("pump-lcd") != key || keepaliveDue))
-            {
-                try
-                {
-                    pump.SendJpegFrame(frame);
-                    _lcdShownKey["pump-lcd"] = key!;
-                    _pumpLcdKeepaliveDue = Environment.TickCount64 + PumpLcdKeepaliveMs;
-                }
-                catch (Exception ex)
-                {
-                    warnings.Add($"pump LCD write failed: {ex.Message} — reopening");
-                    _corsairLcd.Dispose();
-                    _corsairLcd = null;
-                    _lcdRetryAt = Environment.TickCount64 + 10_000;
-                }
-            }
-        }
-
-        // Fan screens update as ONE batch on a 15 s cadence, not staggered per fan: staggered
-        // pushes kept some fan radio deaf at any given moment, so colors dropped to rainbow
-        // "randomly". A batch leaves quiet air between bursts, and every burst is followed by
-        // color confirms. Identify pushes (and screens with no frame yet) skip the wait.
-        var batchDue = Environment.TickCount64 >= _fanLcdBatchDue;
-        var pushedAny = false;
-        var ordinal = 0;
-        foreach (var node in _lcdNodes.ToList())
-        {
-            ordinal++;
-            var urgent = IsIdentifying(node.Serial) || !_lcdShownKey.ContainsKey(node.Serial);
-            if (!batchDue && !urgent)
-            {
-                continue;
-            }
-
-            var config = settings.ScreenConfig(node.Serial, isPump: false);
-            var frame = ComposeScreenFrame(node.Serial, ordinal, config,
-                Slv3LcdProtocol.ScreenWidth, Slv3LcdProtocol.ScreenHeight,
-                readings, duty, ref lhmReadings, out var key);
-            if (frame is null || _lcdShownKey.GetValueOrDefault(node.Serial) == key)
-            {
-                continue;
-            }
-
-            try
-            {
-                node.SendJpegFrame(frame);
-                _lcdShownKey[node.Serial] = key!;
-                pushedAny = true;
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"fan LCD {node.Serial[..Math.Min(6, node.Serial.Length)]} write failed: {ex.Message} — reopening");
-                node.Dispose();
-                _lcdNodes.Remove(node);
-                _lcdRetryAt = Environment.TickCount64 + 10_000;
-            }
-        }
-
-        if (batchDue)
-        {
-            _fanLcdBatchDue = Environment.TickCount64 + FanLcdBatchMs;
-        }
-
-        if (pushedAny)
-        {
-            // fan radios go briefly deaf around LCD traffic — follow every burst with a colour
-            // re-send burst that starts on the next tick and repeats per tick, wide enough to
-            // outlast the deaf window (see Slv3LcdHealConfirms)
-            _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 900);
-            _slv3ConfirmSendsLeft = Math.Max(_slv3ConfirmSendsLeft, Slv3LcdHealConfirms);
-            NoteSlv3Heal("fan screens updated");
-        }
-    }
-
-    /// <summary>One screen's frame (metric or identify flash) and its content key.</summary>
-    private byte[]? ComposeScreenFrame(
-        string id, int ordinal, LcdScreenConfig config, int width, int height,
-        List<DeviceReading> readings, int duty,
-        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings, out string? key)
-    {
-        if (IsIdentifying(id))
-        {
-            // unmissable: black number on a solid orange screen
-            var name = ordinal == 0 ? "P" : ordinal.ToString();
-            key = $"identify|{id}";
-            return LcdMetricRenderer.Render(width, height,
-                ordinal == 0 ? "PUMP SCREEN" : "FAN SCREEN",
-                name, id.Length > 6 ? id[..6] : id,
-                accent: (0, 0, 0), config.RotationDegrees, background: (255, 150, 0));
-        }
-
-        if (ReadLcdMetric(config.Metric, readings, duty, ref lhmReadings) is not { } m)
-        {
-            key = null;
-            return null;
-        }
-
-        var accent = config.ColorByValue
-            ? m.Accent // green/amber/red by thresholds
-            : config is { FontR: { } fr, FontG: { } fg, FontB: { } fb }
-                ? ((byte)Math.Clamp(fr, 0, 255), (byte)Math.Clamp(fg, 0, 255), (byte)Math.Clamp(fb, 0, 255))
-                : ((byte)235, (byte)235, (byte)245); // default: plain white
-        key = $"{config.Metric}|{m.Value}|{m.Unit}|{accent}|{config.RotationDegrees}";
-        return LcdMetricRenderer.Render(width, height, m.Label, m.Value, m.Unit, accent, config.RotationDegrees);
-    }
-
-    private (string Label, string Value, string Unit, (byte R, byte G, byte B) Accent)? ReadLcdMetric(
-        LcdMetric metric, List<DeviceReading> readings, int duty,
-        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings)
-    {
-        switch (metric)
-        {
-            case LcdMetric.Clock:
-                var now = DateTime.Now;
-                return ("TIME", now.ToString("HH:mm"), now.ToString("ddd d MMM"), (235, 235, 245));
-
-            case LcdMetric.Date:
-                var today = DateTime.Now;
-                return (today.ToString("dddd").ToUpperInvariant(), today.Day.ToString(), today.ToString("MMMM yyyy"), (235, 235, 245));
-
-            case LcdMetric.Coolant:
-                return TryReadCoolant() is { } coolant
-                    ? ("COOLANT", $"{coolant:F0}", "°C", TemperatureAccent(coolant, warm: 33, hot: 37))
-                    : null;
-
-            case LcdMetric.PumpRpm:
-                return readings.FirstOrDefault(r => r.IsPump) is { Rpm: { } rpm }
-                    ? ("PUMP", rpm.ToString(), "rpm", (122, 167, 255))
-                    : null;
-
-            case LcdMetric.PumpDuty:
-                return readings.FirstOrDefault(r => r.IsPump) is { } pumpReading
-                    ? ("PUMP", pumpReading.AppliedDutyPercent.ToString(), "%", (122, 167, 255))
-                    : null;
-
-            case LcdMetric.FanDuty:
-                return ("FANS", duty.ToString(), "%", (122, 167, 255));
-
-            case LcdMetric.FanRpm:
-                var rpms = readings.Where(r => !r.IsPump && r.Rpm is > 0).Select(r => r.Rpm!.Value).ToList();
-                return rpms.Count > 0
-                    ? ("FANS", ((int)rpms.Average()).ToString(), "rpm", (122, 167, 255))
-                    : null;
-
-            case LcdMetric.CpuTemp:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Temperature, "CPU", "°C", preferNames: CpuTempPreference);
-            case LcdMetric.GpuTemp:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "GPU", "°C", preferNames: GpuCorePreference);
-            case LcdMetric.CpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Load, "CPU", "%", preferNames: ["Total"]);
-            case LcdMetric.GpuLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "GPU", "%", preferNames: GpuCorePreference);
-            case LcdMetric.RamLoad:
-                // exclude LHM's "Virtual Memory" device (commit charge, ~93%); the physical
-                // "Total Memory" load is the Task-Manager figure the user expects.
-                return LhmLcdMetric(ref lhmReadings, "ram", SensorKind.Load, "RAM", "%", excludeName: "Virtual");
-            case LcdMetric.VramLoad:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Load, "VRAM", "%",
-                    preferNames: ["Memory"], excludeName: "controller");
-            case LcdMetric.GpuPower:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Power, "GPU", "W",
-                    preferNames: ["GPU Package", "Package", "Power"]);
-            case LcdMetric.CpuPower:
-                return LhmLcdMetric(ref lhmReadings, "cpu", SensorKind.Power, "CPU", "W",
-                    preferNames: ["Package"]);
-            case LcdMetric.GpuClock:
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Clock, "GPU", "MHz",
-                    preferNames: ["GPU Core", "Core"]);
-            case LcdMetric.VramTemp:
-                // GPU memory-junction (GDDR7) temperature — runs hotter than the core, so it
-                // greens/ambers/reds on higher thresholds when coloured by value
-                return LhmLcdMetric(ref lhmReadings, "gpu", SensorKind.Temperature, "VRAM", "°C",
-                    preferNames: ["Memory Junction", "Memory", "Junction"], warmC: 86, hotC: 96);
-            default:
-                return null;
-        }
-    }
-
     // Canonical sensor preference in priority order, mirroring LhmSensorSource.ReadSystemStats so
-    // the fan LCDs, the app dashboard tiles and the Turzx dashboard all agree on which GPU/CPU
+    // the curve sources, the app dashboard tiles and the Turzx dashboard all agree on which GPU/CPU
     // sensor they display — GPU Core (not the hotter memory-junction/hot-spot sensor) and CPU
     // package/Tctl (not the hottest single core).
     private static readonly string[] GpuCorePreference = ["GPU Core", "Core"];
@@ -2388,7 +1808,7 @@ public sealed class ControlLoop : IDisposable
         return discrete.Count > 0 ? discrete : gpuCandidates;
     }
 
-    /// <summary>Canonical temperature for a hardware family, using the same selection as the fan LCDs.</summary>
+    /// <summary>Canonical temperature for a hardware family, using the same selection as the Turzx dashboard.</summary>
     private static double? CanonicalTemp(
         IReadOnlyList<Core.Sensors.SensorReading> readings, string hardware, string[] preferNames)
     {
@@ -2404,80 +1824,11 @@ public sealed class ControlLoop : IDisposable
         return (preferred.Count > 0 ? preferred : candidates).Select(r => (double?)r.Value).Max();
     }
 
-    private (string, string, string, (byte, byte, byte))? LhmLcdMetric(
-        ref IReadOnlyList<Core.Sensors.SensorReading>? lhmReadings,
-        string hardware, SensorKind kind, string label, string unit,
-        string[]? preferNames = null, string? excludeName = null, double warmC = 60, double hotC = 80)
-    {
-        try
-        {
-            lhmReadings ??= Lhm().Read(refresh: false);
-            var candidates = lhmReadings
-                .Where(r => r.Kind == kind && r.Id.Contains(hardware, StringComparison.OrdinalIgnoreCase))
-                .Where(r => excludeName is null || !r.Name.Contains(excludeName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (hardware == "gpu")
-            {
-                // read the discrete card only — an integrated GPU (e.g. the Ryzen iGPU) is also
-                // listed under "gpu" and its idle load/temp would otherwise win the .Max()
-                candidates = IsolateDiscreteGpu(candidates);
-            }
-
-            // prefer the canonical sensor ("CPU Total"/"CPU Package", "GPU Core") in priority
-            // order over the max of every sensor the hardware happens to expose — otherwise a
-            // hotter secondary sensor (e.g. GPU memory-junction) wins and the fan LCD disagrees
-            // with the Turzx dashboard, which selects these same canonical sensors.
-            var preferred = CanonicalMatch(candidates, preferNames);
-            var value = (preferred.Count > 0 ? preferred : candidates)
-                .Select(r => (double?)r.Value)
-                .Max();
-            if (value is not { } v)
-            {
-                return null;
-            }
-
-            var accent = kind == SensorKind.Temperature
-                ? TemperatureAccent(v, warm: warmC, hot: hotC)
-                : ((byte)122, (byte)167, (byte)255);
-            return (label, $"{v:F0}", unit, accent);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static (byte, byte, byte) TemperatureAccent(double value, double warm, double hot) =>
-        value >= hot ? ((byte)248, (byte)113, (byte)113)
-        : value >= warm ? ((byte)251, (byte)191, (byte)36)
-        : ((byte)74, (byte)222, (byte)128);
-
-    private double? TryReadCoolant()
-    {
-        foreach (var hub in _hubs)
-        {
-            try
-            {
-                var temp = hub.ReadTemperatures().FirstOrDefault(t => t.TemperatureCelsius is not null);
-                if (temp?.TemperatureCelsius is { } coolant)
-                {
-                    return coolant;
-                }
-            }
-            catch
-            {
-                // informational only — the source path reports its own errors
-            }
-        }
-
-        return null;
-    }
-
     // ---- temperature sources ----
 
     /// <summary>
     /// The LHM source with its hardware polled exactly once per control tick. Every consumer
-    /// (fan/pump LCDs, the Turzx dashboard, the app tiles, a CPU/GPU curve source) shares that one
+    /// (the Turzx dashboard, the app tiles, the curve source) shares that one
     /// poll — a full poll drives NvAPI/the kernel driver/SuperIO and doing it per-consumer stretched
     /// the tick toward 2 s, which is what made the on-screen data refresh at ~2 s instead of ~1 s.
     /// </summary>
@@ -2499,27 +1850,6 @@ public sealed class ControlLoop : IDisposable
 
     private double? ReadSourceTemperature(CurveSource source, List<string> warnings)
     {
-        if (source == CurveSource.Coolant)
-        {
-            foreach (var hub in _hubs)
-            {
-                try
-                {
-                    var temp = hub.ReadTemperatures().FirstOrDefault(t => t.TemperatureCelsius is not null);
-                    if (temp?.TemperatureCelsius is { } coolant)
-                    {
-                        return coolant;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    warnings.Add($"coolant read failed: {ex.Message}");
-                }
-            }
-
-            return null;
-        }
-
         try
         {
             var readings = Lhm().Read(refresh: false);
@@ -2598,7 +1928,7 @@ public sealed class ControlLoop : IDisposable
             if (LinuxUsbRestarter.ReplugFromHidPath(devicePath, _log) is null)
             {
                 _log?.Invoke("recover by restarting the container (docker restart devicemaster) or replugging "
-                    + "the hub; the pump hub runs on its hardware fallback until then");
+                    + "the hub; it runs on its hardware fallback until then");
             }
         }
     }
@@ -2606,11 +1936,10 @@ public sealed class ControlLoop : IDisposable
     private static string ShortHubPath(string devicePath) =>
         devicePath.Length <= 40 ? devicePath : devicePath[..40] + "…";
 
-    private void ApplyCorsair(int duty, int pumpDuty, List<DeviceReading> readings, List<string> warnings)
+    private void ApplyCorsair(int duty, List<DeviceReading> readings, List<string> warnings)
     {
         var pulseActive = AnyPulsePending();
-        var writeKey = duty * 1000 + pumpDuty;
-        var mustWrite = writeKey != _lastWrittenCorsairDuty
+        var mustWrite = duty != _lastWrittenCorsairDuty
             || ++_ticksSinceCorsairWrite >= CorsairRefreshTicks
             || pulseActive
             || _pulseWasActive; // one extra write to restore duties after a pulse ends
@@ -2629,21 +1958,6 @@ public sealed class ControlLoop : IDisposable
                 if (!hub.InSoftwareMode)
                 {
                     hub.EnterSoftwareMode();
-                }
-
-                // deep repaint (pump-bearing hubs): a link-blipped device ACKs re-streamed
-                // frames without painting them and gives no protocol-visible signal, so run
-                // the app-restart init sequence on a timer — the only proven heal
-                if (hub.Channels.Any(c => c.IsPump)
-                    && Environment.TickCount64 >= _hubDeepRepaintDue.GetValueOrDefault(hub.SerialNumber))
-                {
-                    _hubDeepRepaintDue[hub.SerialNumber] = Environment.TickCount64 + HubDeepRepaintMs;
-                    hub.EnterSoftwareMode(); // re-assert even though already in software mode
-                    hub.InvalidateColorPath();
-                    _appliedHubRgb.Remove(hub.SerialNumber);
-                    mustWrite = true; // re-assert duties right behind the mode re-entry
-                    _log?.Invoke($"hub {hub.SerialNumber[..8]}… deep repaint: software mode re-asserted, "
-                        + "color path invalidated — colors re-stream this tick");
                 }
 
                 if (rescanDue)
@@ -2676,10 +1990,10 @@ public sealed class ControlLoop : IDisposable
 
                 if (mustWrite)
                 {
-                    var requests = hub.Channels.Where(c => !c.IsPump).ToDictionary(
+                    var requests = hub.Channels.Where(c => c.ControlsSpeed).ToDictionary(
                         c => c.Channel,
                         c => TryGetPulse(hub.SerialNumber, c.Channel) ? 100 : duty);
-                    hub.WriteFixedDuties(requests, pumpDuty);
+                    hub.WriteFixedDuties(requests);
                 }
 
                 var speeds = hub.ReadSpeeds().Where(s => s.Rpm is not null).ToDictionary(s => s.Channel);
@@ -2688,9 +2002,7 @@ public sealed class ControlLoop : IDisposable
                 // LED data on this hardware (verified with `link ledtest`). When a channel's tach
                 // comes alive mid-session — the owner reseated a junction — pulse LED power so the
                 // hub re-registers the fan, and re-send colors immediately.
-                var fanChannels = hub.Channels
-                    .Where(c => !c.IsPump && c.Info?.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed) == true)
-                    .ToList();
+                var fanChannels = hub.Channels.Where(c => c.ControlsSpeed).ToList();
                 var degraded = fanChannels.Where(c => !speeds.ContainsKey(c.Channel))
                     .Select(c => c.Channel).OrderBy(c => c).ToList();
                 var responsive = fanChannels.Where(c => speeds.ContainsKey(c.Channel))
@@ -2732,19 +2044,13 @@ public sealed class ControlLoop : IDisposable
                         + "or swap the stack onto the other Link port");
                 }
 
-                foreach (var channel in hub.Channels)
+                foreach (var channel in fanChannels)
                 {
-                    if (channel.Info?.Flags.HasFlag(LinkDeviceFlags.ControlsSpeed) != true)
-                    {
-                        continue;
-                    }
-
                     readings.Add(new DeviceReading(
                         "Corsair",
                         $"{channel.Name} (ch{channel.Channel} · hub {hub.SerialNumber[..4]})",
                         speeds.TryGetValue(channel.Channel, out var s) ? s.Rpm : null,
-                        channel.IsPump ? pumpDuty : TryGetPulse(hub.SerialNumber, channel.Channel) ? 100 : duty,
-                        channel.IsPump,
+                        TryGetPulse(hub.SerialNumber, channel.Channel) ? 100 : duty,
                         channel.Id,
                         hub.SerialNumber,
                         channel.Channel));
@@ -2756,8 +2062,8 @@ public sealed class ControlLoop : IDisposable
                 && (_hubTimeoutStreak[hub.SerialNumber] = _hubTimeoutStreak.GetValueOrDefault(hub.SerialNumber) + 1) < HubTimeoutsBeforeDrop)
             {
                 // One missed reply (a 500 ms read timeout) used to close the session — and closing
-                // puts the hub back in hardware mode, so the pump reservoir flashed its built-in
-                // rainbow for the ~10 s until rediscovery reopened it (#74). The hub keeps the duties
+                // puts the hub back in hardware mode, so its chain flashed the built-in rainbow
+                // for the ~10 s until rediscovery reopened it (#74). The hub keeps the duties
                 // already written, so ride out a couple of timeouts on the open session instead.
                 warnings.Add($"Link hub {hub.SerialNumber[..8]}… missed a reply ({ex.Message}) — retrying next tick");
                 _log?.Invoke($"Link hub {hub.SerialNumber[..8]}… missed a reply ({ex.Message}) — keeping the session, retrying next tick");
@@ -2767,7 +2073,7 @@ public sealed class ControlLoop : IDisposable
                 _hubTimeoutStreak.Remove(hub.SerialNumber);
                 warnings.Add($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
                 // also into the log — this removal used to be invisible post-mortem, and on a
-                // multi-hub rig it silently orphaned the pump hub for the rest of the session
+                // multi-hub rig it silently orphaned a hub for the rest of the session
                 _log?.Invoke($"Link hub {hub.SerialNumber[..8]}… failed: {ex.Message} — closed, rediscovery reopens it within ~15 s");
                 hub.Dispose();
                 _hubs.Remove(hub);
@@ -2777,7 +2083,7 @@ public sealed class ControlLoop : IDisposable
 
         if (mustWrite)
         {
-            _lastWrittenCorsairDuty = writeKey;
+            _lastWrittenCorsairDuty = duty;
             _ticksSinceCorsairWrite = 0;
         }
     }
@@ -2884,7 +2190,6 @@ public sealed class ControlLoop : IDisposable
                         $"SL V3 group {device.MacText[..4]} ({device.FanCount} fans)",
                         fresh && rpms.Count > 0 ? (int)rpms.Average() : null,
                         duty,
-                        IsPump: false,
                         device.MacText));
                 }
             }
@@ -2925,7 +2230,7 @@ public sealed class ControlLoop : IDisposable
                 var shown = fan.Family == "GPU" && _headers.GpuOnCardControl
                     ? (int)Math.Round(fan.CurrentPercent ?? 0)
                     : applied;
-                readings.Add(new DeviceReading(fan.Family, fan.Name, fan.Rpm, shown, IsPump: false, fan.Id));
+                readings.Add(new DeviceReading(fan.Family, fan.Name, fan.Rpm, shown, fan.Id));
             }
         }
         catch (Exception ex)
@@ -2950,7 +2255,7 @@ public sealed class ControlLoop : IDisposable
         {
             foreach (var hub in _hubs)
             {
-                var requests = hub.Channels.Where(c => !c.IsPump)
+                var requests = hub.Channels.Where(c => c.ControlsSpeed)
                     .ToDictionary(c => c.Channel, _ => SafetyLimits.FailsafeDutyPercent);
                 hub.WriteFixedDuties(requests);
             }

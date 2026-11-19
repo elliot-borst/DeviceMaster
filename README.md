@@ -1,16 +1,17 @@
 # DeviceMaster
 
 A custom Windows application that replaces Corsair iCUE, Lian Li L-Connect, and Turzx vendor
-software: fan/pump control, RGB, and custom LCD dashboards over raw HID/WinUSB/serial —
-no vendor software or services at runtime.
+software: fan control, RGB, and a Turzx LCD dashboard over raw HID/WinUSB/serial —
+no vendor software or services at runtime. Air cooling only: pumps, coolant sensors and
+pump/fan LCD panels are not supported (a Link chain with a pump on it is left to the hub).
 
 ## Supported hardware
 
 | Family | Devices | Status |
 |---|---|---|
-| Corsair iCUE LINK | System Hub (`1B1C:0C3F`), pump/res LCD module (`1B1C:0C43`) | fan control + telemetry working; RGB/LCD planned |
-| Lian Li UNI FAN SL V3 wireless | TX/RX dongles (`0416:8040/8041`), per-fan LCD nodes (`1CBE:0005`) | fan control + telemetry working; RGB/LCD planned |
-| Turzx / Turing smart screens | 8.8" (`1A86:CA88`) and family | planned (Stage 5) |
+| Corsair iCUE LINK | System Hub (`1B1C:0C3F`) with fans on the chain | fan control, telemetry and RGB |
+| Lian Li UNI FAN SL V3 wireless | TX/RX dongles (`0416:8040/8041`) | fan control, telemetry and RGB (the per-fan LCDs are not driven) |
+| Turzx / Turing smart screens | 8.8" (`1A86:CA88`) | live metrics dashboard |
 
 Details and protocol notes: [docs/SUPPORTED-DEVICES.md](docs/SUPPORTED-DEVICES.md) ·
 Roadmap: [docs/PLAN.md](docs/PLAN.md) · Protocol sources: [docs/REFERENCES.md](docs/REFERENCES.md)
@@ -38,7 +39,7 @@ DeviceMaster.App.exe discover
 # poll CPU/GPU/motherboard sensors (run elevated for CPU temps)
 DeviceMaster.App.exe monitor --seconds 2 --count 5
 
-# Corsair iCUE Link hubs: chain devices, RPMs, coolant temp
+# Corsair iCUE Link hubs: chain devices, RPMs, temps
 DeviceMaster.App.exe link status
 DeviceMaster.App.exe link set --duty 65 --hold 10
 
@@ -49,10 +50,11 @@ DeviceMaster.App.exe slv3 set --duty 65 --hold 10
 
 (From source, prefix with `dotnet run --project src/DeviceMaster.App --`.)
 
-## Safety (built for water-cooled systems — read before touching device code)
+## Safety (read before touching device code)
 
-- Pump duty is hard-floored (50%) and any error state drives 100%.
-- Sensor failure ⇒ fans and pump to 100%.
+- Sensor failure or an implausible temperature ⇒ every fan to 100%; any error state drives 100%.
+- Pumps are never driven: a Link chain carrying a pump or other liquid-cooling device is not
+  written to at all, and a Lian Li wireless AIO is never sent a duty.
 - Devices revert to hardware-default behaviour if the app dies (verified per family;
   SL V3 fans revert by design when the keepalive stops, Link hubs are restored to
   hardware mode on exit).

@@ -15,12 +15,11 @@ namespace DeviceMaster.App.Headless;
 /// Headless (Linux/container) entry point. Same device sessions and safety primitives as the
 /// Windows app; no tray, no WPF — console commands plus the `loop` daemon that runs in Docker.
 ///
-///   devicemaster discover                        enumerate hubs, LCD, GPU i2c, sensors
+///   devicemaster discover                        enumerate hubs, GPU i2c, sensors
 ///   devicemaster status                          hub tree, RPMs, temps (read; restores hardware mode)
-///   devicemaster speed --duty 65 [--pump 80] [--hold 10]
+///   devicemaster speed --duty 65 [--hold 10]
 ///   devicemaster rgb --hex 8000FF [--off] [--gpu]
 ///   devicemaster ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-10]
-///   devicemaster lcd metrics [--metric CPU_TEMP] [--hold 10] [--brightness 80]
 ///   devicemaster loop [--config /config/config.json]
 /// </summary>
 internal static class Program
@@ -54,7 +53,6 @@ internal static class Program
                 "speed" => RunSpeed(rest, trace),
                 "rgb" => RunRgb(rest, trace),
                 "ene" => RunEne(rest),
-                "lcd" => RunLcd(rest, trace),
                 "loop" => RunLoop(rest, trace),
                 "web" => RunWeb(rest, trace),
                 "hub" => RunHub(rest),
@@ -79,13 +77,11 @@ internal static class Program
         Console.WriteLine("""
             DeviceMaster (headless / Linux)
 
-              discover                          enumerate hubs, pump LCD, GPU i2c, sensors
+              discover                          enumerate hubs, GPU i2c, sensors
               status                            hub tree with RPMs/temps; restores hardware mode
-              speed --duty N [--pump-duty M] [--hold SECONDS]
+              speed --duty N [--hold SECONDS]
               rgb --hex 8000FF [--off] [--gpu]
               ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-N]
-              lcd <off|black|white|metrics> [--metric COOLANT|CPU_TEMP|GPU_TEMP|FAN_DUTY|PUMP_DUTY|PUMP_RPM]
-                  [--hold SECONDS] [--brightness PERCENT]
               loop [--config PATH]              run the 1 Hz control loop
               web [--config PATH] --port 27004  control loop + web dashboard (/, /status.json)
               hub [--config /config/hub.json] [--state PATH] [--port 27080] [--bind ADDR]  fleet hub: Servers overview + fleet settings (no hardware)
@@ -190,24 +186,6 @@ internal static class Program
         if (!foundAny)
         {
             Console.WriteLine("  (none — check --privileged / hidraw visibility)");
-        }
-
-        Console.WriteLine("== pump/res LCD ==");
-        var lcds = CorsairLcdDevice.FindDevices();
-        if (lcds.Count == 0)
-        {
-            Console.WriteLine("  (none)");
-        }
-
-        foreach (var lcd in lcds)
-        {
-            try
-            {
-                Console.WriteLine($"  {lcd.GetSerialNumber()}");
-            }
-            catch
-            {
-            }
         }
 
         Console.WriteLine("== NVIDIA i2c adapters (GPU RGB) ==");
@@ -316,8 +294,6 @@ internal static class Program
             return 1;
         }
 
-        var pumpText = GetOption(args, "--pump-duty") ?? GetOption(args, "--pump");
-        var pumpDuty = pumpText is not null && int.TryParse(pumpText, out var p) ? p : 100;
         var holdText = GetOption(args, "--hold");
         var holdSeconds = holdText is not null && int.TryParse(holdText, out var h) ? h : 0;
 
@@ -332,18 +308,9 @@ internal static class Program
         {
             foreach (var hub in hubs)
             {
-                var requested = new Dictionary<int, int>();
-                foreach (var channel in hub.Channels)
-                {
-                    if (!channel.IsPump && channel.Info is { Flags: var f }
-                        && f.HasFlag(LinkDeviceFlags.ControlsSpeed))
-                    {
-                        requested[channel.Channel] = duty;
-                    }
-                }
-
-                var written = hub.WriteFixedDuties(requested, pumpDuty);
-                Console.WriteLine($"hub {hub.SerialNumber[..12]}…: {written} channels at fans={duty}% pump={pumpDuty}%");
+                var requested = hub.Channels.Where(c => c.ControlsSpeed).ToDictionary(c => c.Channel, _ => duty);
+                var written = hub.WriteFixedDuties(requested);
+                Console.WriteLine($"hub {hub.SerialNumber[..12]}…: {written.Count} channels at fans={duty}%");
             }
 
             if (holdSeconds > 0)
@@ -436,80 +403,6 @@ internal static class Program
 
         device.ApplyStaticColor((byte)r, (byte)g, (byte)b, persist);
         Console.WriteLine($"GPU ENE ({device.Version}, {device.LedCount} LEDs on {path}) -> #{r:X2}{g:X2}{b:X2}{(persist ? " [persisted to flash]" : "")}");
-        return 0;
-    }
-
-    private static int RunLcd(List<string> args, bool trace)
-    {
-        if (args.Count == 0)
-        {
-            Console.WriteLine("lcd: <off|black|white|metrics> required");
-            return 1;
-        }
-
-        var modeText = args[0].ToLowerInvariant();
-        args.RemoveAt(0);
-        var holdText = GetOption(args, "--hold");
-        var holdSeconds = holdText is not null && int.TryParse(holdText, out var h) ? h : 10;
-        var brightnessText = GetOption(args, "--brightness");
-        var brightness = brightnessText is not null && int.TryParse(brightnessText, out var b) ? b : 100;
-        var metricText = GetOption(args, "--metric");
-
-        var device = CorsairLcdDevice.FindDevices().FirstOrDefault();
-        if (device is null)
-        {
-            Console.WriteLine("No pump/res LCD found.");
-            return 1;
-        }
-
-        using var lcd = CorsairLcdDevice.Open(device);
-        lcd.SetBrightness(modeText == "off" ? 0 : brightness);
-
-        switch (modeText)
-        {
-            case "off":
-                Console.WriteLine("backlight off");
-                break;
-
-            case "black":
-                lcd.SendJpegFrame(LcdFrames.Solid(480, 480, 0, 0, 0));
-                Console.WriteLine("solid black frame");
-                break;
-
-            case "white":
-                lcd.SendJpegFrame(LcdFrames.Solid(480, 480, 255, 255, 255));
-                Console.WriteLine("solid white frame");
-                break;
-
-            case "metrics":
-                var metric = metricText?.ToUpperInvariant() switch
-                {
-                    "CPU_TEMP" => LcdMetric.CpuTemp,
-                    "GPU_TEMP" => LcdMetric.GpuTemp,
-                    "FAN_DUTY" => LcdMetric.FanDuty,
-                    "PUMP_DUTY" => LcdMetric.PumpDuty,
-                    "PUMP_RPM" => LcdMetric.PumpRpm,
-                    _ => LcdMetric.CpuTemp,
-                };
-                var cpu = Hwmon.CpuTemperatureC();
-                var gpu = NvidiaSmi.ReadFirst();
-                var (label, value, unit) = metric switch
-                {
-                    LcdMetric.CpuTemp => ("CPU", cpu?.ToString("0") ?? "--", "°C"),
-                    LcdMetric.GpuTemp => ("GPU", gpu?.TemperatureC.ToString("0") ?? "--", "°C"),
-                    _ => ("CPU", cpu?.ToString("0") ?? "--", "°C"),
-                };
-                lcd.SendJpegFrame(LcdMetricRenderer.Render(480, 480, label, value, unit, (128, 0, 255)));
-                Console.WriteLine($"metrics frame: {label} {value} {unit}");
-                break;
-
-            default:
-                Console.WriteLine($"lcd: unknown mode '{modeText}'");
-                return 1;
-        }
-
-        Console.WriteLine($"held {holdSeconds} s (panel keeps the frame)");
-        Thread.Sleep(holdSeconds * 1000);
         return 0;
     }
 

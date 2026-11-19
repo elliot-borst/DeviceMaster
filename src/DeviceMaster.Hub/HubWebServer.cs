@@ -531,9 +531,9 @@ public sealed class HubWebServer : IDisposable
     private static string Describe(FleetSection section, FleetProfile p) => section switch
     {
         FleetSection.Cooling => p.Mode == ControlMode.Manual
-            ? $"fixed {p.ManualDutyPercent}%, pump {p.PumpDutyPercent}%"
-            : $"curve on CPU/GPU {string.Join(" → ", p.CurvePoints.Select(c => $"{c.TemperatureC:0} °C {c.DutyPercent}%"))}, pump {p.PumpDutyPercent}%",
-        FleetSection.Screens => $"fan/pump screens {p.LcdScreens} {p.LcdBrightness}%, Turzx {p.TurzxScreen} {p.TurzxBrightness}%",
+            ? $"fixed {p.ManualDutyPercent}%"
+            : $"curve on CPU/GPU {string.Join(" → ", p.CurvePoints.Select(c => $"{c.TemperatureC:0} °C {c.DutyPercent}%"))}",
+        FleetSection.Screens => $"Turzx {p.TurzxScreen} {p.TurzxBrightness}%",
         _ => p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
             : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Rainbow ? $"rainbow speed {p.RgbSpeed}, {p.RgbBrightness}%"
             : $"#{p.RgbR:X2}{p.RgbG:X2}{p.RgbB:X2}, {p.RgbBrightness}%",
@@ -668,8 +668,8 @@ const ago = s => s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s/60)} min ago
 function hottest(m){ const v = [m.CpuTemperatureC, m.GpuTemperatureC].filter(x => x != null); return v.length ? Math.max(...v) : null; }
 function caps(c){
   if (!c) return "";
-  const names = { Pump:"Pump", CorsairHubs:"Corsair", LianLiFans:"Lian Li", MotherboardFans:"Board fans", MotherboardRgb:"Board RGB",
-    RamRgb:"RAM RGB", GpuRgb:"GPU RGB", PumpLcd:"Pump LCD", FanLcds:"Fan LCDs", Turzx:"Turzx" };
+  const names = { CorsairHubs:"Corsair", LianLiFans:"Lian Li", MotherboardFans:"Board fans", MotherboardRgb:"Board RGB",
+    RamRgb:"RAM RGB", GpuRgb:"GPU RGB", Turzx:"Turzx" };
   return `<div class="chips">${Object.keys(names).filter(k => c[k]).map(k => `<span class="chip">${names[k]}</span>`).join("")}</div>`;
 }
 function sidebar(){
@@ -685,8 +685,6 @@ function stats(m, big){
     <div class="stat"><div class="k">CPU</div><div class="v">${deg(m.CpuTemperatureC)}</div></div>
     <div class="stat"><div class="k">GPU</div><div class="v">${deg(m.GpuTemperatureC)}</div></div>
     <div class="stat"><div class="k">Fans</div><div class="v">${pct(m.FanDutyPercent)}</div></div>
-    ${m.CoolantTemperatureC != null ? `<div class="stat"><div class="k">Coolant</div><div class="v">${deg(m.CoolantTemperatureC)}</div></div>` : ""}
-    ${m.PumpDutyPercent != null ? `<div class="stat"><div class="k">Pump</div><div class="v">${pct(m.PumpDutyPercent)}</div></div>` : ""}
   </div>`;
 }
 function banners(m){
@@ -758,8 +756,8 @@ function machineLightingCard(m){
 }
 /* ---- fleet cooling + screens: same pattern as lighting ---- */
 const SECTION_KEYS = {
-  cooling: ["Mode","ManualDutyPercent","PumpDutyPercent","Source","CurvePoints"],
-  screens: ["LcdScreens","LcdBrightness","TurzxScreen","TurzxBrightness","PumpScreenMetric","FanScreenMetric","TurzxMetric"],
+  cooling: ["Mode","ManualDutyPercent","Source","CurvePoints"],
+  screens: ["TurzxScreen","TurzxBrightness","TurzxMetric"],
 };
 const SECTION_NAME = { cooling:"Cooling", screens:"Screens" };
 const managedSection = s => !!(settings && settings.state && (settings.state.Managed || []).includes(SECTION_NAME[s]));
@@ -772,15 +770,11 @@ function sendSection(s, scope, v){
   return scope == null ? put(`/api/fleet/settings/${s}`, { ...v, managed:true })
                        : put(`/api/fleet/machines/${encodeURIComponent(scope)}/${s}`, v);
 }
-const anyPump = () => machines.some(m => m.Capabilities && m.Capabilities.Pump);
 function coolingControls(scope, v){
   const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), fixed = v.Mode === "Manual";
   const set = patch => `sendSection("cooling", ${S}, Object.assign(${J}, ${patch}))`;
   const pts = (v.CurvePoints || []).length >= 2 ? v.CurvePoints : [{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}];
   const id = scope == null ? "fc" : "mc";
-  const pumpRow = (scope == null ? anyPump() : (machines.find(m => m.Name === scope)?.Capabilities?.Pump)) ? `<div class="ctl"><label>Pump</label>
-      <input type="range" min="50" max="100" value="${v.PumpDutyPercent ?? 100}" oninput='document.getElementById("${id}-pump").textContent=this.value+"%"' onchange='${set(`{PumpDutyPercent:+this.value}`)}'>
-      <span class="val" id="${id}-pump">${v.PumpDutyPercent ?? 100}%</span><span class="note" style="margin:0">never below 50 %</span></div>` : "";
   return `<div class="ctl"><label>Fans</label><div class="seg">
       <button class="${fixed?"":"on"}" onclick='${set(`{Mode:"Curve"}`)}'>Curve</button>
       <button class="${fixed?"on":""}" onclick='${set(`{Mode:"Manual"}`)}'>Fixed</button></div></div>
@@ -792,26 +786,21 @@ function coolingControls(scope, v){
         <input id="${id}-d1" type="number" min="0" max="100" value="${pts[1].DutyPercent}" style="width:58px"> % at
         <input id="${id}-t1" type="number" min="21" max="100" value="${pts[1].TemperatureC}" style="width:62px"> °C
         <div class="seg"><button class="on" onclick='const g=k=>+document.getElementById("${id}-"+k).value;${set(`{CurvePoints:[{TemperatureC:g("t0"),DutyPercent:g("d0")},{TemperatureC:g("t1"),DutyPercent:g("d1")}]}`)}'>Apply</button></div></div>
-      <div class="note">Each server follows the hotter of its own CPU and GPU (a server without a GPU uses its CPU). An unreadable temperature still means 100 %.</div>`}
-    ${pumpRow}`;
+      <div class="note">Each server follows the hotter of its own CPU and GPU (a server without a GPU uses its CPU). An unreadable temperature still means 100 %.</div>`}`;
 }
 function screensControls(scope, v){
   const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), id = scope == null ? "fs" : "ms";
   const set = patch => `sendSection("screens", ${S}, Object.assign(${J}, ${patch}))`;
-  const lcdOn = v.LcdScreens === "Metrics", tzOn = v.TurzxScreen === "Metrics";
-  return `<div class="ctl"><label>Fan &amp; pump screens</label><div class="seg">
-      <button class="${lcdOn?"on":""}" onclick='${set(`{LcdScreens:"Metrics"}`)}'>On</button>
-      <button class="${v.LcdScreens==="Off"?"on":""}" onclick='${set(`{LcdScreens:"Off"}`)}'>Off</button></div>
-      <input type="range" min="0" max="100" value="${v.LcdBrightness ?? 100}" oninput='document.getElementById("${id}-lb").textContent=this.value+"%"' onchange='${set(`{LcdBrightness:+this.value}`)}'><span class="val" id="${id}-lb">${v.LcdBrightness ?? 100}%</span></div>
-    <div class="ctl"><label>Turzx dashboard</label><div class="seg">
+  const tzOn = v.TurzxScreen === "Metrics";
+  return `<div class="ctl"><label>Turzx dashboard</label><div class="seg">
       <button class="${tzOn?"on":""}" onclick='${set(`{TurzxScreen:"Metrics"}`)}'>On</button>
       <button class="${v.TurzxScreen==="Off"?"on":""}" onclick='${set(`{TurzxScreen:"Off"}`)}'>Off</button></div>
       <input type="range" min="0" max="100" value="${v.TurzxBrightness ?? 100}" oninput='document.getElementById("${id}-tb").textContent=this.value+"%"' onchange='${set(`{TurzxBrightness:+this.value}`)}'><span class="val" id="${id}-tb">${v.TurzxBrightness ?? 100}%</span></div>`;
 }
 const CONTROLS = { cooling: coolingControls, screens: screensControls };
 const DEFAULTS = {
-  cooling: { Mode:"Curve", ManualDutyPercent:50, PumpDutyPercent:100, Source:"Hottest", CurvePoints:[{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}] },
-  screens: { LcdScreens:"Metrics", LcdBrightness:100, TurzxScreen:"Metrics", TurzxBrightness:100 },
+  cooling: { Mode:"Curve", ManualDutyPercent:50, Source:"Hottest", CurvePoints:[{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}] },
+  screens: { TurzxScreen:"Metrics", TurzxBrightness:100 },
 };
 function fleetSectionCard(s, title){
   if (!settings || !settings.writable) return "";
@@ -823,7 +812,7 @@ function fleetSectionCard(s, title){
 }
 function machineSectionCard(s, title, m){
   if (!settings || !settings.writable || !managedSection(s)) return "";
-  if (s === "screens" && m.Capabilities && !(m.Capabilities.PumpLcd || m.Capabilities.FanLcds || m.Capabilities.Turzx)) return "";
+  if (s === "screens" && m.Capabilities && !m.Capabilities.Turzx) return "";
   const own = ownSection(m.Name, s), S = JSON.stringify(m.Name);
   return `<div class="card light" style="margin-top:14px"><div class="row"><span class="cname">${title}</span>
       <span class="cmeta"><div class="seg"><button class="${own?"":"on"}" onclick='put("/api/fleet/machines/"+encodeURIComponent(${S})+"/${s}", {follow:true})'>Follow fleet</button>
@@ -849,7 +838,7 @@ function machinePage(m){
   if (d && d.Warnings && d.Warnings.length) html += `<div class="card" style="margin-top:14px"><b>Warnings</b><ul class="warn">${d.Warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
   if (d && d.Notes && d.Notes.length) html += `<div class="sub" style="margin-top:12px">${d.Notes.map(n => `ℹ ${esc(n)}`).join("<br>")}</div>`; // settled facts, not warnings
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
-    d.Devices.filter(x => !x.IsScreen).map(x => `<tr><td>${esc(x.Name)}${x.IsPump ? " (pump)" : ""}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
+    d.Devices.map(x => `<tr><td>${esc(x.Name)}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
   return html;
 }
 async function powerAct(name, action){

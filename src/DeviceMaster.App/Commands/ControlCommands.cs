@@ -10,13 +10,13 @@ internal static class ControlCommands
         var mode = GetString(args, "--mode") ?? "curve";
         var duty = GetInt(args, "--duty") ?? 50;
         var seconds = GetInt(args, "--seconds") ?? 15;
-        var source = GetString(args, "--source") ?? "coolant";
+        var source = GetString(args, "--source") ?? "hottest";
 
         var settings = new ControlSettings
         {
             Mode = mode.Equals("manual", StringComparison.OrdinalIgnoreCase) ? ControlMode.Manual : ControlMode.Curve,
             ManualDutyPercent = duty,
-            Source = Enum.TryParse<CurveSource>(source, ignoreCase: true, out var parsed) ? parsed : CurveSource.Coolant,
+            Source = Enum.TryParse<CurveSource>(source, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed) ? parsed : CurveSource.Hottest,
         };
 
         Log.Information("Control loop: mode={Mode} source={Source} for {Seconds}s (Ctrl+C safe — hardware reverts)",
@@ -38,8 +38,8 @@ internal static class ControlCommands
             var families = status.Devices.GroupBy(d => d.Family)
                 .Select(g =>
                 {
-                    var rpms = g.Where(d => d.Rpm is not null && !d.IsPump).Select(d => d.Rpm!.Value).ToList();
-                    return $"{g.Key}: {g.Count(d => !d.IsPump)} fan targets"
+                    var rpms = g.Where(d => d.Rpm is not null).Select(d => d.Rpm!.Value).ToList();
+                    return $"{g.Key}: {g.Count()} fan targets"
                         + (rpms.Count > 0 ? $" ~{rpms.Average():F0} rpm" : "");
                 });
             var failsafe = status.FailsafeActive ? "  [FAILSAFE]" : "";

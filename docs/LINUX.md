@@ -8,8 +8,7 @@ designed to run in a Docker container on a server.
 
 | Part | Windows app | Headless (Linux) |
 |---|---|---|
-| iCUE LINK hubs (fans + pump: duty, telemetry, RGB) | yes | **yes** (HidSharp → hidraw) |
-| Pump / radiator LCD (JPEG frames, brightness) | yes | **yes** (same HID session) |
+| iCUE LINK hubs (fans: duty, telemetry, RGB; a chain with a pump is left alone) | yes | **yes** (HidSharp → hidraw) |
 | GPU RGB via ENE controller (ASUS boards, i2c 0x67) | yes | **yes** (raw i2c-dev, repeated starts) |
 | CPU/GPU temperature | LHM / nvidia | kernel hwmon (k10temp/coretemp) + nvidia-smi |
 | Turzx 8.8" screen (system dashboard: local LLM, GPU + fans, CPU + RAM + cooler) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
@@ -29,11 +28,10 @@ designed to run in a Docker container on a server.
   (thin wrapper + pure line parser), `LinuxSensorSource` (`ISensorSource`; throws when no
   temperature source is readable — the loop treats that as the failsafe trigger).
 - `src/DeviceMaster.App.Headless` — the CLI and `HeadlessLoop` (the 1 Hz daemon).
-- `src/DeviceMaster.Lcd.Skia` — LCD frame rendering with SkiaSharp (the same math as the
-  Windows `LcdMetricRenderer`/`LcdFrames`, but System.Drawing is Windows-only on .NET 9).
-  Referenced by the headless app only; the Windows app keeps its System.Drawing renderers.
+- `src/DeviceMaster.Lcd.Skia` — the Turzx dashboard rendered with SkiaSharp (System.Drawing
+  is Windows-only on .NET 9).
 
-All of it reuses the shared device sessions (`LinkHub`, `CorsairLcdDevice`, `EneRgbDevice`)
+All of it reuses the shared device sessions (`LinkHub`, `EneRgbDevice`)
 and safety code (`SafetyGuard`, `SensorValidity`, `KnownDeviceRegistry`) from the Windows
 projects — no protocol code is duplicated.
 
@@ -61,13 +59,11 @@ whole solution stays one TFM family.
 ## CLI
 
 ```
-devicemaster discover                          enumerate hubs, pump LCD, GPU i2c, sensors
+devicemaster discover                          enumerate hubs, GPU i2c, sensors
 devicemaster status                            hub tree with RPMs/temps; restores hardware mode
-devicemaster speed --duty 65 [--pump-duty 80] [--hold 10]
+devicemaster speed --duty 65 [--hold 10]
 devicemaster rgb --hex 8000FF [--off] [--gpu]  # --gpu also drives the ENE chip
 devicemaster ene [--hex 8000FF] [--persist] [--i2c /dev/i2c-10]
-devicemaster lcd <off|black|white|metrics> [--metric COOLANT|CPU_TEMP|GPU_TEMP|FAN_DUTY|PUMP_DUTY|PUMP_RPM]
-    [--hold 10] [--brightness 80]
 devicemaster loop [--config /config/config.json]   # the daemon
 devicemaster web [--config /config/config.json] --port 27004 [--bind 100.x.y.z --bind 127.0.0.1]
     # --bind (repeatable) limits the dashboard to those addresses, e.g. tailnet IP + localhost
@@ -100,14 +96,14 @@ docker run -d --name devicemaster \
   per-channel RPM table. `loop` mode is unchanged for dashboard-less setups.
 
 - `--privileged` (or `--device /dev/hidraw*` + `--device /dev/i2c-*`) is required: hidraw
-  for the hubs/LCD, i2c-dev for the GPU ENE chip.
+  for the hubs, i2c-dev for the GPU ENE chip.
 - **`-v /run/udev:/run/udev:ro` is required on most hosts**: HidSharp enumerates HID
   devices through libudev, which reads the udev database (`/run/udev/data`). A container
   without its own udev sees the `/dev/hidraw*` nodes but enumerates **zero devices**
   without this mount.
 - Config lives at `DEVICEMASTER_CONFIG` (default `/config/config.json`). On first run a
   defaults file is written; the loop **re-reads the file on change** — edit it live and the
-  next tick picks it up (no restart for duty/RGB/LCD changes).
+  next tick picks it up (no restart for duty/RGB/screen changes).
 - SIGTERM/SIGINT are handled in-process: the loop stops writing and restores every hub to
   hardware mode before exiting (~1 s).
 - An optional status snapshot is written to `StatusFile` every `StatusFileEverySeconds` —
@@ -116,7 +112,7 @@ docker run -d --name devicemaster \
 ## Configuration (headless block)
 
 Same JSON shape as the Windows app's `Control` section (mode, source, `CurvePoints`,
-manual duty, pump duty, RGB, LCD), plus:
+manual duty, RGB, Turzx screen), plus:
 
 | Field | Meaning |
 |---|---|
@@ -131,8 +127,9 @@ manual duty, pump duty, RGB, LCD), plus:
 
 ## Safety (same rules as the Windows app — see CLAUDE.md)
 
-- Pump duty is hard-floored at 50%; any write error ⇒ pump 100%.
-- Sensor read failure or implausible temperature (≤ 0 °C or > 115 °C) ⇒ fans and pump to 100%.
+- Sensor read failure or implausible temperature (≤ 0 °C or > 115 °C) ⇒ fans to 100%.
+- Pumps are never driven: a hub whose chain carries a pump or other liquid-cooling device has
+  unrecognized devices and is not managed (it keeps its hardware curve).
 - Writes only go to devices the `KnownDeviceRegistry` identifies (VID/PID gate).
 - A hub session that starts failing is dropped (it may have lost power) and reopened on a
   later tick; while a hub is absent, the remaining hubs keep being controlled.
@@ -169,11 +166,13 @@ manual duty, pump duty, RGB, LCD), plus:
   Note: before #21 DeviceMaster's own raw-transfer code sent the wrong ioctl (`I2C_TENBIT`
   instead of `I2C_RDWR`), which also fails with `EINVAL`, so earlier "unusable bus" sightings
   should be rechecked with a current build.
-- LCD frames render through SkiaSharp (`DeviceMaster.Lcd.Skia`); the image ships
+- The Turzx dashboard renders through SkiaSharp (`DeviceMaster.Lcd.Skia`); the image ships
   `fonts-dejavu-core` because the base image has no fonts.
 - `nvidia-smi` is not in the image. Without a GPU temperature source, GPU source
   temperature is simply unavailable (failsafe engages if you selected GPU as the curve
-  source — use Coolant or CPU).
+  source — use CPU or Hottest; Hottest falls back to the CPU on a machine that never showed a GPU).
+- An older config with `"Source": "Coolant"` loads as `Hottest` (with its Hottest curve, or
+  the default one); pump and pump-LCD fields in it are ignored.
 
 ## Air-cooled boxes: motherboard fans, Aura, Turzx, local LLM
 
@@ -181,7 +180,7 @@ Config keys (see `HeadlessConfig`): `MotherboardFans` (default true), `AuraEnabl
 `StrataUrl` + `StrataKeyFile` (env-style file with `API_KEY=`; only `GET /metrics` is ever sent),
 `DisplayName` (shown on the screen). The Turzx screen follows `Control.TurzxScreen`
 (`Unmanaged` / `Off` / `Metrics`), `TurzxBrightness` and `TurzxRotation` (180 = mounted upside down).
-Use `Control.Source` `Cpu` (or `Gpu`) when there is no coolant sensor.
+Curve sources are `Cpu`, `Gpu` and `Hottest` (the default).
 
 - **Fan driver:** load the kernel's Super I/O driver (`modprobe nct6775`, persist with
   `/etc/modules-load.d/nct6775.conf`). Only headers with a spinning fan at start-up are controlled.

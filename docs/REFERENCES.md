@@ -5,19 +5,15 @@ git-ignored `refs/` folder when needed.
 
 ## Corsair iCUE LINK System Hub (`1B1C:0C3F`)
 
-- **EvanMulawski/FanControl.CorsairLink** (C#) — primary for Stage 1/3.
+- **EvanMulawski/FanControl.CorsairLink** (C#) — primary for Stage 1.
   `ICueLinkHubDevice` + `LinkHubDataReader`: handshake, sub-device enumeration (gives us the
-  per-hub fan map), coolant temp, RPM reads, duty writes, and the keepalive/refresh cadence.
+  per-hub fan map), temperature and RPM reads, duty writes, and the keepalive/refresh cadence.
   C# → direct port.
-- **jurkovic-nikola/OpenLinkHub** (Go) — RGB addressing per Link channel (Stage 2) and LCD
-  image framing (Stage 4).
+- **jurkovic-nikola/OpenLinkHub** (Go) — RGB addressing per Link channel (Stage 2).
 
-## Corsair pump/res LCD (`1B1C:0C43`, self-reports "XD5 ELITE LCD Pump")
+(Pump control and the pump/res LCD `1B1C:0C43` were supported once and removed in #96.)
 
-- **OpenLinkHub** `lcd/` — JPEG frames pushed over HID output reports in 1024-byte chunks
-  (matches this device's out=1024). Confirm the exact header bytes for this PID in Stage 4.
-
-## Lian Li UNI FAN SL V3 wireless (`0416:8040/8041` TX/RX, `1CBE:0005` fan nodes) — ✅ SOLVED
+## Lian Li UNI FAN SL V3 wireless (`0416:8040/8041` TX/RX) — ✅ SOLVED
 
 Protocol research completed 2026-07-06. Two MIT-licensed implementations exist; no USB
 capture needed. (OpenRGB/liquidctl have nothing for these IDs — the classic `0CF2`
@@ -38,9 +34,8 @@ Architecture (confirmed against our enumeration):
   into 4× 60-byte chunks (`[0]=0x10, [1]=chunk_idx, [2]=channel, [3]=rx_type, [4..]=chunk`).
 - **RX `0416:8041` = telemetry**: device list with MACs, RPMs (4× u16 BE at offset 28 of each
   42-byte record), current PWM, fan counts, effect index; also motherboard-PWM readback.
-- **`1CBE:0005` fan nodes = per-fan LCD streaming only** (JPEG over USB bulk, 512-byte
-  DES-CBC headers, key/IV `"slv3tuzx"`, cmd 0x65 push / 0x0E brightness / 0x0D rotate).
-  Fan speed/RGB do NOT go through these.
+- **`1CBE:0005` fan nodes = per-fan LCD streaming only** (not supported — removed in #96;
+  not in the device registry). Fan speed/RGB do NOT go through these.
 - Fan PWM payload: `0x12 0x10`, device MAC [2-7], master MAC [8-13], rx_type [14],
   channel [15], seq [16], 4 PWM bytes [17-20]. PWM value 6 = motherboard-sync mode;
   SLV3 minimum duty 14% (clamp nonzero below 0.14×255).

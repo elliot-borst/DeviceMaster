@@ -1,5 +1,5 @@
 // Linux counterpart of UsbDeviceRestarter (ServerStack #211 follow-up): the headless container
-// runs on Linux with --privileged -v /dev:/dev, so the pump hub's software replug is a sysfs
+// runs on Linux with --privileged -v /dev:/dev, so a Link hub's software replug is a sysfs
 // authorized toggle — the kernel equivalent of unplugging and reseating the device.
 
 using System.Text.RegularExpressions;
