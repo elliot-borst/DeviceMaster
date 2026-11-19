@@ -778,7 +778,23 @@ public sealed class ControlLoop : IDisposable
 
             _slv3Dead = false;
 
-            if (_slv3 is null)
+            // no Lian Li wireless kit on this machine (never had one, or it was removed): nothing to
+            // open, warn about or "recover" — a recovery would cycle the USB hub it used to share (#93).
+            // Checked once a minute, so plugging one in later is picked up.
+            if (_slv3 is null && Environment.TickCount64 >= _slv3PresenceCheckDue)
+            {
+                _slv3PresenceCheckDue = Environment.TickCount64 + 60_000;
+                var present = Slv3Controller.AnyDonglePresent();
+                if (present != _slv3Present)
+                {
+                    _log?.Invoke(present ? "control: SL V3 dongle(s) detected" : "control: no SL V3 dongles attached — Lian Li wireless control idle");
+                    _slv3OpenFailures = 0;
+                }
+
+                _slv3Present = present;
+            }
+
+            if (_slv3 is null && _slv3Present)
             {
                 // escalation of last resort — the dongle firmware sometimes wedges so hard that
                 // only a replug helps (verified live 2026-07-06); do the replug in software
@@ -2775,6 +2791,8 @@ public sealed class ControlLoop : IDisposable
         ex is TimeoutException || ex.InnerException is TimeoutException
         || ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
 
+    private long _slv3PresenceCheckDue;
+    private bool _slv3Present = true; // until the first check says otherwise
     private readonly Dictionary<string, bool> _slv3TelemetryFresh = [];
     private readonly Dictionary<string, bool> _slv3BoundState = [];
     private readonly Dictionary<string, int> _slv3UnpairedPolls = [];
