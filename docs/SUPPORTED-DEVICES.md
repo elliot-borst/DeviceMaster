@@ -165,7 +165,7 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   Verified on MAG X870E TOMAHAWK WIFI (MS-7E59). Full cause, fix, persistence (incl. Unraid) and
   sources: docs/LINUX.md → "MSI boards: system fans need `msi_fan_brute_force=1`" (#85).
 
-## Turzx 8.8" V1.x (USB `1CBE:0088`, product "TURZX1.0") — Linux ✅, Windows pending (#102)
+## Turzx 8.8" V1.x (USB `1CBE:0088`, product "TURZX1.0") — Linux ✅, Windows ✅ v133 (#102)
 
 - The newer hardware revision of the 8.8" panel: **one vendor-specific USB interface** (bulk EP 0x01 OUT /
   0x81 IN, 512-byte packets, USB 2.0 high speed) instead of the CA88 control port + gadget-serial data port
@@ -183,6 +183,11 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
 - Verified 2026-11-20 (Linux, firmware `turzx_0001_0015`): the dashboard as a ~65 KB JPEG takes ~10 ms per
   frame (the serial revision needs ~2.3 s). Never reset the device in software; one reference project saw
   that stall the whole xHCI controller.
+- Windows (v133): WinUSB (`WinUsbTurzxTransport`). The device must be opened with `FILE_FLAG_OVERLAPPED`, or
+  `WinUsb_Initialize` fails with "The handle is invalid"; synchronous pipe calls still work on that handle. The app
+  shows the gaming layout **CPU | FPS | GPU** (`TurzxDashboardFeed`, Skia renderer) at ~1 frame/s; verified with
+  `DeviceMaster.App turzx usb` on firmware `turzx_0001_0010` (~21 ms per ~73 KB frame). Exit the app first:
+  WinUSB lets one program hold the panel.
 - Linux: usbfs, no libusb; needs root, a udev rule, or a privileged container with `/dev` mounted. Test with
   `devicemaster turzx-usb [--no-llm] [--brightness N] [--seconds N] [--flip]` while the loop leaves the
   screen Unmanaged.

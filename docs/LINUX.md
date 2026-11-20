@@ -12,7 +12,7 @@ designed to run in a Docker container on a server.
 | GPU RGB via ENE controller (ASUS boards, i2c 0x67) | yes | **yes** (raw i2c-dev, repeated starts) |
 | CPU/GPU temperature | LHM / nvidia | kernel hwmon (k10temp/coretemp) + nvidia-smi |
 | Turzx 8.8" screen (system dashboard: local LLM, GPU + fans, CPU + RAM + cooler) | yes | **yes** (`/dev/ttyACM*` found via sysfs; SkiaSharp renderer) |
-| Turzx 8.8" screen, hardware revision V1.x (USB `1CBE:0088` "TURZX1.0") | not yet (#102 phase 2) | **yes** (usbfs `/dev/bus/usb/BBB/DDD`, JPEG frames; same dashboard; `turzx-usb` test command) |
+| Turzx 8.8" screen, hardware revision V1.x (USB `1CBE:0088` "TURZX1.0") | yes (v133, WinUSB; CPU / FPS / GPU) | **yes** (usbfs `/dev/bus/usb/BBB/DDD`, JPEG frames; same dashboard; `turzx-usb` test command) |
 | ASUS AURA mainboard LED controller (static / rainbow) | yes | **yes** (HidSharp → hidraw) |
 | Motherboard fan headers (Nuvoton NCT67xx Super I/O) | yes (LHM) | **yes** (hwmon `pwmN`; only headers spinning at start-up; never below 30 %; BIOS curve restored on stop / mode Off) |
 | RGB DRAM via ENE controllers (chipset SMBus) | yes | **yes** (`/dev/i2c-N` SMBus ioctls on PIIX4/I801 adapters) |
