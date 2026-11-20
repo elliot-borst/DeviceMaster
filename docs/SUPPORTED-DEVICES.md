@@ -165,6 +165,28 @@ is strictly by USB VID/PID (`KnownDeviceRegistry`) — unrecognized devices are 
   Verified on MAG X870E TOMAHAWK WIFI (MS-7E59). Full cause, fix, persistence (incl. Unraid) and
   sources: docs/LINUX.md → "MSI boards: system fans need `msi_fan_brute_force=1`" (#85).
 
+## Turzx 8.8" V1.x (USB `1CBE:0088`, product "TURZX1.0") — Linux ✅, Windows pending (#102)
+
+- The newer hardware revision of the 8.8" panel: **one vendor-specific USB interface** (bulk EP 0x01 OUT /
+  0x81 IN, 512-byte packets, USB 2.0 high speed) instead of the CA88 control port + gadget-serial data port
+  below. Windows binds it to WinUSB (interface GUID `{88BAE032-5A81-49F0-BC3D-A4FF138216D6}`).
+- **VID 1CBE is shared** (TI Luminary; Lian Li SL V3 fans use it too): DeviceMaster only opens a device whose
+  product string is `TURZX1.0`.
+- Protocol (`TurzxUsbProtocol`, ported from phstudy/turing-smart-screen-cli, MIT):
+  - A 512-byte command block: a 500-byte header (cmd, 0, `1A 6D`, LE ms-since-local-midnight, payload)
+    **DES-CBC encrypted, key = IV = `slv3tuzx`, PKCS7** (504 bytes), then zeros, then `A1 1A` in clear.
+  - One 512-byte reply per command: byte 0 echoes the command, byte 1 = 200 on success.
+  - Commands: SYNC 10 (firmware string at reply[8..40]), brightness 14 (0–100), JPEG frame 101
+    (big-endian length at header bytes 8..11, the data appended after the block in the same write,
+    1 MB max), stop video 111.
+  - DES is implemented in managed code (`DesCbc`): OpenSSL 3 only has DES in its legacy provider.
+- Verified 2026-11-20 (Linux, firmware `turzx_0001_0015`): the dashboard as a ~65 KB JPEG takes ~10 ms per
+  frame (the serial revision needs ~2.3 s). Never reset the device in software; one reference project saw
+  that stall the whole xHCI controller.
+- Linux: usbfs, no libusb; needs root, a udev rule, or a privileged container with `/dev` mounted. Test with
+  `devicemaster turzx-usb [--no-llm] [--brightness N] [--seconds N] [--flip]` while the loop leaves the
+  screen Unmanaged.
+
 ## Turzx / Turing-family smart screens
 
 | Device | VID:PID | Transport |

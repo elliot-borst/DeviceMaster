@@ -46,6 +46,14 @@ Architecture (confirmed against our enumeration):
   firmware stores and loops the animation (send once, not per frame).
 - Library: LibUsbDotNet or WinUSB P/Invoke — HidSharp cannot open these (vendor WinUSB class).
 
+## Turzx 8.8" V1.x (`1CBE:0088`, "TURZX1.0", USB bulk) — ✅ Linux (#102)
+
+- **Ported from:** [phstudy/turing-smart-screen-cli](https://github.com/phstudy/turing-smart-screen-cli) (MIT):
+  `src/turingscreencli/transport.py` and `operations.py`.
+- **Cross-checked (facts only, no code copied):** mathoudebine/turing-smart-screen-python
+  `library/lcd/lcd_comm_turing_usb.py` (GPL-3.0) and ninharp/turzx-linux `docs/PROTOCOL.md` (no licence).
+- Test vectors in `TurzxUsbProtocolTests` were generated independently with pycryptodome.
+
 ## Turzx 8.8" screen (`1A86:CA88` control + `0525:A4A7` data, serial id `CT88INCH`) — ✅ SOLVED
 
 Protocol confirmed working on real hardware 2026-07-08 (rom 1.90). It is plain rev_c
