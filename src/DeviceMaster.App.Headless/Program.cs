@@ -5,6 +5,7 @@ using DeviceMaster.Control;
 using DeviceMaster.Devices.CorsairLink;
 using DeviceMaster.Devices.CorsairLink.Protocol;
 using DeviceMaster.Devices.EneRgb;
+using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Platform.Linux;
 using DeviceMaster.Sensors.Linux;
 using Serilog;
@@ -57,6 +58,7 @@ internal static class Program
                 "web" => RunWeb(rest, trace),
                 "hub" => RunHub(rest),
                 "dashboard-preview" => RunDashboardPreview(rest),
+                "turzx-usb" => RunTurzxUsb(rest),
                 "help" or "--help" or "-h" => PrintUsageAnd(0),
                 _ => UnknownCommand(command),
             };
@@ -467,10 +469,53 @@ internal static class Program
     private static int RunDashboardPreview(List<string> args)
     {
         var output = GetOption(args, "--out") ?? "dashboard.png";
-        var busy = args.Contains("--busy");
-        var sample = new DeviceMaster.Lcd.Skia.TurzxDashboardData
+        var sample = SampleDashboard(args.Contains("--busy"), llm: !args.Contains("--no-llm"));
+        File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
+        var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);
+        Console.WriteLine($"wrote {output} (landscape 1920×480); native frame {native.Length} bytes");
+        return 0;
+    }
+
+    /// <summary>
+    /// Hardware test for a Turzx 8.8" V1.x USB panel (#102): finds it, handshakes, sets the
+    /// brightness and shows the sample dashboard for a while, timing each frame. Run it while the
+    /// loop isn't managing the screen (TurzxScreen Unmanaged), or the two would fight over it.
+    /// </summary>
+    private static int RunTurzxUsb(List<string> args)
+    {
+        if (DeviceMaster.Platform.Linux.UsbfsTurzxTransport.Find() is not { } node)
         {
-            HasLlm = true,
+            Console.WriteLine("turzx-usb: no Turzx 8.8\" V1.x panel (1CBE:0088, TURZX1.0) found");
+            return 1;
+        }
+
+        var brightness = int.TryParse(GetOption(args, "--brightness"), out var b) ? b : 80;
+        var seconds = int.TryParse(GetOption(args, "--seconds"), out var s) ? s : 10;
+        var flip = args.Contains("--flip");
+        using var screen = TurzxUsbScreen.Open(DeviceMaster.Platform.Linux.UsbfsTurzxTransport.Open(node));
+        Console.WriteLine($"turzx-usb: opened {node}, firmware {screen.Firmware ?? "?"}");
+        screen.SetBrightness(brightness);
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        var frames = 0;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        do
+        {
+            var jpeg = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNativeJpeg(SampleDashboard(busy: frames % 2 == 0, llm: !args.Contains("--no-llm")), flip);
+            var started = watch.ElapsedMilliseconds;
+            screen.SendJpeg(jpeg);
+            Console.WriteLine($"turzx-usb: frame {++frames}: {jpeg.Length / 1024} KB in {watch.ElapsedMilliseconds - started} ms");
+            Thread.Sleep(2_000);
+        }
+        while (DateTime.UtcNow < until);
+
+        return 0;
+    }
+
+    private static DeviceMaster.Lcd.Skia.TurzxDashboardData SampleDashboard(bool busy, bool llm)
+    {
+        return new DeviceMaster.Lcd.Skia.TurzxDashboardData
+        {
+            HasLlm = llm,
             LlmModel = "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
             LlmState = busy ? "generating" : "idle",
             LlmPhase = busy ? "writing a tool call: terminal" : null,
@@ -502,10 +547,6 @@ internal static class Program
             FanRpm = busy ? 1_240 : 660,
             FanDuty = busy ? 62 : 35,
         };
-        File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
-        var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);
-        Console.WriteLine($"wrote {output} (landscape 1920×480); native frame {native.Length} bytes");
-        return 0;
     }
 
     /// <summary>

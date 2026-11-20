@@ -107,8 +107,27 @@ public static class TurzxDashboard
     /// <summary>The native panel frame: 480×1920 BGRA, landscape rotated 90° (270° when flipped).</summary>
     public static byte[] RenderNative(TurzxDashboardData data, bool flip)
     {
+        using var native = RenderNativeBitmap(data, flip);
+        return native.Bytes;
+    }
+
+    /// <summary>
+    /// The native 480×1920 portrait frame as a JPEG, for the V1.x USB panel (#102), which takes
+    /// compressed frames (at most 1 MB). Quality 90 keeps the dashboard's thin text clean and lands
+    /// far under the limit (the frame is mostly flat dark colour).
+    /// </summary>
+    public static byte[] RenderNativeJpeg(TurzxDashboardData data, bool flip, int quality = 90)
+    {
+        using var native = RenderNativeBitmap(data, flip);
+        using var image = SKImage.FromBitmap(native);
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+        return encoded.ToArray();
+    }
+
+    private static SKBitmap RenderNativeBitmap(TurzxDashboardData data, bool flip)
+    {
         using var landscape = RenderLandscape(data);
-        using var native = new SKBitmap(new SKImageInfo(Height, Width, SKColorType.Bgra8888, SKAlphaType.Premul));
+        var native = new SKBitmap(new SKImageInfo(Height, Width, SKColorType.Bgra8888, SKAlphaType.Premul));
         using (var canvas = new SKCanvas(native))
         {
             if (flip)
@@ -125,7 +144,7 @@ public static class TurzxDashboard
             canvas.DrawBitmap(landscape, 0, 0);
         }
 
-        return native.Bytes;
+        return native;
     }
 
     private static SKBitmap RenderLandscape(TurzxDashboardData d)

@@ -3,6 +3,7 @@ using DeviceMaster.Devices.AsusAura;
 using DeviceMaster.Devices.MsiMysticLight;
 using DeviceMaster.Devices.Turzx;
 using DeviceMaster.Lcd.Skia;
+using DeviceMaster.Platform.Linux;
 using DeviceMaster.Sensors.Linux;
 
 namespace DeviceMaster.App.Headless;
@@ -523,7 +524,9 @@ public sealed partial class HeadlessLoop
 
     private void RunTurzx(CancellationToken token)
     {
+        // either panel generation: the serial one (CA88 + gadget-serial DATA port) or V1.x over USB (#102)
         TurzxScreen? screen = null;
+        TurzxUsbScreen? usb = null;
         int? brightness = null;
         long retryAt = 0;
         while (!token.IsCancellationRequested)
@@ -534,56 +537,87 @@ public sealed partial class HeadlessLoop
             {
                 if (mode == LcdMode.Unmanaged)
                 {
-                    screen?.Dispose();
-                    screen = null;
+                    CloseTurzx(ref screen, ref usb);
                     brightness = null;
                 }
                 else if (Environment.TickCount64 >= retryAt && _dashboard is { } data)
                 {
-                    if (screen is null)
+                    if (screen is null && usb is null)
                     {
-                        if (TurzxScreen.FindLinuxDataPort() is not { } port)
+                        if (TurzxScreen.FindLinuxDataPort() is { } port)
+                        {
+                            screen = TurzxScreen.Open(port);
+                            _log($"headless: opened Turzx 8.8\" screen on {port}");
+                        }
+                        else if (UsbfsTurzxTransport.Find() is { } node)
+                        {
+                            usb = TurzxUsbScreen.Open(UsbfsTurzxTransport.Open(node));
+                            _log($"headless: opened Turzx 8.8\" V1.x screen on {node} (firmware {usb.Firmware ?? "?"})");
+                        }
+                        else
                         {
                             retryAt = Environment.TickCount64 + TurzxRetryMs;
                             throw new InvalidOperationException("no Turzx screen found");
                         }
 
-                        screen = TurzxScreen.Open(port);
                         brightness = null;
-                        _log($"headless: opened Turzx 8.8\" screen on {port}");
                     }
 
-                    screen.FlipLandscape = cfg.Control.TurzxRotation == 180;
+                    var flip = cfg.Control.TurzxRotation == 180;
                     var wanted = mode == LcdMode.Off ? 0 : Math.Clamp(cfg.Control.TurzxBrightness, 0, 100);
                     if (brightness != wanted)
                     {
-                        screen.SetBrightness(wanted);
+                        screen?.SetBrightness(wanted);
+                        usb?.SetBrightness(wanted);
                         brightness = wanted;
                     }
 
                     if (mode != LcdMode.Off)
                     {
-                        screen.SendNativeFrame(TurzxDashboard.RenderNative(data, screen.FlipLandscape));
+                        if (screen is not null)
+                        {
+                            screen.FlipLandscape = flip;
+                            screen.SendNativeFrame(TurzxDashboard.RenderNative(data, flip));
+                        }
+                        else
+                        {
+                            usb!.SendJpeg(TurzxDashboard.RenderNativeJpeg(data, flip));
+                        }
                     }
                 }
             }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
-                if (screen is not null)
+                if (screen is not null || usb is not null)
                 {
                     _log($"headless: Turzx screen error ({ex.Message}) — reopening in {TurzxRetryMs / 1000} s");
-                    screen.Dispose();
-                    screen = null;
+                    CloseTurzx(ref screen, ref usb);
                     retryAt = Environment.TickCount64 + TurzxRetryMs;
                 }
             }
 
-            _turzxOpen = screen is not null;
+            _turzxOpen = screen is not null || usb is not null;
             _turzxWake.WaitOne(TurzxFrameMs);
         }
 
-        screen?.Dispose(); // the panel keeps showing the last frame
+        CloseTurzx(ref screen, ref usb); // the panel keeps showing the last frame
         _turzxOpen = false;
+    }
+
+    private static void CloseTurzx(ref TurzxScreen? screen, ref TurzxUsbScreen? usb)
+    {
+        try
+        {
+            screen?.Dispose();
+            usb?.Dispose();
+        }
+        catch
+        {
+            // already gone
+        }
+
+        screen = null;
+        usb = null;
     }
 
     private void ReleasePeripherals()

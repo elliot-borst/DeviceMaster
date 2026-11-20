@@ -2,10 +2,13 @@
 
   <PropertyGroup>
     <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- usbfs bulk transfers pin the caller's buffer (UsbfsTurzxTransport) -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceMaster.Devices.EneRgb\DeviceMaster.Devices.EneRgb.csproj" />
+    <ProjectReference Include="..\DeviceMaster.Devices.Turzx\DeviceMaster.Devices.Turzx.csproj" />
   </ItemGroup>
 
 </Project>

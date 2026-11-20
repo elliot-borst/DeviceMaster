@@ -43,6 +43,13 @@ public static class KnownDeviceRegistry
             "*USB serial (usbser), serial string CT88INCH — standby/control port. Protocol (rev_c REV_8INCH) "
             + "runs on the paired 0525:A4A7 gadget-serial DATA port; verified live (rom 1.90)."),
 
+        // Hardware revision V1.x: one vendor-specific USB interface (bulk 0x01/0x81), DES-encrypted
+        // 512-byte commands + JPEG frames (#102). VID 1CBE is shared (Lian Li SL V3 fans use it too),
+        // so the transports also require the product string "TURZX1.0" before opening it.
+        Entry(0x1CBE, 0x0088, DeviceKind.TurzxScreen, "Turzx/Turing 8.8\" smart screen (V1.x, USB)", supportPlanned: true,
+            "USB vendor class, product string TURZX1.0, bulk EP 0x01/0x81. Protocol: phstudy/turing-smart-screen-cli "
+            + "(MIT): DES-CBC \"slv3tuzx\" command blocks, JPEG frames (cmd 101). Linux usbfs, Windows WinUSB."),
+
         // ---- ASUS Aura (motherboard RGB) ----
         Entry(0x0B05, 0x19AF, DeviceKind.MotherboardRgbController, "ASUS Aura LED Controller", supportPlanned: true,
             "*HID, 65-byte reports (0xEC prefix). Mainboard-class protocol (OpenRGB AuraMainboardController)."),
@@ -65,7 +72,7 @@ public static class KnownDeviceRegistry
         [0x1B1C] = "Corsair",
         [0x0CF2] = "Lian Li",
         [0x0416] = "Nuvoton (Lian Li SL V3 TX/RX)",
-        [0x1CBE] = "TI Luminary (Lian Li SL V3 fan)",
+        [0x1CBE] = "TI Luminary (Lian Li SL V3 fan, Turzx 8.8\" V1.x screen)",
         [0x1A86] = "WCH/QinHeng (Turzx serial bridge)",
         [0x0B05] = "ASUS",
         [0x0DB0] = "MSI",

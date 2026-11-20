@@ -1,0 +1,125 @@
+using DeviceMaster.Devices.Turzx;
+
+namespace DeviceMaster.Core.Tests;
+
+/// <summary>
+/// Turzx 8.8" V1.x USB protocol (#102). The expected block bytes were produced independently with
+/// pycryptodome (DES-CBC, key = IV = "slv3tuzx", PKCS7), building the header the way the reference
+/// implementations do.
+/// </summary>
+public class TurzxUsbProtocolTests
+{
+    [Fact]
+    public void DesMatchesTheFipsTestVector() =>
+        Assert.Equal(0x85E813540F0AB405UL, DesCbc.EncryptBlock(0x0123456789ABCDEFUL, 0x133457799BBCDFF1UL));
+
+    [Fact]
+    public void CbcPadsPkcs7ToTheNextBlock()
+    {
+        var key = "slv3tuzx"u8.ToArray();
+        Assert.Equal(504, DesCbc.Encrypt(new byte[500], key, key).Length);
+        Assert.Equal(16, DesCbc.Encrypt(new byte[8], key, key).Length); // a full pad block when already aligned
+    }
+
+    [Fact]
+    public void SyncBlockMatchesTheReference()
+    {
+        var block = TurzxUsbProtocol.Sync(12345678);
+        Assert.Equal(512, block.Length);
+        Assert.Equal("019a3db35a5ba2ad1c6c82e3dc9bdc9a0aae1ba2eacd2bd2", Convert.ToHexString(block, 0, 24).ToLowerInvariant());
+        Assert.Equal("a388f08836f40c69000000000000a11a", Convert.ToHexString(block, 496, 16).ToLowerInvariant());
+    }
+
+    [Fact]
+    public void BrightnessAndJpegBlocksMatchTheReference()
+    {
+        Assert.Equal("a9badf11799bddd4720dea17d1af7ef5",
+            Convert.ToHexString(TurzxUsbProtocol.Brightness(75, 1000), 0, 16).ToLowerInvariant());
+
+        var jpeg = new byte[123456];
+        var frame = TurzxUsbProtocol.JpegFrame(jpeg, 42);
+        Assert.Equal(512 + 123456, frame.Length);
+        Assert.Equal("6edf63cc8e6c3fe43f32428b39cce22c", Convert.ToHexString(frame, 0, 16).ToLowerInvariant());
+    }
+
+    [Fact]
+    public void HeaderLayout()
+    {
+        var header = TurzxUsbProtocol.Header(TurzxUsbProtocol.CmdBrightness, 0x01020304, [55]);
+        Assert.Equal(500, header.Length);
+        Assert.Equal([14, 0, 0x1A, 0x6D, 0x04, 0x03, 0x02, 0x01, 55], header[..9]);
+    }
+
+    [Fact]
+    public void BrightnessIsClampedTo0To100()
+    {
+        Assert.Equal(TurzxUsbProtocol.Brightness(100, 7), TurzxUsbProtocol.Brightness(250, 7));
+        Assert.Equal(TurzxUsbProtocol.Brightness(0, 7), TurzxUsbProtocol.Brightness(-5, 7));
+    }
+
+    [Fact]
+    public void FramesAreLimitedToWhatThePanelTakes()
+    {
+        Assert.Throws<ArgumentException>(() => TurzxUsbProtocol.JpegFrame([], 0));
+        Assert.Throws<ArgumentException>(() => TurzxUsbProtocol.JpegFrame(new byte[TurzxUsbProtocol.MaxImageBytes + 1], 0));
+    }
+
+    [Fact]
+    public void RepliesAndFirmware()
+    {
+        var reply = new byte[512];
+        reply[0] = TurzxUsbProtocol.CmdSync;
+        reply[1] = TurzxUsbProtocol.ReplyOk;
+        "turzx_0001_0015"u8.CopyTo(reply.AsSpan(8));
+
+        Assert.True(TurzxUsbProtocol.IsOk(reply, TurzxUsbProtocol.CmdSync));
+        Assert.False(TurzxUsbProtocol.IsOk(reply, TurzxUsbProtocol.CmdJpeg));
+        Assert.Equal("turzx_0001_0015", TurzxUsbProtocol.FirmwareVersion(reply));
+    }
+
+    [Fact]
+    public void TimestampIsMillisecondsSinceLocalMidnight() =>
+        Assert.Equal(3_723_004u, TurzxUsbProtocol.TimestampMs(new DateTime(2026, 11, 20, 1, 2, 3, 4)));
+}
+
+/// <summary>Finding a V1.x panel through sysfs (#102): VID/PID and the product string must all match.</summary>
+public sealed class UsbfsTurzxFindTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("dm-usbfs-").FullName;
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    private void Device(string name, string vid, string pid, string? product, int bus, int dev)
+    {
+        var dir = Path.Combine(_root, "sys", "bus", "usb", "devices", name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "idVendor"), vid + "\n");
+        File.WriteAllText(Path.Combine(dir, "idProduct"), pid + "\n");
+        if (product is not null)
+        {
+            File.WriteAllText(Path.Combine(dir, "product"), product + "\n");
+        }
+
+        File.WriteAllText(Path.Combine(dir, "busnum"), $"{bus}\n");
+        File.WriteAllText(Path.Combine(dir, "devnum"), $"{dev}\n");
+    }
+
+    [Fact]
+    public void FindsThePanelByIdAndProductString()
+    {
+        Device("3-3", "1d6b", "0104", "USB Emulation Device", 3, 7);
+        Device("3-10", "1cbe", "0088", "TURZX1.0", 3, 8);
+
+        Assert.Equal(Path.Combine(_root, "dev", "bus", "usb", "003", "008"),
+            DeviceMaster.Platform.Linux.UsbfsTurzxTransport.Find(Path.Combine(_root, "sys"), Path.Combine(_root, "dev")));
+    }
+
+    [Fact]
+    public void IgnoresASameIdDeviceWithAnotherName()
+    {
+        Device("1-4", "1cbe", "0088", "SLV3 FAN", 1, 4); // VID 1CBE is shared: never write to it on the IDs alone
+        Device("1-5", "1cbe", "0088", null, 1, 5);
+
+        Assert.Null(DeviceMaster.Platform.Linux.UsbfsTurzxTransport.Find(Path.Combine(_root, "sys"), Path.Combine(_root, "dev")));
+    }
+}
