@@ -33,8 +33,52 @@ public static class TurzxCommands
             "hello" => HelloLoop(GetCom(args)),
             "listen" => Listen(GetCom(args), GetSeconds(args, 8)),
             "brightness" => BrightnessTest(GetCom(args)),
+            "usb" => UsbTest(GetSeconds(args, 10)),
             _ => Usage(),
         };
+    }
+
+    /// <summary>
+    /// Hardware test for the 8.8" V1.x USB panel (#102) over WinUSB: finds it, handshakes, sets the
+    /// brightness and shows a sample CPU | FPS | GPU dashboard, timing each frame. Exit the desktop
+    /// app first (or leave its screen Unmanaged): WinUSB lets only one program hold the panel.
+    /// </summary>
+    private static int UsbTest(int seconds)
+    {
+        var path = WinUsbTurzxTransport.Find().FirstOrDefault();
+        if (path is null)
+        {
+            Log.Information("turzx usb: no 8.8\" V1.x panel (1CBE:0088, WinUSB) found");
+            return 1;
+        }
+
+        using var screen = TurzxUsbScreen.Open(WinUsbTurzxTransport.Open(path));
+        Log.Information("turzx usb: opened {Path}, firmware {Firmware}", path, screen.Firmware ?? "?");
+        screen.SetBrightness(80);
+        var history = new List<double>();
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        var frames = 0;
+        do
+        {
+            var fps = 120 + (int)(20 * Math.Sin(frames / 3.0));
+            history.Add(fps);
+            var data = new DeviceMaster.Lcd.Skia.TurzxDashboardData
+            {
+                ShowFps = true, Fps = fps, FpsHistory = history.ToArray(),
+                CpuName = "AMD Ryzen 5 7600 6-Core Processor", CpuTempC = 64, CpuLoad = 41, CpuPowerW = 96,
+                RamUsedGb = 22, RamTotalGb = 64, FanRpm = 1_100, FanDuty = 55,
+                GpuName = "NVIDIA GeForce RTX 4070", GpuTempC = 61, GpuUtil = 97, GpuPowerW = 420,
+                VramUsedGb = 14.2, VramTotalGb = 32, GpuFanPercent = 48, GpuFanRpm = 1_500,
+            };
+            var jpeg = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNativeJpeg(data, flip: false);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            screen.SendJpeg(jpeg);
+            Log.Information("turzx usb: frame {N}: {Kb} KB in {Ms} ms", ++frames, jpeg.Length / 1024, watch.ElapsedMilliseconds);
+            Thread.Sleep(1_000);
+        }
+        while (DateTime.UtcNow < until);
+
+        return 0;
     }
 
     private static int Usage()
@@ -46,6 +90,7 @@ public static class TurzxCommands
         Log.Information("       turzx fps [--seconds 15]                         (ELEVATED: PresentMon — prints live FPS; run a game)");
         Log.Information("       turzx listen [--seconds 8] [--com COM3]          (passive: log whatever the panel emits, no protocol write)");
         Log.Information("       turzx brightness [--com COM3]                    (sweep the backlight 100→0→100 so you can SEE if brightness works)");
+        Log.Information("       turzx usb [--seconds 10]                         (8.8\" V1.x USB panel: handshake + sample CPU/FPS/GPU dashboard)");
         return 1;
     }
 

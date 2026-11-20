@@ -615,7 +615,7 @@ public sealed class ControlLoop : IDisposable
             _turzxProbeDue = Environment.TickCount64 + 60_000;
             try
             {
-                _turzxSeen = TurzxScreen.Find().Count > 0;
+                _turzxSeen = TurzxScreen.Find().Count > 0 || WinUsbTurzxTransport.Find().Count > 0;
             }
             catch
             {
@@ -1420,8 +1420,15 @@ public sealed class ControlLoop : IDisposable
     private long _fpsRestartAfter;  // rate-limit PresentMon (re)starts
     private volatile string? _turzxStatusText;
 
+    // FPS for the V1.x USB panel's gaming layout (#102): written by the tick, read by the worker under _turzxGate
+    private int? _turzxFpsNow;
+    private readonly Queue<double> _turzxFpsHistory = new();
+
     // worker-thread-only state
     private TurzxScreen? _turzx;
+    private TurzxUsbScreen? _turzxUsb;    // the 8.8" V1.x panel over WinUSB (#102), when no serial panel is present
+    private string? _turzxUsbShownKey;
+    private long _turzxUsbNextAt;
     private int _turzxAppliedBrightness = -1;
     private string? _turzxShownKey;
     private long _turzxRetryAt;
@@ -1493,6 +1500,16 @@ public sealed class ControlLoop : IDisposable
                     try { _fps?.Dispose(); } catch { /* replacing it anyway */ }
                     _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
                 }
+                lock (_turzxGate)
+                {
+                    _turzxFpsNow = fps;
+                    _turzxFpsHistory.Enqueue(fps ?? 0);
+                    while (_turzxFpsHistory.Count > 60)
+                    {
+                        _turzxFpsHistory.Dequeue();
+                    }
+                }
+
                 var dashKey = TurzxDashboardKey(stats, fps);
                 if (dashKey != _turzxDashKey) // only re-render when a displayed value actually changed
                 {
@@ -1565,6 +1582,12 @@ public sealed class ControlLoop : IDisposable
             {
                 if (mode == LcdMode.Unmanaged)
                 {
+                    if (_turzxUsb is not null)
+                    {
+                        CloseTurzxUsb(); // the panel keeps showing its last frame on its own
+                        _turzxStatusText = null;
+                    }
+
                     if (_turzx is not null)
                     {
                         _turzx.Dispose(); // panel keeps showing its last frame on its own
@@ -1582,9 +1605,21 @@ public sealed class ControlLoop : IDisposable
                     continue;
                 }
 
+                if (_turzxUsb is not null)
+                {
+                    RunTurzxUsbCycle(null, mode, brightness, flip);
+                    continue;
+                }
+
                 if (_turzx is null)
                 {
                     var target = TurzxScreen.Find().FirstOrDefault();
+                    if (target.ComPort is null && WinUsbTurzxTransport.Find().FirstOrDefault() is { } usbPath)
+                    {
+                        RunTurzxUsbCycle(usbPath, mode, brightness, flip);
+                        continue;
+                    }
+
                     if (target.ComPort is null)
                     {
                         _turzxStatusText = "Not detected";
@@ -1757,6 +1792,86 @@ public sealed class ControlLoop : IDisposable
 
         try { _turzx?.Dispose(); } catch { /* shutting down */ }
         _turzx = null;
+        CloseTurzxUsb();
+    }
+
+    /// <summary>
+    /// One worker cycle for the 8.8" V1.x USB panel (#102): opens it if needed (<paramref name="path"/>),
+    /// applies brightness and mode, and pushes a fresh dashboard about once a second (a frame takes
+    /// ~10 ms over USB, unlike the serial panel's ~2.3 s). Any error closes the session and retries in
+    /// 5 s. Never resets the device: a USB reset can stall the whole host controller.
+    /// </summary>
+    private void RunTurzxUsbCycle(string? path, LcdMode mode, int brightness, bool flip)
+    {
+        try
+        {
+            if (_turzxUsb is null)
+            {
+                _turzxUsb = TurzxUsbScreen.Open(WinUsbTurzxTransport.Open(path!));
+                _turzxAppliedBrightness = -1;
+                _turzxUsbShownKey = null;
+                _turzxUsbNextAt = 0;
+                _log?.Invoke($"control: opened the Turzx 8.8\" V1.x screen over USB (firmware {_turzxUsb.Firmware ?? "?"})");
+            }
+
+            var wantBrightness = mode == LcdMode.Off ? 0 : brightness;
+            if (_turzxAppliedBrightness != wantBrightness)
+            {
+                _turzxUsb.SetBrightness(wantBrightness);
+                _turzxAppliedBrightness = wantBrightness;
+            }
+
+            switch (mode)
+            {
+                case LcdMode.Black when _turzxUsbShownKey != "black":
+                    _turzxUsb.SendJpeg(Lcd.Skia.TurzxDashboard.SolidJpeg(0, 0, 0));
+                    _turzxUsbShownKey = "black";
+                    break;
+                case LcdMode.White when _turzxUsbShownKey != "white":
+                    _turzxUsb.SendJpeg(Lcd.Skia.TurzxDashboard.SolidJpeg(255, 255, 255));
+                    _turzxUsbShownKey = "white";
+                    break;
+                case LcdMode.Metrics when Environment.TickCount64 >= _turzxUsbNextAt:
+                    int? fps;
+                    double[] history;
+                    lock (_turzxGate)
+                    {
+                        fps = _turzxFpsNow;
+                        history = _turzxFpsHistory.ToArray();
+                    }
+
+                    var data = TurzxDashboardFeed.From(_status, fps, history);
+                    _turzxUsb.SendJpeg(Lcd.Skia.TurzxDashboard.RenderNativeJpeg(data, flip));
+                    _turzxUsbShownKey = "metrics";
+                    _turzxUsbNextAt = Environment.TickCount64 + 1_000;
+                    break;
+            }
+
+            _turzxStatusText = $"Connected · USB (8.8\" V1.x{(_turzxUsb.Firmware is { } fw ? $", {fw}" : "")})";
+        }
+        catch (Exception ex)
+        {
+            _turzxStatusText = $"Error: {ex.Message}";
+            _log?.Invoke($"Turzx V1.x screen: {ex.Message} — reopening in 5 s");
+            CloseTurzxUsb();
+            _turzxRetryAt = Environment.TickCount64 + 5_000;
+        }
+    }
+
+    private void CloseTurzxUsb()
+    {
+        try
+        {
+            _turzxUsb?.Dispose();
+        }
+        catch
+        {
+            // already gone
+        }
+
+        _turzxUsb = null;
+        _turzxUsbShownKey = null;
+        _turzxAppliedBrightness = -1;
     }
 
     /// <summary>

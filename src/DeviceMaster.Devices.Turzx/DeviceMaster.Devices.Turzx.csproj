@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!-- WinUSB bulk transfers pin the caller's buffer (WinUsbTurzxTransport) -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- USB-serial (usbser CDC) transport + BGRA frame conversion for the 8.8" panel -->
     <PackageReference Include="System.IO.Ports" Version="9.0.0" />

@@ -123,3 +123,34 @@ public sealed class UsbfsTurzxFindTests : IDisposable
         Assert.Null(DeviceMaster.Platform.Linux.UsbfsTurzxTransport.Find(Path.Combine(_root, "sys"), Path.Combine(_root, "dev")));
     }
 }
+
+/// <summary>The V1.x panel's frames (#102): JPEG output and the Windows gaming layout.</summary>
+public class TurzxUsbFrameTests
+{
+    [Fact]
+    public void DashboardJpegIsAPortraitJpegWellUnderThePanelLimit()
+    {
+        var data = new DeviceMaster.Lcd.Skia.TurzxDashboardData { ShowFps = true, Fps = 144, FpsHistory = [120, 140, 144] };
+        var jpeg = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNativeJpeg(data, flip: false);
+        Assert.Equal([0xFF, 0xD8], jpeg[..2]);
+        Assert.InRange(jpeg.Length, 1, TurzxUsbProtocol.MaxImageBytes);
+        using var decoded = SkiaSharp.SKBitmap.Decode(jpeg);
+        Assert.Equal((TurzxUsbProtocol.ScreenWidth, TurzxUsbProtocol.ScreenHeight), (decoded.Width, decoded.Height));
+    }
+
+    [Fact]
+    public void WindowsFeedUsesTheGamingLayoutAndTheCoolerFan()
+    {
+        var status = new DeviceMaster.Control.ControlStatus
+        {
+            CpuName = "CPU X", GpuName = "GPU Y", CpuTemperatureC = 55, TargetDutyPercent = 40,
+            Devices = [new("corsair-link", "Fan", 900, 40), new("motherboard", "CPU Fan", 1200, 40)],
+        };
+        var data = DeviceMaster.Control.TurzxDashboardFeed.From(status, 97, [90, 97]);
+        Assert.True(data.ShowFps);
+        Assert.False(data.HasLlm);
+        Assert.Equal(97, data.Fps);
+        Assert.Equal(1200, data.FanRpm); // the motherboard header (the CPU cooler) wins
+        Assert.Equal("CPU X", data.CpuName);
+    }
+}

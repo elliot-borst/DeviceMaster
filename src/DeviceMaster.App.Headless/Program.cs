@@ -470,6 +470,12 @@ internal static class Program
     {
         var output = GetOption(args, "--out") ?? "dashboard.png";
         var sample = SampleDashboard(args.Contains("--busy"), llm: !args.Contains("--no-llm"));
+        if (args.Contains("--fps"))
+        {
+            // the Windows gaming layout: CPU | FPS | GPU (#102)
+            sample = sample with { HasLlm = false, ShowFps = true, Fps = 142, FpsHistory = Enumerable.Range(0, 60).Select(i => 130 + 15 * Math.Sin(i / 5.0)).ToList() };
+        }
+
         File.WriteAllBytes(output, DeviceMaster.Lcd.Skia.TurzxDashboard.RenderPng(sample));
         var native = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNative(sample, flip: false);
         Console.WriteLine($"wrote {output} (landscape 1920×480); native frame {native.Length} bytes");

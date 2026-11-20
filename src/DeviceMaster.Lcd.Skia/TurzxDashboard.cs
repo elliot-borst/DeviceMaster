@@ -38,6 +38,18 @@ public sealed record TurzxDashboardData
     public int? LlmContextUsed { get; init; }
     public int? LlmContextMax { get; init; }
 
+    /// <summary>
+    /// Gaming layout (#102): CPU on the left, frames per second in the middle, GPU on the right.
+    /// Takes the place of the local-LLM layout (a machine shows one or the other).
+    /// </summary>
+    public bool ShowFps { get; init; }
+
+    /// <summary>Current frames per second of the busiest game/app; null = nothing presenting.</summary>
+    public int? Fps { get; init; }
+
+    /// <summary>Recent FPS readings, oldest first, for the graph under the number.</summary>
+    public IReadOnlyList<double> FpsHistory { get; init; } = [];
+
     public string GpuName { get; init; } = "GPU";
     public double? GpuTempC { get; init; }
     public double? GpuUtil { get; init; }
@@ -124,6 +136,16 @@ public static class TurzxDashboard
         return encoded.ToArray();
     }
 
+    /// <summary>A plain colour as a native portrait JPEG (the screen modes Black / White on the V1.x panel).</summary>
+    public static byte[] SolidJpeg(byte r, byte g, byte b)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(Height, Width, SKColorType.Bgra8888, SKAlphaType.Premul));
+        bitmap.Erase(new SKColor(r, g, b));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+        return encoded.ToArray();
+    }
+
     private static SKBitmap RenderNativeBitmap(TurzxDashboardData data, bool flip)
     {
         using var landscape = RenderLandscape(data);
@@ -157,6 +179,16 @@ public static class TurzxDashboard
         const float pad = 18, gap = 16, top = 18, llmWidth = 840;
         var bottom = Height - top;
         var x = pad;
+        if (d.ShowFps)
+        {
+            // gaming: CPU | FPS | GPU in three equal cards
+            var third = (Width - 2 * pad - 2 * gap) / 3;
+            DrawCpu(canvas, new SKRect(x, top, x + third, bottom), d);
+            DrawFps(canvas, new SKRect(x + third + gap, top, x + 2 * third + gap, bottom), d);
+            DrawGpu(canvas, new SKRect(x + 2 * (third + gap), top, Width - pad, bottom), d);
+            return bitmap;
+        }
+
         if (d.HasLlm)
         {
             DrawLlm(canvas, new SKRect(x, top, x + llmWidth, bottom), d);
@@ -322,6 +354,26 @@ public static class TurzxDashboard
     private static string Rpm(int rpm) => rpm.ToString("N0", CultureInfo.InvariantCulture) + " rpm";
 
     // ---------- pieces ----------
+
+    /// <summary>The middle card of the gaming layout: a big FPS number and its recent history.</summary>
+    private static void DrawFps(SKCanvas c, SKRect r, TurzxDashboardData d)
+    {
+        CardShell(c, r, "FPS", "", 26, bold: false);
+        if (d.Fps is { } fps)
+        {
+            // green when smooth, amber when it dips, red when it's struggling
+            var color = fps >= 60 ? Good : fps >= 30 ? Warn : Danger;
+            Label(c, fps.ToString(CultureInfo.InvariantCulture), r.MidX, r.Top + 250, 200, color, bold: true, align: SKTextAlign.Center);
+            Label(c, $"{1000.0 / Math.Max(1, fps):0.0} ms per frame", r.MidX, r.Top + 296, 26, Dim, align: SKTextAlign.Center);
+        }
+        else
+        {
+            Label(c, "—", r.MidX, r.Top + 240, 160, Faint, bold: true, align: SKTextAlign.Center);
+            Label(c, "no game running", r.MidX, r.Top + 296, 26, Faint, align: SKTextAlign.Center);
+        }
+
+        Sparkline(c, new SKRect(r.Left + 24, r.Top + 326, r.Right - 24, r.Bottom - 24), d.FpsHistory);
+    }
 
     private static void CardShell(SKCanvas c, SKRect r, string title, string subtitle, float subtitleSize, bool bold, SKColor? subtitleColor = null)
     {
