@@ -470,6 +470,18 @@ internal static class Program
     {
         var output = GetOption(args, "--out") ?? "dashboard.png";
         var sample = SampleDashboard(args.Contains("--busy"), llm: !args.Contains("--no-llm"));
+        if (args.Contains("--server"))
+        {
+            // the NAS layout: CPU | STORAGE | SERVER (#104)
+            sample = sample with
+            {
+                HasLlm = false, ShowServer = true, CpuName = "AMD Ryzen 9 9950X 16-Core Processor",
+                Storage = [new("Array", 29_624_558_645_248, 43_992_027_086_848), new("Cache", 702_980_059_136, 4_000_795_770_880)],
+                ContainersRunning = 64, ContainersTotal = 66, StoppedContainers = ["fluxer-seaweedfs-init", "minecraft-horror"],
+                UptimeSeconds = 2 * 86_400 + 3_900, FanCount = 8,
+            };
+        }
+
         if (args.Contains("--fps"))
         {
             // the Windows gaming layout: CPU | FPS | GPU (#102)

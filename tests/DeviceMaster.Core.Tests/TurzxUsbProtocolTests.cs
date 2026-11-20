@@ -154,3 +154,35 @@ public class TurzxUsbFrameTests
         Assert.Equal("CPU X", data.CpuName);
     }
 }
+
+/// <summary>The server layout's text helpers (#104).</summary>
+public class TurzxServerLayoutTests
+{
+    [Theory]
+    [InlineData(29_624_558_645_248L, null, "29.6 TB")]
+    [InlineData(4_000_795_770_880L, null, "4.00 TB")]
+    [InlineData(702_980_059_136L, 4_000_795_770_880L, "0.70")]
+    [InlineData(702_980_059_136L, null, "703 GB")]
+    public void SizesReadLikeUnraid(long bytes, long? scaleLike, string expected) =>
+        Assert.Equal(expected, DeviceMaster.Lcd.Skia.TurzxDashboard.Bytes(bytes, scaleLike));
+
+    [Theory]
+    [InlineData(176_700, "2 d 1 h")]
+    [InlineData(18_720, "5 h 12 m")]
+    [InlineData(840, "14 m")]
+    public void UptimeIsShort(double seconds, string expected) =>
+        Assert.Equal(expected, DeviceMaster.Lcd.Skia.TurzxDashboard.Uptime(seconds));
+
+    [Fact]
+    public void ServerLayoutRenders()
+    {
+        var data = new DeviceMaster.Lcd.Skia.TurzxDashboardData
+        {
+            ShowServer = true,
+            Storage = [new("Array", 600, 1000)],
+            ContainersRunning = 5, ContainersTotal = 6, StoppedContainers = ["a"],
+        };
+        var jpeg = DeviceMaster.Lcd.Skia.TurzxDashboard.RenderNativeJpeg(data, flip: false);
+        Assert.Equal([0xFF, 0xD8], jpeg[..2]);
+    }
+}

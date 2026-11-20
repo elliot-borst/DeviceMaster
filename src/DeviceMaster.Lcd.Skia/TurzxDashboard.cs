@@ -12,6 +12,9 @@ public sealed record DashboardSlot(string State, int HeldTokens);
 /// </summary>
 public sealed record DashboardReply(bool Live, bool Reading, double? Seconds, double? CacheHitPercent, double? GuessHitPercent, int? Written);
 
+/// <summary>One storage pool on the server layout (#104): the Unraid array, a cache pool, a disk.</summary>
+public sealed record DashboardStorage(string Name, long UsedBytes, long TotalBytes);
+
 /// <summary>Everything the 8.8" bar shows; any figure may be null (drawn as a dash).</summary>
 public sealed record TurzxDashboardData
 {
@@ -49,6 +52,23 @@ public sealed record TurzxDashboardData
 
     /// <summary>Recent FPS readings, oldest first, for the graph under the number.</summary>
     public IReadOnlyList<double> FpsHistory { get; init; } = [];
+
+    /// <summary>
+    /// Server layout (#104): CPU | STORAGE | SERVER, for a machine with no local AI and no graphics card
+    /// worth a card (e.g. a NAS). Uses <see cref="Storage"/>, the container counts and the uptime.
+    /// </summary>
+    public bool ShowServer { get; init; }
+
+    /// <summary>Storage pools, the main one first (the server layout's headline figure).</summary>
+    public IReadOnlyList<DashboardStorage> Storage { get; init; } = [];
+
+    public int? ContainersRunning { get; init; }
+    public int? ContainersTotal { get; init; }
+    public IReadOnlyList<string> StoppedContainers { get; init; } = [];
+    public double? UptimeSeconds { get; init; }
+
+    /// <summary>Fans under control (the server card's FANS line).</summary>
+    public int FanCount { get; init; }
 
     public string GpuName { get; init; } = "GPU";
     public double? GpuTempC { get; init; }
@@ -179,6 +199,16 @@ public static class TurzxDashboard
         const float pad = 18, gap = 16, top = 18, llmWidth = 840;
         var bottom = Height - top;
         var x = pad;
+        if (d.ShowServer)
+        {
+            // server: CPU | STORAGE | SERVER in three equal cards
+            var third = (Width - 2 * pad - 2 * gap) / 3;
+            DrawCpu(canvas, new SKRect(x, top, x + third, bottom), d);
+            DrawStorage(canvas, new SKRect(x + third + gap, top, x + 2 * third + gap, bottom), d);
+            DrawServer(canvas, new SKRect(x + 2 * (third + gap), top, Width - pad, bottom), d);
+            return bitmap;
+        }
+
         if (d.ShowFps)
         {
             // gaming: CPU | FPS | GPU in three equal cards
@@ -355,6 +385,87 @@ public static class TurzxDashboard
     private static string Rpm(int rpm) => rpm.ToString("N0", CultureInfo.InvariantCulture) + " rpm";
 
     // ---------- pieces ----------
+
+    /// <summary>Server layout: the main pool's usage as the headline, then a bar per pool (up to three).</summary>
+    private static void DrawStorage(SKCanvas c, SKRect r, TurzxDashboardData d)
+    {
+        var pools = d.Storage.Where(p => p.TotalBytes > 0).Take(3).ToList();
+        CardShell(c, r, "STORAGE", pools.Count > 0 ? pools[0].Name.ToLowerInvariant() : "", 26, bold: false);
+        if (pools.Count == 0)
+        {
+            Label(c, "—", r.Left + 22, r.Top + 160, 84, Faint, bold: true);
+            return;
+        }
+
+        var main = pools[0];
+        var percent = main.UsedBytes * 100.0 / main.TotalBytes;
+        var headline = Label(c, $"{percent:0}%", r.Left + 22, r.Top + 160, 84, percent >= 90 ? Danger : percent >= 80 ? Warn : Text, bold: true);
+        Label(c, $"{Bytes(main.TotalBytes - main.UsedBytes)} free", r.Left + 36 + headline, r.Top + 160, 28, Dim);
+
+        var y = r.Top + 226;
+        foreach (var pool in pools)
+        {
+            Bar(c, r.Left + 24, r.Right - 24, y, pool.Name.ToUpperInvariant(), pool.UsedBytes, pool.TotalBytes,
+                $"{Bytes(pool.UsedBytes, pool.TotalBytes)} / {Bytes(pool.TotalBytes)}");
+            y += 80;
+        }
+    }
+
+    /// <summary>Server layout: containers (stopped ones named), uptime and fans.</summary>
+    private static void DrawServer(SKCanvas c, SKRect r, TurzxDashboardData d)
+    {
+        CardShell(c, r, "SERVER", d.UptimeSeconds is { } up ? "up " + Uptime(up) : "", 26, bold: false);
+        if (d.ContainersRunning is { } running && d.ContainersTotal is { } total)
+        {
+            var allUp = running == total;
+            var big = Label(c, running.ToString(CultureInfo.InvariantCulture), r.Left + 22, r.Top + 160, 84, allUp ? Text : Warn, bold: true);
+            Label(c, $"/ {total} containers", r.Left + 36 + big, r.Top + 160, 28, Dim);
+            if (allUp)
+            {
+                Label(c, "all running", r.Left + 24, r.Top + 226, 26, Good, bold: true);
+            }
+            else
+            {
+                Label(c, "STOPPED", r.Left + 24, r.Top + 226, 22, Dim, bold: true);
+                var y = r.Top + 266;
+                foreach (var name in d.StoppedContainers.Take(3))
+                {
+                    FitLabel(c, name, r.Left + 24, y, 26, r.Width - 48, Warn);
+                    y += 36;
+                }
+
+                if (d.StoppedContainers.Count > 3)
+                {
+                    Label(c, $"+{d.StoppedContainers.Count - 3} more", r.Left + 24, y, 22, Dim);
+                }
+            }
+        }
+        else
+        {
+            Label(c, "—", r.Left + 22, r.Top + 160, 84, Faint, bold: true);
+            Label(c, "containers not readable", r.Left + 24, r.Top + 226, 24, Faint);
+        }
+
+        var fans = d.Failsafe ? "FAILSAFE 100%" : $"{d.FanCount} · {d.FanDuty}%";
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "FANS", d.Failsafe ? 100 : d.FanDuty, 100, fans,
+            fill: d.Failsafe ? Danger : Cool, valueColor: d.Failsafe ? Danger : Cool);
+    }
+
+    /// <summary>29.6 TB / 702 GB style sizes (decimal units, like Unraid).</summary>
+    public static string Bytes(long bytes, long? scaleLike = null)
+    {
+        var reference = scaleLike ?? bytes;
+        return reference >= 1_000_000_000_000
+            ? (bytes / 1e12).ToString(bytes >= 10_000_000_000_000 ? "0.0" : "0.00", CultureInfo.InvariantCulture) + (scaleLike is null ? " TB" : "")
+            : (bytes / 1e9).ToString("0", CultureInfo.InvariantCulture) + (scaleLike is null ? " GB" : "");
+    }
+
+    /// <summary>"2 d 1 h", "5 h 12 m", "14 m".</summary>
+    public static string Uptime(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays} d {t.Hours} h" : t.TotalHours >= 1 ? $"{t.Hours} h {t.Minutes} m" : $"{t.Minutes} m";
+    }
 
     /// <summary>The middle card of the gaming layout: a big FPS number and its recent history.</summary>
     private static void DrawFps(SKCanvas c, SKRect r, TurzxDashboardData d)

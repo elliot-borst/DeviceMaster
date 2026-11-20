@@ -461,6 +461,14 @@ public sealed partial class HeadlessLoop
         _dashboard = new TurzxDashboardData
         {
             HasLlm = cfg.StrataUrl is { Length: > 0 },
+            // a server with no local AI and no graphics card (a NAS): CPU | STORAGE | SERVER instead of an empty GPU card (#104)
+            ShowServer = cfg.StrataUrl is not { Length: > 0 } && status.GpuName is null && status.Storage.Count > 0,
+            Storage = status.Storage.Select(p => new DashboardStorage(p.Name, p.UsedBytes, p.TotalBytes)).ToList(),
+            ContainersRunning = status.Docker?.Running,
+            ContainersTotal = status.Docker?.Total,
+            StoppedContainers = status.Docker?.Stopped ?? [],
+            UptimeSeconds = status.UptimeSeconds,
+            FanCount = status.Devices.Count,
             LlmReachable = llm is not null,
             LlmModel = llm?.Model ?? "",
             LlmState = llm?.State ?? "offline",
