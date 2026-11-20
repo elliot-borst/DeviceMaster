@@ -114,7 +114,10 @@ public sealed class LhmSensorSource : ISensorSource
             GpuTempC: gpu is null ? null : Pick(gpu, SensorType.Temperature, n => n.Contains("GPU Core")) ?? Pick(gpu, SensorType.Temperature, n => n.Contains("Core")) ?? Max(gpu, SensorType.Temperature),
             GpuPowerW: gpu is null ? null : Pick(gpu, SensorType.Power, n => n.Contains("GPU Package") || n.Contains("Package") || n.Contains("Power")) ?? Max(gpu, SensorType.Power),
             VramUsedGb: vramUsedGb,
-            VramTotalGb: vramTotalGb);
+            VramTotalGb: vramTotalGb,
+            // the card's own coolers (NVIDIA: "GPU Fan 1", "GPU Fan 2" …): average rpm and duty (#103)
+            GpuFanRpm: gpu is null ? null : Average(gpu, SensorType.Fan),
+            GpuFanPercent: gpu is null ? null : Average(gpu, SensorType.Control));
     }
 
     /// <summary>First sensor value of the given type whose name matches, or null.</summary>
@@ -129,6 +132,13 @@ public sealed class LhmSensorSource : ISensorSource
         }
 
         return null;
+    }
+
+    /// <summary>Average of every readable sensor of the given type, or null when there are none.</summary>
+    private static double? Average(IHardware hardware, SensorType type)
+    {
+        var values = hardware.Sensors.Where(s => s.SensorType == type && s.Value is { } v && !float.IsNaN(v)).Select(s => (double)s.Value!.Value).ToList();
+        return values.Count > 0 ? values.Average() : null;
     }
 
     /// <summary>Largest sensor value of the given type, or null.</summary>

@@ -124,6 +124,28 @@ public sealed class PresentMonFpsReader : IDisposable
     }
 
     /// <summary>
+    /// FPS of a real app only (a game, a video, any self-rendering window), or null when only the
+    /// desktop compositor/shell is presenting. For the 8.8" V1.x gaming dashboard (#103), where an idle
+    /// desktop's compositor rate (e.g. 22) read like a struggling game; <see cref="CurrentFps"/> keeps
+    /// its never-blank fallback for the serial dashboard.
+    /// </summary>
+    public int? CurrentAppFps()
+    {
+        var now = Environment.TickCount64;
+        lock (_gate)
+        {
+            var pid = SelectAppPid(_byPid, _names, now);
+            return pid != 0 ? RollingFps(_byPid[pid], now) : null;
+        }
+    }
+
+    /// <summary>The busiest real app presenting (0 = none; the compositor/shell never count). Pure.</summary>
+    public static int SelectAppPid(
+        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
+        IReadOnlyDictionary<int, string> names,
+        long now) => DominantPresenter(byPid, names, now, excludeInfrastructure: true);
+
+    /// <summary>
     /// Which process's FPS to report (0 = nothing presenting), pure so it can be unit-tested.
     /// "Whatever's rendering most": the app presenting the most frames in the last <see cref="FreshMs"/>,
     /// independent of window focus. The compositor + shell (<see cref="NonGame"/>) are excluded from that

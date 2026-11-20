@@ -588,6 +588,8 @@ public sealed class ControlLoop : IDisposable
             RamUsedGb = _dashRamUsed,
             RamTotalGb = _dashRamTotal,
             GpuName = _dashGpuName,
+            GpuFanPercent = _dashGpuFanPercent,
+            GpuFanRpm = _dashGpuFanRpm is { } rpm ? (int)Math.Round(rpm) : null,
             TargetDutyPercent = duty,
             FailsafeActive = failsafe,
             TurzxInfo = _turzxStatusText,
@@ -643,6 +645,7 @@ public sealed class ControlLoop : IDisposable
     private double? _dashCpuTemp;
     private double? _dashGpuTemp;
     private double? _dashGpuLoad, _dashGpuPower, _dashVramUsed, _dashVramTotal;
+    private double? _dashGpuFanRpm, _dashGpuFanPercent; // the card's coolers, for the Turzx GPU card (#103)
     private double? _dashCpuLoad, _dashCpuPower, _dashRamUsed;
     private readonly double? _dashRamTotal = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes is > 0 and var bytes ? bytes / 1_073_741_824.0 : null;
     private string? _dashCpuName, _dashGpuName;
@@ -669,6 +672,8 @@ public sealed class ControlLoop : IDisposable
             _dashGpuPower = stats.GpuPowerW;
             _dashVramUsed = stats.VramUsedGb;
             _dashVramTotal = stats.VramTotalGb;
+            _dashGpuFanRpm = stats.GpuFanRpm;
+            _dashGpuFanPercent = stats.GpuFanPercent;
             _dashCpuLoad = stats.CpuLoadPercent;
             _dashCpuPower = stats.CpuPowerW;
             _dashRamUsed = stats.RamUsedGb;
@@ -1500,10 +1505,12 @@ public sealed class ControlLoop : IDisposable
                     try { _fps?.Dispose(); } catch { /* replacing it anyway */ }
                     _fps = Sensors.PresentMonFpsReader.StartOrNull(_log);
                 }
+                // the V1.x gaming dashboard shows real apps only: an idle desktop's compositor rate isn't FPS (#103)
+                var appFps = _fps?.CurrentAppFps() ?? Sensors.RtssFpsReader.ReadCurrentFps();
                 lock (_turzxGate)
                 {
-                    _turzxFpsNow = fps;
-                    _turzxFpsHistory.Enqueue(fps ?? 0);
+                    _turzxFpsNow = appFps;
+                    _turzxFpsHistory.Enqueue(appFps ?? 0);
                     while (_turzxFpsHistory.Count > 60)
                     {
                         _turzxFpsHistory.Dequeue();

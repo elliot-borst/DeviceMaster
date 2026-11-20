@@ -17,4 +17,6 @@ public sealed record SystemStats(
     double? GpuTempC,
     double? GpuPowerW,
     double? VramUsedGb,
-    double? VramTotalGb = null);
+    double? VramTotalGb = null,
+    double? GpuFanRpm = null,
+    double? GpuFanPercent = null);

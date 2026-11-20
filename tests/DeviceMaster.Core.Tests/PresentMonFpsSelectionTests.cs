@@ -56,6 +56,18 @@ public class PresentMonFpsSelectionTests
     }
 
     [Fact]
+    public void Apps_only_pick_never_reports_the_compositor()
+    {
+        // the V1.x gaming dashboard (#103): an idle desktop is "no game running", not "22 FPS"
+        var idle = new Dictionary<int, Queue<(long Tick, double Ms)>> { [Dwm] = Frames(60, 45.5) };
+        var idleNames = new Dictionary<int, string> { [Dwm] = "dwm.exe" };
+        Assert.Equal(0, PresentMonFpsReader.SelectAppPid(idle, idleNames, Now));
+
+        var (byPid, names) = Composed();
+        Assert.Equal(Game, PresentMonFpsReader.SelectAppPid(byPid, names, Now));
+    }
+
+    [Fact]
     public void Selection_ignores_focus_and_follows_the_busiest_app()
     {
         // the shell is present too, but a real app renders — it wins regardless of what is focused

@@ -328,7 +328,8 @@ public static class TurzxDashboard
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.GpuUtil, 100, d.GpuUtil is { } u ? $"{u:0}%" : "—");
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "VRAM", d.VramUsedGb, d.VramTotalGb,
             d.VramUsedGb is { } v ? (d.VramTotalGb is { } vt ? $"{v:0.0} / {vt:0} GB" : $"{v:0.0} GB") : "—");
-        var fan = d.GpuFanPercent is < 0.5 || (d.GpuFanPercent is null && d.GpuFanRpm == 0) ? "stopped"
+        // 0 rpm is stopped even when the driver still reports a duty (idle fan stop, #103)
+        var fan = d.GpuFanPercent is < 0.5 || d.GpuFanRpm == 0 ? "stopped"
             : (d.GpuFanRpm, d.GpuFanPercent) switch
             {
                 ({ } rpm, { } pct) => $"{Rpm(rpm)} · {pct:0}%",
