@@ -259,6 +259,12 @@ public sealed class ControlLoop : IDisposable
             // to push, which must never stall the 1 Hz fan tick.
             _turzxThread = new Thread(() => RunTurzx(_cts.Token)) { IsBackground = true, Name = "DeviceMaster Turzx screen" };
             _turzxThread.Start();
+
+            // a self-powered USB hub can come up after a reboot with all its ports failed (#101)
+            if (OperatingSystem.IsWindows() && LhmFanController.IsElevated)
+            {
+                _usbHealer = new UsbHubHealer(_log);
+            }
         }
     }
 
@@ -268,6 +274,7 @@ public sealed class ControlLoop : IDisposable
         Thread? keepalive;
         Thread? turzx;
         Thread? upload;
+        UsbHubHealer? usbHealer;
         lock (_gate)
         {
             if (_thread is null)
@@ -284,7 +291,11 @@ public sealed class ControlLoop : IDisposable
             _keepaliveThread = null;
             _turzxThread = null;
             _slv3UploadThread = null;
+            usbHealer = _usbHealer;
+            _usbHealer = null;
         }
+
+        usbHealer?.Dispose();
 
         _turzxWake.Set(); // wake the Turzx worker so it sees the cancel promptly
         thread.Join(TimeSpan.FromSeconds(10));
@@ -1392,6 +1403,7 @@ public sealed class ControlLoop : IDisposable
     private const int TurzxLandscapeHeight = 480;
 
     private Thread? _turzxThread;
+    private UsbHubHealer? _usbHealer;
     private readonly AutoResetEvent _turzxWake = new(false);
     private readonly object _turzxGate = new();
     private LcdMode _turzxMode = LcdMode.Unmanaged;

@@ -41,6 +41,7 @@ try
         "turzx" => TurzxCommands.Run(args),
         "aura" => AuraCommands.Run(args),
         "vkb" => VkbCommands.Run(args),
+        "usbhubs" => UsbHubCommands.Run(args),
         "ramrgb" => RgbChipCommands.RunRam(args),
         "gpurgb" => RgbChipCommands.RunGpu(args),
         _ => PrintUsage(),
