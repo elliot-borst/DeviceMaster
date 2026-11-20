@@ -86,7 +86,8 @@ public sealed class WinUsbTurzxTransport : ITurzxUsbTransport
     /// </summary>
     public static WinUsbTurzxTransport Open(string devicePath)
     {
-        var file = CreateFile(devicePath, GenericRead | GenericWrite, FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+        // WinUSB only takes a handle opened for overlapped I/O; its synchronous calls still work on it
+        var file = CreateFile(devicePath, GenericRead | GenericWrite, FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting, FileFlagOverlapped, IntPtr.Zero);
         if (file.IsInvalid)
         {
             throw new IOException($"cannot open the Turzx panel ({new Win32Exception(Marshal.GetLastWin32Error()).Message}); another program may hold it");
@@ -210,6 +211,7 @@ public sealed class WinUsbTurzxTransport : ITurzxUsbTransport
     private const uint FileShareRead = 0x01;
     private const uint FileShareWrite = 0x02;
     private const uint OpenExisting = 3;
+    private const uint FileFlagOverlapped = 0x40000000;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SpDeviceInterfaceData
