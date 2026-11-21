@@ -45,6 +45,12 @@ public sealed record ControlStatus
     public double? CpuPowerW { get; init; }
     public double? RamUsedGb { get; init; }
     public double? RamTotalGb { get; init; }
+
+    /// <summary>
+    /// RAM installed (the sticks' total), larger than <see cref="RamTotalGb"/>, which is what the OS can
+    /// use after firmware, integrated-GPU and crash-kernel reservations (#106). Null when unknown.
+    /// </summary>
+    public double? RamInstalledGb { get; init; }
     public string? GpuName { get; init; }
 
     /// <summary>GPU fan speed in percent (0 = the card's idle fan stop; null = unknown).</summary>
@@ -587,6 +593,7 @@ public sealed class ControlLoop : IDisposable
             CpuPowerW = _dashCpuPower,
             RamUsedGb = _dashRamUsed,
             RamTotalGb = _dashRamTotal,
+            RamInstalledGb = _dashRamInstalled,
             GpuName = _dashGpuName,
             GpuFanPercent = _dashGpuFanPercent,
             GpuFanRpm = _dashGpuFanRpm is { } rpm ? (int)Math.Round(rpm) : null,
@@ -648,6 +655,24 @@ public sealed class ControlLoop : IDisposable
     private double? _dashGpuFanRpm, _dashGpuFanPercent; // the card's coolers, for the Turzx GPU card (#103)
     private double? _dashCpuLoad, _dashCpuPower, _dashRamUsed;
     private readonly double? _dashRamTotal = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes is > 0 and var bytes ? bytes / 1_073_741_824.0 : null;
+    private readonly double? _dashRamInstalled = InstalledRamGb();
+
+    /// <summary>Installed RAM as the firmware reports it (Windows), or null (#106).</summary>
+    private static double? InstalledRamGb()
+    {
+        try
+        {
+            return OperatingSystem.IsWindows() && GetPhysicallyInstalledSystemMemory(out var kb) && kb > 0 ? kb / 1_048_576.0 : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetPhysicallyInstalledSystemMemory(out ulong totalMemoryInKilobytes);
     private string? _dashCpuName, _dashGpuName;
     private long _dashTempsDue;
 

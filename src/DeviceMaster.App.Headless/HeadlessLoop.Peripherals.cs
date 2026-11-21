@@ -497,6 +497,7 @@ public sealed partial class HeadlessLoop
             CpuPowerW = status.CpuPowerW,
             RamUsedGb = status.RamUsedGb,
             RamTotalGb = status.RamTotalGb,
+            RamInstalledGb = status.RamInstalledGb,
             FanRpm = fan?.Rpm,
             FanDuty = status.TargetDutyPercent,
             Failsafe = status.FailsafeActive,

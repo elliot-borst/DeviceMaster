@@ -186,3 +186,37 @@ public class TurzxServerLayoutTests
         Assert.Equal([0xFF, 0xD8], jpeg[..2]);
     }
 }
+
+/// <summary>Installed RAM from the SMBIOS table (#106).</summary>
+public class SmbiosMemoryTests
+{
+    private static byte[] MemoryDevice(ushort size, uint extendedMb = 0)
+    {
+        var s = new byte[0x28 + 2];
+        s[0] = 17;
+        s[1] = 0x28;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(s.AsSpan(0x0C), size);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(s.AsSpan(0x1C), extendedMb);
+        return s; // no strings: the formatted part is followed by the double NUL
+    }
+
+    [Fact]
+    public void SumsPopulatedSlotsInEveryEncoding()
+    {
+        var bios = new byte[] { 0, 4, 0, 0, (byte)'X', 0, 0 }; // another structure with a string
+        var end = new byte[] { 127, 4, 0, 0, 0, 0 };
+        var table = bios
+            .Concat(MemoryDevice(16384))                 // 16 GB in MB
+            .Concat(MemoryDevice(0))                     // empty slot
+            .Concat(MemoryDevice(0x7FFF, 32768))         // 32 GB via the extended size
+            .Concat(MemoryDevice(0x8000 | 1024))         // 1 MB in KB units
+            .Concat(MemoryDevice(0xFFFF))                // unknown
+            .Concat(end).ToArray();
+
+        Assert.Equal((16384L + 32768) * 1024 * 1024 + 1024L * 1024, DeviceMaster.Sensors.Linux.SmbiosMemory.InstalledBytes(table));
+    }
+
+    [Fact]
+    public void NoMemoryDevicesMeansUnknown() =>
+        Assert.Null(DeviceMaster.Sensors.Linux.SmbiosMemory.InstalledBytes(new byte[] { 127, 4, 0, 0, 0, 0 }));
+}

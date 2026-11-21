@@ -413,6 +413,7 @@ public sealed partial class HeadlessLoop : IDisposable
             CpuPowerW = cpuStats.PowerW,
             RamUsedGb = cpuStats.RamUsedGb,
             RamTotalGb = cpuStats.RamTotalGb,
+            RamInstalledGb = _ramInstalledGb,
             GpuName = gpu?.Name,
             GpuFanPercent = gpu?.FanPercent ?? (gpu is not null ? _gpuFanPercent : null),
             GpuFanRpm = gpu is not null ? _gpuFanRpm : null,
@@ -636,6 +637,7 @@ public sealed partial class HeadlessLoop : IDisposable
     }
 
     private readonly CpuStats _cpuStats = new(); // load/power are rates: keeps the previous tick's counters
+    private readonly double? _ramInstalledGb = SmbiosMemory.ReadInstalledGb(); // the sticks' total, read once (#106)
     private readonly StorageSampler _storage = new();
     private DockerProbe? _docker;
 

@@ -34,6 +34,7 @@ public static class TurzxDashboardFeed
             CpuPowerW = s.CpuPowerW,
             RamUsedGb = s.RamUsedGb,
             RamTotalGb = s.RamTotalGb,
+            RamInstalledGb = s.RamInstalledGb,
             FanRpm = fan?.Rpm,
             FanDuty = s.TargetDutyPercent,
             Failsafe = s.FailsafeActive,

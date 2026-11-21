@@ -88,6 +88,9 @@ public sealed record TurzxDashboardData
     public double? RamUsedGb { get; init; }
     public double? RamTotalGb { get; init; }
 
+    /// <summary>RAM installed; the RAM line reads used / installed when it's known (#106).</summary>
+    public double? RamInstalledGb { get; init; }
+
     /// <summary>The CPU cooler's fans (motherboard header).</summary>
     public int? FanRpm { get; init; }
     public int FanDuty { get; init; }
@@ -375,8 +378,9 @@ public static class TurzxDashboard
         CardShell(c, r, "CPU", ShortCpu(d.CpuName), 30, bold: true, VendorColor(d.CpuName));
         Reading(c, r, d.CpuTempC, TempColor(d.CpuTempC, 75, 88), d.CpuPowerW);
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 226, "LOAD", d.CpuLoad, 100, d.CpuLoad is { } l ? $"{l:0}%" : "—");
-        Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "RAM", d.RamUsedGb, d.RamTotalGb,
-            d.RamUsedGb is { } u ? (d.RamTotalGb is { } rt ? $"{u:0} / {rt:0} GB" : $"{u:0} GB") : "—");
+        var ramOf = d.RamInstalledGb ?? d.RamTotalGb; // used / installed, e.g. 22 / 64 GB, not / 60 usable
+        Bar(c, r.Left + 24, r.Right - 24, r.Top + 306, "RAM", d.RamUsedGb, ramOf,
+            d.RamUsedGb is { } u ? (ramOf is { } rt ? $"{u:0} / {rt:0} GB" : $"{u:0} GB") : "—");
         var fans = d.Failsafe ? "FAILSAFE 100%" : d.FanRpm is { } rpm ? $"{Rpm(rpm)} · {d.FanDuty}%" : $"{d.FanDuty}%";
         Bar(c, r.Left + 24, r.Right - 24, r.Top + 386, "COOLER", d.Failsafe ? 100 : d.FanDuty, 100, fans,
             fill: d.Failsafe ? Danger : Cool, valueColor: d.Failsafe ? Danger : Cool);
