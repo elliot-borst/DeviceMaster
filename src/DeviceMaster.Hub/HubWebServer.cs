@@ -212,6 +212,12 @@ public sealed class HubWebServer : IDisposable
             return;
         }
 
+        if (ctx.Request.HttpMethod == "POST" && path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/update", StringComparison.Ordinal))
+        {
+            HandleUpdate(ctx, Uri.UnescapeDataString(path["/api/fleet/machines/".Length..^"/update".Length]));
+            return;
+        }
+
         if (ctx.Request.HttpMethod != "GET")
         {
             Send(ctx, 405, "text/plain; charset=utf-8", "GET or PUT");
@@ -384,6 +390,30 @@ public sealed class HubWebServer : IDisposable
         Send(ctx, status, "application/json; charset=utf-8", body);
     }
 
+    /// <summary>
+    /// Update now for one machine (#110): <c>POST /api/fleet/machines/{name}/update</c> presses its
+    /// Check for Updates button. Signed-in tailnet users (and automation tokens) only; always audited.
+    /// </summary>
+    private void HandleUpdate(HttpListenerContext ctx, string name)
+    {
+        if (User(ctx) is not { } user)
+        {
+            Json(ctx, 403, new { error = "updates need a signed-in tailnet user (open the page through its tailnet address)" });
+            return;
+        }
+
+        if (!_hub.Knows(name))
+        {
+            Json(ctx, 404, new { error = "unknown server" });
+            return;
+        }
+
+        var (status, body) = _hub.UpdateNowAsync(name).GetAwaiter().GetResult();
+        _hub.Store?.Audit(user, $"{name}: update now → {(status is >= 200 and < 300 ? "started" : $"failed ({status})")}");
+        _log($"hub: {user} asked {name} to update now ({status})");
+        Send(ctx, status, "application/json; charset=utf-8", body);
+    }
+
     /// <summary>Fleet machine lists a standby reads from the active hub (#100): only it computes InSync.</summary>
     public static bool IsFleetRead(string method, string path) =>
         method == "GET" && (path is "/api/fleet/machines" or "/api/fleet/home"
@@ -393,7 +423,8 @@ public sealed class HubWebServer : IDisposable
     /// <summary>Requests that change something: they only ever run on the active hub (#68).</summary>
     public static bool IsWrite(string method, string path) =>
         method == "PUT"
-        || (method == "POST" && path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal) && path.EndsWith("/power", StringComparison.Ordinal))
+        || (method == "POST" && path.StartsWith("/api/fleet/machines/", StringComparison.Ordinal)
+            && (path.EndsWith("/power", StringComparison.Ordinal) || path.EndsWith("/update", StringComparison.Ordinal)))
         || (method == "POST" && path.StartsWith("/m/", StringComparison.Ordinal));
 
     /// <summary>
@@ -853,7 +884,7 @@ function machinePage(m){
   const meta = [m.MachineName, m.Platform, m.Version && m.Version.split("+")[0] && `v${m.Version.split("+")[0].split(".")[0]}`].filter(Boolean).join(" · ");
   let html = `<h1>${esc(m.Name)}${badge(m)}</h1><div class="sub">${esc(seen(m))}${meta ? " · " + esc(meta) : ""}</div>
     <div class="seg" style="margin:0 0 14px 2px">${m.Online ? `<a class="openfull" href="/m/${encodeURIComponent(m.Name)}/">Open full controls →</a>
-      <button onclick='powerAct(${JSON.stringify(m.Name)}, "reboot")'>↻ Reboot</button><button onclick='powerAct(${JSON.stringify(m.Name)}, "off")'>⏻ Shut down</button>` : (m.CanWake ? `<button onclick='powerAct(${JSON.stringify(m.Name)}, "on")'>⏻ Power on</button>` : "")}</div>
+      <button onclick='updateNow(${JSON.stringify(m.Name)})'>⇪ Update</button><button onclick='powerAct(${JSON.stringify(m.Name)}, "reboot")'>↻ Reboot</button><button onclick='powerAct(${JSON.stringify(m.Name)}, "off")'>⏻ Shut down</button>` : (m.CanWake ? `<button onclick='powerAct(${JSON.stringify(m.Name)}, "on")'>⏻ Power on</button>` : "")}</div>
     <div class="card">${stats(m, true)}${banners(m)}
       <div class="sub" style="margin:12px 0 0">Fans follow ${esc(m.Source || "—")}${m.SourceTemperatureC != null ? ` at ${m.SourceTemperatureC.toFixed(1)} °C` : ""} · ${esc(m.Mode || "")}</div>
       ${caps(m.Capabilities)}</div>${machineSectionCard("cooling","Cooling",m)}${machineLightingCard(m)}${machineSectionCard("screens","Screens",m)}`;
@@ -862,6 +893,12 @@ function machinePage(m){
   if (d && d.Devices && d.Devices.length) html += `<div class="card" style="margin-top:14px"><b>Devices</b><table><tr><th>Device</th><th>Family</th><th>RPM</th><th>Duty</th></tr>` +
     d.Devices.map(x => `<tr><td>${esc(x.Name)}</td><td>${esc(x.Family)}</td><td>${x.Rpm ?? "—"}</td><td>${x.AppliedDutyPercent}%</td></tr>`).join("") + "</table></div>";
   return html;
+}
+async function updateNow(name){
+  if (!confirm(`Update ${name} now? DeviceMaster installs the newest release and restarts (fans and lighting blip).`)) return;
+  const r = await fetch(`/api/fleet/machines/${encodeURIComponent(name)}/update`, { method:"POST" });
+  const b = await r.json().catch(() => ({}));
+  alert(r.ok ? `${name}: checking for updates — it installs a newer release right away` : `${name}: ${b.error || "failed (" + r.status + ")"}`);
 }
 async function powerAct(name, action){
   const words = { off: "Shut down", reboot: "Reboot", on: "Power on" };

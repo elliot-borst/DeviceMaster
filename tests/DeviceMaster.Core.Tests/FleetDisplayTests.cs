@@ -58,6 +58,26 @@ public class ShutdownRequestTests
     [Fact]
     public void NoSharedFolderMeansNoShutdown() =>
         Assert.False(ShutdownRequest.Write(Path.Combine(Path.GetTempPath(), $"dm-missing-{Guid.NewGuid():N}"), "x"));
+
+    [Fact]
+    public void UpdateRequestGoesInTheSameFolderAndAPowerCancelLeavesIt()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dm-power-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.True(UpdateRequest.Write(dir, "update now (fleet hub)")); // #110
+            var file = Path.Combine(dir, UpdateRequest.FileName);
+            Assert.Contains("update now", File.ReadAllText(file));
+            Assert.False(ShutdownRequest.Cancel(dir)); // cancelling a shutdown never withdraws an update
+            Assert.True(File.Exists(file));
+            Assert.False(UpdateRequest.Write(Path.Combine(dir, "missing"), "x"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
 
 public class HomeDataTests

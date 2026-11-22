@@ -1719,10 +1719,16 @@ public sealed class MainWindow : Window
             return applied;
         }
 
-        // same path as the 15-minute check: installs silently, but waits while a game runs
-        public bool RequestUpdateCheck()
+        // now = false: the 15-minute check's path (installs silently, but waits while a game runs);
+        // now = true: exactly the Check for Updates button, pressed from the fleet hub (#110)
+        public bool RequestUpdateCheck(bool now)
         {
-            _ = window.Dispatcher.InvokeAsync(() => window.CheckForUpdatesAsync(auto: true));
+            if (now)
+            {
+                LogLine("update: Check for Updates pressed from the fleet hub");
+            }
+
+            _ = window.Dispatcher.InvokeAsync(() => window.CheckForUpdatesAsync(auto: !now));
             return true;
         }
     }

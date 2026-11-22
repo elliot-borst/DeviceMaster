@@ -92,3 +92,28 @@ public static class ShutdownRequest
         return cancelled;
     }
 }
+
+/// <summary>
+/// Update now on a Linux agent (#110): the agent writes <c>update-request</c> into the same folder
+/// it shares with the host for power requests; the host's update helper
+/// (<c>scripts/update-helper/devicemaster-update.sh</c>) installs the newest release's Linux build
+/// there and restarts the agent and hub. The container itself never downloads or swaps anything.
+/// </summary>
+public static class UpdateRequest
+{
+    public const string FileName = "update-request";
+
+    /// <summary>Writes the request (who, when); the helper deletes it when it acts. False if the folder isn't there.</summary>
+    public static bool Write(string directory, string reason)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        var path = Path.Combine(directory, FileName);
+        File.WriteAllText(path + ".tmp", $"{DateTime.UtcNow:O} {reason}\n");
+        File.Move(path + ".tmp", path, overwrite: true);
+        return true;
+    }
+}

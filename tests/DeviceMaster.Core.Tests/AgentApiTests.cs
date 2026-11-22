@@ -179,12 +179,14 @@ public sealed class AgentUpdateCheckTests : IDisposable
     private sealed class Host(bool selfUpdating) : IAgentHost
     {
         public int Requests;
+        public bool? LastNow;
         public ControlStatus Status { get; } = new();
         public FleetProfile ReadProfile() => new();
         public bool ApplyProfile(FleetProfile profile) => false;
-        public bool RequestUpdateCheck()
+        public bool RequestUpdateCheck(bool now)
         {
             Requests++;
+            LastNow = now;
             return selfUpdating;
         }
     }
@@ -227,9 +229,14 @@ public sealed class AgentUpdateCheckTests : IDisposable
         return $"http://localhost:{port}{AgentApi.Prefix}update-check";
     }
 
-    private Task<HttpResponseMessage> Post(string url, string? token = Token)
+    private Task<HttpResponseMessage> Post(string url, string? token = Token, bool now = false)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, url);
+        if (now)
+        {
+            request.Headers.Add("X-DeviceMaster-Update", "now");
+        }
+
         if (token is not null)
         {
             request.Headers.Authorization = new("Bearer", token);
@@ -245,6 +252,18 @@ public sealed class AgentUpdateCheckTests : IDisposable
         var response = await Post(Serve(host));
         Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
         Assert.Equal(1, host.Requests);
+    }
+
+    [Fact]
+    public async Task PlainCheckWaitsLikeTheTimerButUpdateNowPressesTheButton()
+    {
+        var host = new Host(selfUpdating: true);
+        var url = Serve(host);
+        await Post(url);
+        Assert.False(host.LastNow); // the 15-minute path (still waits while gaming)
+        var response = await Post(url, now: true);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+        Assert.True(host.LastNow); // #110: Check for Updates, installs at once
     }
 
     [Fact]

@@ -1,0 +1,20 @@
+# DeviceMaster update helper config (#110): one per host, sourced by devicemaster-update.sh.
+# Never put secrets here; the helper needs none (releases are public).
+
+# --- a host running the agent (and maybe the hub) in Docker (StormVault, MindForge) ---
+MODE=container
+POWER_DIR=/srv/devicemaster/power                 # the agent's ShutdownRequestDir, as seen on the host
+STATUS_URL=http://127.0.0.1:27004/status.json
+BUILD_DIR=/srv/devicemaster                       # holds the runtime-only Dockerfile (COPY publish/)
+AGENT_IMAGE=devicemaster:mindforge                # the tag the agent's compose file runs
+AGENT_COMPOSE_DIR=/srv/devicemaster
+AGENT_SERVICE=devicemaster
+HUB_COMPOSE_DIR=/srv/devicemaster-hub             # leave empty when this host runs no hub
+HUB_SERVICE=devicemaster-hub                      # its compose service = container name
+
+# --- a native systemd install instead (NightWatch) ---
+# MODE=native
+# POWER_DIR=/var/lib/devicemaster/power
+# STATUS_URL=http://127.0.0.1:27004/status.json
+# INSTALL_DIR=/opt/devicemaster
+# UNITS="devicemaster devicemaster-hub"

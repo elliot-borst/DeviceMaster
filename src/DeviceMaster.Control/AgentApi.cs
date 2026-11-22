@@ -19,10 +19,12 @@ public interface IAgentHost
     bool ApplyProfile(FleetProfile profile);
 
     /// <summary>
-    /// Starts an update check now, as the app's own periodic check does (it still waits while the
-    /// machine is busy gaming). False when this app updates some other way (the Linux containers).
+    /// Starts an update check now. <paramref name="now"/> false: as the app's own periodic check
+    /// does (it still waits while the machine is busy gaming); true: exactly what the app's Check for
+    /// Updates button does, installing at once (#110). False when this app updates some other way
+    /// (the Linux containers).
     /// </summary>
-    bool RequestUpdateCheck() => false;
+    bool RequestUpdateCheck(bool now) => false;
 
     /// <summary>The machine's whole settings as JSON (phase 5: the full per-server page). Null = not offered.</summary>
     string? ReadSettingsJson() => null;
@@ -58,7 +60,8 @@ public interface IAgentHost
 /// <item><c>GET /api/v1/profile</c> — the profile in force, with its revision</item>
 /// <item><c>PUT /api/v1/profile</c> — apply a whole profile; answers with the profile now in force</item>
 /// <item><c>POST /api/v1/power/shutdown|reboot|cancel|wake</c> — clean shutdown / reboot (cancellable), Wake-on-LAN</item>
-/// <item><c>POST /api/v1/update-check</c> — check for (and install) a new release now; 501 where the app isn't self-updating</item>
+/// <item><c>POST /api/v1/update-check</c> — check for (and install) a new release now; header <c>X-DeviceMaster-Update: now</c>
+/// presses the app's Check for Updates button (no wait while gaming, #110); 501 where the app isn't self-updating</item>
 /// </list>
 /// </summary>
 public sealed class AgentApi
@@ -172,14 +175,15 @@ public sealed class AgentApi
                     HandleWake(ctx);
                     break;
                 case ("POST", "update-check"):
-                    if (_host.RequestUpdateCheck())
+                    var updateNow = string.Equals(ctx.Request.Headers["X-DeviceMaster-Update"], "now", StringComparison.OrdinalIgnoreCase);
+                    if (_host.RequestUpdateCheck(updateNow))
                     {
-                        _log?.Invoke("agent api: update check requested");
-                        Respond(ctx, 202, new { started = true });
+                        _log?.Invoke(updateNow ? "agent api: update now requested (Check for Updates)" : "agent api: update check requested");
+                        Respond(ctx, 202, new { started = true, now = updateNow });
                     }
                     else
                     {
-                        Respond(ctx, 501, new { error = "this machine is updated by redeploying its container, not in place" });
+                        Respond(ctx, 501, new { error = "this machine has no update helper set up (it is updated by redeploying it)" });
                     }
 
                     break;

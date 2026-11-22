@@ -1,0 +1,13 @@
+# DeviceMaster update helper (#110), systemd hosts: the fleet hub's "Update" makes the agent write
+# <power dir>/update-request; this starts devicemaster-update.service, which installs the newest
+# release. Set the path to the agent's power folder on this host, then:
+#   systemctl daemon-reload && systemctl enable --now devicemaster-update.path
+[Unit]
+Description=Watch for a DeviceMaster fleet update request
+
+[Path]
+PathExists=/srv/devicemaster/power/update-request
+Unit=devicemaster-update.service
+
+[Install]
+WantedBy=multi-user.target

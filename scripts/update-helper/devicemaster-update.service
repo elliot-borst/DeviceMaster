@@ -1,0 +1,10 @@
+# Installs the newest DeviceMaster release on this host (#110). See devicemaster-update.path.
+[Unit]
+Description=DeviceMaster update requested by the fleet
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900
+ExecStart=/usr/local/sbin/devicemaster-update.sh /etc/devicemaster/update.conf

@@ -54,6 +54,7 @@ public class HubElectionTests
     [Theory]
     [InlineData("PUT", "/api/fleet/settings/lighting", true)]
     [InlineData("POST", "/api/fleet/machines/StormVault/power", true)]
+    [InlineData("POST", "/api/fleet/machines/AstralStorm/update", true)]
     [InlineData("POST", "/m/MindForge/config.json", true)]
     [InlineData("GET", "/api/fleet/settings", false)]
     [InlineData("GET", "/m/MindForge/status.json", false)]

@@ -245,6 +245,13 @@ public sealed class FleetHub : IDisposable
         && _config.Agents.FirstOrDefault(a => a.Name == name)?.Mac is { Length: > 0 } mac && WakeOnLan.ParseMac(mac) is not null;
 
     /// <summary>
+    /// Presses a machine's Check for Updates button (#110): it installs a newer release at once.
+    /// Machines that are redeployed instead (Linux) answer 501.
+    /// </summary>
+    public Task<(int Status, string Body)> UpdateNowAsync(string name) =>
+        ForwardAsync(name, HttpMethod.Post, "update-check", headers: new() { ["X-DeviceMaster-Update"] = "now" });
+
+    /// <summary>
     /// Power action for one machine (#49): "off" asks its agent for a clean shutdown, "cancel"
     /// withdraws it, "on" asks the waking agent to send its Wake-on-LAN packet.
     /// </summary>

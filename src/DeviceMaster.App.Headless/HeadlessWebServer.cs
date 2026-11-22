@@ -39,6 +39,11 @@ public sealed class HeadlessWebServer : IDisposable
                 ? "host reboot helper"
                 : null;
 
+        // the host's update helper installs the newest release and restarts this agent (#110)
+        public bool RequestUpdateCheck(bool now) =>
+            HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir
+            && UpdateRequest.Write(dir, now ? "update now (fleet hub)" : "update check (fleet hub)");
+
         public bool CancelShutdown() =>
             HeadlessConfig.Load(server._configPath).ShutdownRequestDir is { Length: > 0 } dir && ShutdownRequest.Cancel(dir);
 
