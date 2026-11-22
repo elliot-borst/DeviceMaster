@@ -140,14 +140,15 @@ public sealed class CurveEditor : Canvas
         AddSensor("CPU", _cpuTemp, CpuBrush, 0);
         AddSensor("GPU", _gpuTemp, GpuBrush, stagger ? 1 : 0);
 
-        // live marker
+        // live marker: the fans' point on the curve, its line coming down from the top so it reads
+        // apart from the CPU and GPU lines rising from the bottom (#108)
         if (_liveTemp is { } live && _liveDuty is { } liveDuty)
         {
             var x = X(Math.Clamp(live, _range.Min, _range.Max));
-            Add(new Line { X1 = x, X2 = x, Y1 = PadTop, Y2 = PadTop + PlotHeight, Stroke = Theme.Accent2, StrokeThickness = 1, StrokeDashArray = [3, 3] });
+            Add(new Line { X1 = x, X2 = x, Y1 = PadTop, Y2 = Y(liveDuty), Stroke = Theme.Accent2, StrokeThickness = 1, StrokeDashArray = [3, 3] });
             var dot = new Ellipse { Width = 10, Height = 10, Fill = Theme.Accent2 };
             Place(dot, x - 5, Y(liveDuty) - 5);
-            AddText($"now {live:0.0}° → {liveDuty}%", Math.Min(x + 8, PadLeft + PlotWidth - 120), PadTop + 2, 120, TextAlignment.Left, Theme.Accent2);
+            AddText($"fans {live:0.0}° → {liveDuty}%", Math.Min(x + 8, PadLeft + PlotWidth - 120), PadTop + 2, 120, TextAlignment.Left, Theme.Accent2);
         }
 
         // draggable points
