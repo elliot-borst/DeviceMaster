@@ -139,7 +139,7 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .swatch.sel { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 .preview { width:52px; height:34px; border-radius:9px; background:#8000ff; border:1px solid var(--line2); }
 .preview.rainbow { background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
-.preview.gta6 { background:linear-gradient(90deg,#fe914c,#fd76a1,#fe5d93,#de3fbd,#8e44c1,#5848c2,#355dce,#5848c2,#8e44c1,#de3fbd,#fe5d93,#fd76a1,#fe914c) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
+.preview.gta6 { background:linear-gradient(90deg,#ff5a00,#ff0064,#ff0096,#ff00d2,#9600ff,#3200ff,#0046ff,#3200ff,#9600ff,#ff00d2,#ff0096,#ff0064,#ff5a00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
 @keyframes rb { to { background-position:200% 0; } }
 @media (prefers-reduced-motion: reduce){ .preview.rainbow, .preview.gta6 { animation:none; } }
 /* table */

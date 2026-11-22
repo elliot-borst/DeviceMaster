@@ -32,18 +32,20 @@ public static class RainbowEffect
 
     /// <summary>
     /// The seven stripes of the GTA VI logo, bottom to top, in the order they flow: sunset orange →
-    /// light pink → pink → magenta → purple → indigo → blue, then back the same way, so the loop
-    /// never jumps from blue straight to orange.
+    /// hot pink → deep pink → magenta → purple → indigo → blue, then back the same way, so the loop
+    /// never jumps from blue straight to orange. The logo's own shades are mixed with white, which
+    /// LEDs show as washed-out pastels; these keep each stripe's hue at full saturation, with the
+    /// two pinks spread apart so they stay distinct (#109).
     /// </summary>
     public static readonly (byte R, byte G, byte B)[] Gta6Palette =
     [
-        (0xFE, 0x91, 0x4C), // sunset orange
-        (0xFD, 0x76, 0xA1), // light pink
-        (0xFE, 0x5D, 0x93), // pink
-        (0xDE, 0x3F, 0xBD), // magenta
-        (0x8E, 0x44, 0xC1), // purple
-        (0x58, 0x48, 0xC2), // indigo
-        (0x35, 0x5D, 0xCE), // blue
+        (255, 90, 0),  // sunset orange (logo #FE914C)
+        (255, 0, 100), // hot pink (logo #FD76A1)
+        (255, 0, 150), // deep pink (logo #FE5D93)
+        (255, 0, 210), // magenta (logo #DE3FBD)
+        (150, 0, 255), // purple (logo #8E44C1)
+        (50, 0, 255),  // indigo (logo #5848C2)
+        (0, 70, 255),  // blue (logo #355DCE)
     ];
 
     /// <summary>
