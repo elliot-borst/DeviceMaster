@@ -59,12 +59,14 @@ public class RainbowEffectTests
     public void Gta6WalksThePaletteThereAndBack()
     {
         var p = RainbowEffect.Gta6Palette;
-        Assert.Equal(p[0], RainbowEffect.ColorAt(RgbEffect.Gta6, 0));      // sunset orange
-        Assert.Equal(p[1], RainbowEffect.ColorAt(RgbEffect.Gta6, 1 / 6.0)); // pink
-        Assert.Equal(p[2], RainbowEffect.ColorAt(RgbEffect.Gta6, 2 / 6.0)); // purple
-        Assert.Equal(p[3], RainbowEffect.ColorAt(RgbEffect.Gta6, 0.5));     // light blue
-        Assert.Equal(p[2], RainbowEffect.ColorAt(RgbEffect.Gta6, 4 / 6.0)); // and back
-        Assert.Equal(p[0], RainbowEffect.ColorAt(RgbEffect.Gta6, 1.0));
+        var steps = 2 * (p.Length - 1); // up the stripes and back down
+        for (var i = 0; i < p.Length; i++)
+        {
+            Assert.Equal(p[i], RainbowEffect.ColorAt(RgbEffect.Gta6, (double)i / steps));
+            Assert.Equal(p[i], RainbowEffect.ColorAt(RgbEffect.Gta6, 1 - (double)i / steps));
+        }
+
+        Assert.Equal(p[^1], RainbowEffect.ColorAt(RgbEffect.Gta6, 0.5)); // the top stripe, blue
     }
 
     [Fact]
@@ -81,12 +83,11 @@ public class RainbowEffectTests
     [Fact]
     public void Gta6StaysInsideThePaletteColours()
     {
-        // every colour is a blend of two neighbouring palette entries: never green, never yellow
+        // every colour is a blend of two neighbouring stripes: green is never the strongest channel
         for (var k = 0; k < 200; k++)
         {
             var (r, g, b) = RainbowEffect.ColorAt(RgbEffect.Gta6, k / 200.0);
-            Assert.True(g <= 170, $"green {g} at {k}");
-            Assert.False(r > 200 && g > 100, $"yellowish {r},{g},{b} at {k}");
+            Assert.True(g < Math.Max(r, b), $"greenish {r},{g},{b} at {k}");
         }
     }
 

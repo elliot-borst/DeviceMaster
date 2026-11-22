@@ -777,7 +777,7 @@ public sealed partial class HeadlessLoop : IDisposable
 
     /// <summary>
     /// The colour for ENE chips (GPU, RAM), which can't play a custom effect: GTA 6 holds the
-    /// palette's pink there instead of streaming over SMBus (#109); otherwise the static colour.
+    /// logo's magenta there instead of streaming over SMBus (#109); otherwise the static colour.
     /// </summary>
     private static (byte, byte, byte) ChipRgbTarget(HeadlessConfig cfg)
     {

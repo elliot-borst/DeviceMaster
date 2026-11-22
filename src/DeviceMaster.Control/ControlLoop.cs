@@ -1262,7 +1262,7 @@ public sealed class ControlLoop : IDisposable
         {
             try
             {
-                // ENE chips only have their own rainbow: GTA 6 holds the palette's pink (no SMBus streaming)
+                // ENE chips only have their own rainbow: GTA 6 holds the logo's magenta (no SMBus streaming)
                 var (cr, cg, cb) = gta6 ? ScaleColor(DeviceMaster.Core.Lighting.RainbowEffect.Gta6StillColor, bright) : (r, g, b);
                 foreach (var ram in _ramRgb)
                 {

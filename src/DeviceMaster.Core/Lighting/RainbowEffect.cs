@@ -6,7 +6,7 @@ public enum RgbEffect
     Static = 0,
     Rainbow,
 
-    /// <summary>GTA 6: sunset orange, pink, purple and light blue flowing along the chain (#109).</summary>
+    /// <summary>GTA 6: the GTA VI logo's stripes, sunset orange through pinks and purples to blue, flowing along the chain (#109).</summary>
     Gta6,
 }
 
@@ -31,22 +31,26 @@ public static class RainbowEffect
     };
 
     /// <summary>
-    /// The GTA 6 colours in the order they flow: sunset orange → pink → purple → light blue, then
-    /// back the same way, so the loop never jumps from blue straight to orange.
+    /// The seven stripes of the GTA VI logo, bottom to top, in the order they flow: sunset orange →
+    /// light pink → pink → magenta → purple → indigo → blue, then back the same way, so the loop
+    /// never jumps from blue straight to orange.
     /// </summary>
     public static readonly (byte R, byte G, byte B)[] Gta6Palette =
     [
-        (255, 72, 0),   // sunset orange
-        (255, 16, 140), // pink
-        (130, 0, 255),  // purple
-        (0, 170, 255),  // light blue
+        (0xFE, 0x91, 0x4C), // sunset orange
+        (0xFD, 0x76, 0xA1), // light pink
+        (0xFE, 0x5D, 0x93), // pink
+        (0xDE, 0x3F, 0xBD), // magenta
+        (0x8E, 0x44, 0xC1), // purple
+        (0x58, 0x48, 0xC2), // indigo
+        (0x35, 0x5D, 0xCE), // blue
     ];
 
     /// <summary>
     /// One colour for LED families that can't play a custom effect (ENE GPU and RAM controllers,
-    /// which only know their own rainbow): the palette's pink, held still.
+    /// which only know their own rainbow): the logo's magenta, held still.
     /// </summary>
-    public static (byte R, byte G, byte B) Gta6StillColor => Gta6Palette[1];
+    public static (byte R, byte G, byte B) Gta6StillColor => Gta6Palette[3];
 
     /// <summary>The colour at <paramref name="position"/> 0–1 round the effect's loop.</summary>
     public static (byte R, byte G, byte B) ColorAt(RgbEffect effect, double position)
@@ -56,7 +60,7 @@ public static class RainbowEffect
             return HueToRgb(position);
         }
 
-        // there and back along the palette: 0 → orange, 0.5 → light blue, 1 → orange again
+        // there and back along the palette: 0 → orange, 0.5 → blue, 1 → orange again
         var t = Fraction(position) * 2;
         var along = (t <= 1 ? t : 2 - t) * (Gta6Palette.Length - 1);
         var index = Math.Min((int)Math.Floor(along), Gta6Palette.Length - 2);
