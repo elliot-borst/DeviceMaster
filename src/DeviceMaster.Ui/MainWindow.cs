@@ -2071,6 +2071,7 @@ public sealed class MainWindow : Window
             ? status.TargetDutyPercent
             : curveTemp is { } ct2 ? _controlSettings.Curve.EvaluateDuty(ct2) : (int?)null;
         _curveEditor.SetLive(status.FailsafeActive ? null : curveTemp, curveDuty);
+        _curveEditor.SetSensors(status.CpuTemperatureC, status.GpuTemperatureC);
 
         var fans = status.Devices.ToList();
         var presentIds = fans.Select(f => f.Id ?? f.Name).Distinct().ToList();
