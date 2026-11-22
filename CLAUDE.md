@@ -55,9 +55,12 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
    `MainWindow.VersionDate`.
 2. `.\build-installer.ps1` → `dist\DeviceMaster-Setup.exe` (Inno Setup 6 required).
 3. Commit + push (plain messages, authored as the repo owner — never AI attribution).
-4. `gh release create v<N> dist\DeviceMaster-Setup.exe --title "DeviceMaster <N>" --notes ...`
-   The release asset MUST be the setup exe (the in-app updater looks for an .exe asset with
-   "setup" in the name); do not ship zips.
+4. Linux build for the hosts' update helper (#110), on a Linux box with Docker (not the Unraid host):
+   `scripts/update-helper/build-linux-release.sh <commit> <dir>` → `DeviceMaster-linux-x64.tar.gz` + `.sha256`.
+5. `gh release create v<N> dist\DeviceMaster-Setup.exe <dir>/DeviceMaster-linux-x64.tar.gz <dir>/DeviceMaster-linux-x64.tar.gz.sha256 --title "DeviceMaster <N>" --notes ...`
+   The Windows asset MUST be the setup exe (the in-app updater looks for an .exe asset with
+   "setup" in the name); the Linux asset names are fixed (the update helper downloads them by name).
+6. Update the fleet: the hub's ⇪ Update per machine (or `POST /api/fleet/machines/{name}/update`).
 ## GitHub issues: assign the owner
 
 Every issue created on this repo is **assigned to the owner, `elliot-borst`, the moment it is created**

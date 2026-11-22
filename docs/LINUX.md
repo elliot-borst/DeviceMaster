@@ -270,6 +270,34 @@ these pages under github.com/Fred78290/nct6687d/:
 - PR #190: write verification returning EIO; curve save and restore; tested on MS-7E59;
 - PR #228: draft, the EC's register-level behaviour.
 
+## Update now (#110)
+
+The fleet hub's **⇪ Update** button (or `POST /api/fleet/machines/{name}/update`, signed-in tailnet
+user or an automation token, audited) updates a machine at once:
+
+- **Windows:** the agent presses the app's own Check for Updates (installs a newer release straight
+  away, no wait while gaming). The plain agent call without `X-DeviceMaster-Update: now` keeps the
+  15-minute check's behaviour.
+- **Linux:** the agent writes `update-request` into its `ShutdownRequestDir`; the host's update helper
+  `scripts/update-helper/devicemaster-update.sh` (root, on the host — the container never downloads
+  or swaps anything) reads the newest GitHub release, downloads its **`DeviceMaster-linux-x64.tar.gz`**
+  + `.sha256`, verifies it, rebuilds the runtime image (or swaps `/opt/devicemaster` on a native
+  install), restarts the agent and the hub, waits for the agent to report the new version and rolls
+  back if it doesn't. Logs: `journalctl -t devicemaster-update` / `/var/log/devicemaster-update.log`
+  (Unraid). No helper set up ⇒ the agent answers 501.
+
+Install the helper (as root):
+
+- **systemd hosts:** copy `devicemaster-update.sh` to `/usr/local/sbin/`, write
+  `/etc/devicemaster/update.conf` from `update.conf.example`, set the path in
+  `devicemaster-update.path` to the agent's power folder, copy both units to `/etc/systemd/system/`,
+  `systemctl daemon-reload && systemctl enable --now devicemaster-update.path`.
+- **Unraid:** put `devicemaster-update.sh` and `update.conf` next to `unraid-shutdown-watch.sh`
+  (`/boot/config/devicemaster/`); the watcher (this version or newer) starts the helper detached.
+
+Every release therefore carries the Linux build next to the Windows setup exe:
+`scripts/update-helper/build-linux-release.sh <commit> <dir>` (Docker, memory-capped SDK container).
+
 ## Automations on the fleet hub (#83)
 
 An agent or a scheduled job (e.g. "blackout at 23:00, lights on at 07:00") can change fleet settings
