@@ -1052,6 +1052,7 @@ public sealed class ControlLoop : IDisposable
     private const int HubRgbRefreshMs = 20_000;
     private readonly Dictionary<string, string> _appliedSlv3Rgb = [];
     private string? _appliedAuraRgb;
+    private (byte R, byte G, byte B) _auraWalkColor;
 
     // Mystic Light: direct colours, no built-in effect on the 761 protocol — static is re-sent
     // every 30 s (cheap: four feature reports) so a board-side reset heals itself, and rainbow
@@ -1064,6 +1065,9 @@ public sealed class ControlLoop : IDisposable
     // rainbow: Corsair hubs are streamed from a background animator; the other families play
     // the effect themselves once told to (Aura/ENE built-in rainbow, SL V3 stored loop)
     private HubRainbowAnimator? _rainbow;
+
+    private static (byte R, byte G, byte B) ScaleColor((byte R, byte G, byte B) c, int brightPercent) =>
+        ((byte)(c.R * brightPercent / 100), (byte)(c.G * brightPercent / 100), (byte)(c.B * brightPercent / 100));
     private volatile LinkHub[] _hubSnapshot = [];
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
@@ -1097,12 +1101,17 @@ public sealed class ControlLoop : IDisposable
         var (r, g, b) = settings.RgbOff
             ? ((byte)0, (byte)0, (byte)0)
             : (Scale(settings.RgbR), Scale(settings.RgbG), Scale(settings.RgbB));
+        // rainbow = the chips' own hardware rainbow; animated = any moving effect (Rainbow or GTA 6),
+        // which every streamed family paints from here (#109)
         var rainbow = settings.RainbowActive;
-        var key = rainbow ? $"rainbow:{settings.RgbSpeed}:{bright}" : $"{r},{g},{b}";
+        var gta6 = settings.Gta6Active;
+        var animated = settings.AnimatedActive;
+        var effect = settings.RgbEffect;
+        var key = animated ? $"{effect}:{settings.RgbSpeed}:{bright}" : $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
         {
-            if (rainbow)
+            if (animated)
             {
                 // the animator streams this hub's frames; switching back to Static changes the key
                 _appliedHubRgb[hub.SerialNumber] = key;
@@ -1146,7 +1155,7 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_aura is not null && _appliedAuraRgb != key)
+        if (_aura is not null && (_appliedAuraRgb != key || gta6))
         {
             try
             {
@@ -1154,13 +1163,27 @@ public sealed class ControlLoop : IDisposable
                 {
                     _aura.ApplyRainbow();
                 }
+                else if (gta6)
+                {
+                    // no custom effects in the controller: walk the palette, one colour per tick
+                    var now = DeviceMaster.Core.Lighting.RainbowEffect.Now(effect, settings.RgbSpeed, bright);
+                    if (_appliedAuraRgb != key || now != _auraWalkColor)
+                    {
+                        _aura.ApplyStaticColor(now.R, now.G, now.B);
+                        _auraWalkColor = now;
+                    }
+                }
                 else
                 {
                     _aura.ApplyStaticColor(r, g, b);
                 }
 
+                if (_appliedAuraRgb != key)
+                {
+                    _log?.Invoke($"RGB applied on Aura ({_aura.Zones.Count} zones)");
+                }
+
                 _appliedAuraRgb = key;
-                _log?.Invoke($"RGB applied on Aura ({_aura.Zones.Count} zones)");
             }
             catch (Exception ex)
             {
@@ -1170,15 +1193,13 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_vkb.Count > 0 && (rainbow || _appliedVkbRgb != key || Environment.TickCount64 >= _vkbRefreshDue))
+        if (_vkb.Count > 0 && (animated || _appliedVkbRgb != key || Environment.TickCount64 >= _vkbRefreshDue))
         {
-            // VKB LEDs have 8 levels per channel: rainbow steps the hue once a tick
+            // VKB LEDs have 8 levels per channel: an effect steps its colour once a tick
             var (vr, vg, vb) = (r, g, b);
-            if (rainbow)
+            if (animated)
             {
-                var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(settings.RgbSpeed) % 1.0;
-                var frame = DeviceMaster.Core.Lighting.RainbowEffect.Frame(1, phase, bright);
-                (vr, vg, vb) = (frame[0], frame[1], frame[2]);
+                (vr, vg, vb) = DeviceMaster.Core.Lighting.RainbowEffect.Now(effect, settings.RgbSpeed, bright);
             }
 
             foreach (var (path, stick) in _vkb.ToList())
@@ -1204,14 +1225,14 @@ public sealed class ControlLoop : IDisposable
             _vkbRefreshDue = Environment.TickCount64 + VkbRefreshMs;
         }
 
-        if (_msi is not null && (rainbow || _appliedMsiRgb != key || Environment.TickCount64 >= _msiRefreshDue))
+        if (_msi is not null && (animated || _appliedMsiRgb != key || Environment.TickCount64 >= _msiRefreshDue))
         {
             try
             {
-                if (rainbow)
+                if (animated)
                 {
-                    var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(settings.RgbSpeed) % 1.0;
-                    _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, bright));
+                    var phase = DeviceMaster.Core.Lighting.RainbowEffect.PhaseAt(Environment.TickCount64, settings.RgbSpeed);
+                    _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, bright, effect));
                 }
                 else
                 {
@@ -1241,6 +1262,8 @@ public sealed class ControlLoop : IDisposable
         {
             try
             {
+                // ENE chips only have their own rainbow: GTA 6 holds the palette's pink (no SMBus streaming)
+                var (cr, cg, cb) = gta6 ? ScaleColor(DeviceMaster.Core.Lighting.RainbowEffect.Gta6StillColor, bright) : (r, g, b);
                 foreach (var ram in _ramRgb)
                 {
                     if (rainbow)
@@ -1249,7 +1272,7 @@ public sealed class ControlLoop : IDisposable
                     }
                     else
                     {
-                        ram.ApplyStaticColor(r, g, b, persist: false);
+                        ram.ApplyStaticColor(cr, cg, cb, persist: false);
                     }
                 }
 
@@ -1261,7 +1284,7 @@ public sealed class ControlLoop : IDisposable
                     }
                     else
                     {
-                        gpu.Ene?.ApplyStaticColor(r, g, b, persist: false);
+                        gpu.Ene?.ApplyStaticColor(cr, cg, cb, persist: false);
                     }
                 }
 
@@ -1355,7 +1378,7 @@ public sealed class ControlLoop : IDisposable
             // wireless effects live in fan firmware; refresh periodically in case a group resets.
             // A rainbow on the air holds refreshes/confirmations back until it has landed, so
             // they never supersede it — a new setting (different key) still goes out at once.
-            var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue && !(rainbow && Slv3UploadBusy);
+            var refreshDue = Environment.TickCount64 >= _slv3RgbRefreshDue && !(animated && Slv3UploadBusy);
             var sentAny = false;
             var uploads = new List<(Slv3Device Device, List<byte[]> Payloads)>();
             foreach (var device in _slv3.Devices.Where(d => d.IsBoundTo(_slv3.MasterMac)))
@@ -1369,10 +1392,10 @@ public sealed class ControlLoop : IDisposable
                 {
                     var ticks = Environment.TickCount64;
                     var effectIndex = new[] { (byte)(ticks >> 24), (byte)(ticks >> 16), (byte)(ticks >> 8), (byte)ticks };
-                    if (rainbow)
+                    if (animated)
                     {
                         // queued below, sent by the upload worker (#28)
-                        uploads.Add((device, _slv3.BuildRainbowPayloads(device, settings.RgbSpeed, bright, effectIndex)));
+                        uploads.Add((device, _slv3.BuildRainbowPayloads(device, settings.RgbSpeed, bright, effectIndex, effect)));
                     }
                     else
                     {
@@ -1401,7 +1424,7 @@ public sealed class ControlLoop : IDisposable
             {
                 // a rainbow is ~100 payloads per group: just the one confirmation upload (the
                 // refresh below, once the first has landed), not the static colour's burst
-                _slv3ConfirmSendsLeft = rainbow ? 0 : 2;
+                _slv3ConfirmSendsLeft = animated ? 0 : 2;
                 _slv3RgbRefreshDue = Math.Min(_slv3RgbRefreshDue, Environment.TickCount64 + 1_500);
             }
             else if (refreshDue)
@@ -1419,7 +1442,7 @@ public sealed class ControlLoop : IDisposable
                     // and drops its stored effect — bound-time-to-heal beats airtime here
                     // (still nowhere near the v17 continuous-resend flood). A rainbow loop is a
                     // ~60-frame upload, so it re-sends every 2 minutes instead.
-                    _slv3RgbRefreshDue = Environment.TickCount64 + (rainbow ? 120_000 : Slv3StaticRefreshMs);
+                    _slv3RgbRefreshDue = Environment.TickCount64 + (animated ? 120_000 : Slv3StaticRefreshMs);
                 }
             }
         }

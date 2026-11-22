@@ -52,4 +52,50 @@ public class RainbowEffectTests
         Assert.True(RainbowEffect.CycleSeconds(5) < RainbowEffect.CycleSeconds(1));
         Assert.Equal(0.5, RainbowEffect.PhaseAt(3500, 3), 6); // half of the 7 s cycle
     }
+
+    // ---- GTA 6 (#109) ----
+
+    [Fact]
+    public void Gta6WalksThePaletteThereAndBack()
+    {
+        var p = RainbowEffect.Gta6Palette;
+        Assert.Equal(p[0], RainbowEffect.ColorAt(RgbEffect.Gta6, 0));      // sunset orange
+        Assert.Equal(p[1], RainbowEffect.ColorAt(RgbEffect.Gta6, 1 / 6.0)); // pink
+        Assert.Equal(p[2], RainbowEffect.ColorAt(RgbEffect.Gta6, 2 / 6.0)); // purple
+        Assert.Equal(p[3], RainbowEffect.ColorAt(RgbEffect.Gta6, 0.5));     // light blue
+        Assert.Equal(p[2], RainbowEffect.ColorAt(RgbEffect.Gta6, 4 / 6.0)); // and back
+        Assert.Equal(p[0], RainbowEffect.ColorAt(RgbEffect.Gta6, 1.0));
+    }
+
+    [Fact]
+    public void Gta6NeverJumpsBetweenNeighbouringLeds()
+    {
+        // 120 LEDs over one loop: no channel moves more than a small step from one LED to the next
+        var frame = RainbowEffect.Frame(120, 0.37, 100, RgbEffect.Gta6);
+        for (var i = 3; i < frame.Length; i++)
+        {
+            Assert.InRange(Math.Abs(frame[i] - frame[i - 3]), 0, 16);
+        }
+    }
+
+    [Fact]
+    public void Gta6StaysInsideThePaletteColours()
+    {
+        // every colour is a blend of two neighbouring palette entries: never green, never yellow
+        for (var k = 0; k < 200; k++)
+        {
+            var (r, g, b) = RainbowEffect.ColorAt(RgbEffect.Gta6, k / 200.0);
+            Assert.True(g <= 170, $"green {g} at {k}");
+            Assert.False(r > 200 && g > 100, $"yellowish {r},{g},{b} at {k}");
+        }
+    }
+
+    [Fact]
+    public void Gta6CycleAndBrightnessWorkLikeRainbow()
+    {
+        var cycle = RainbowEffect.Cycle(9, 12, 100, RgbEffect.Gta6);
+        Assert.Equal(RainbowEffect.Frame(9, 0, 100, RgbEffect.Gta6), cycle[..27]);
+        Assert.All(RainbowEffect.Frame(9, 0.2, 0, RgbEffect.Gta6), v => Assert.Equal(0, v));
+        Assert.Equal(RainbowEffect.Frame(9, 0.2, 100), RainbowEffect.Frame(9, 0.2, 100, RgbEffect.Rainbow));
+    }
 }

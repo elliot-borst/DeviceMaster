@@ -177,15 +177,23 @@ public sealed class ControlSettings : IJsonOnDeserialized
     /// <summary>Static-color brightness 0–100; scales the RGB value sent to every LED (100 = the chosen color as-is).</summary>
     public int RgbBrightness { get; set; } = 100;
 
-    /// <summary>Static colour or a rainbow cycling along every LED chain (Blackout/Off still paints black).</summary>
+    /// <summary>Static colour, a rainbow or the GTA 6 effect cycling along every LED chain (Blackout/Off still paints black).</summary>
     public RgbEffect RgbEffect { get; set; } = RgbEffect.Static;
 
-    /// <summary>Rainbow speed 1 (slow) … 5 (fast); see <see cref="RainbowEffect.CycleSeconds"/>.</summary>
+    /// <summary>Effect speed 1 (slow) … 5 (fast); see <see cref="RainbowEffect.CycleSeconds"/>.</summary>
     public int RgbSpeed { get; set; } = RainbowEffect.DefaultSpeed;
 
     /// <summary>True when the LEDs should show the rainbow right now (enabled, not blacked out).</summary>
     [JsonIgnore]
     public bool RainbowActive => RgbEnabled && !RgbOff && RgbEffect == RgbEffect.Rainbow;
+
+    /// <summary>True when the LEDs should show the GTA 6 effect right now (#109).</summary>
+    [JsonIgnore]
+    public bool Gta6Active => RgbEnabled && !RgbOff && RgbEffect == RgbEffect.Gta6;
+
+    /// <summary>True for any moving effect (Rainbow or GTA 6): streamed families animate it from here.</summary>
+    [JsonIgnore]
+    public bool AnimatedActive => RainbowActive || Gta6Active;
 
     // ---- Turzx 8.8" serial screen ----
 

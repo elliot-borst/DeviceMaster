@@ -714,17 +714,17 @@ public sealed partial class HeadlessLoop : IDisposable
     private void ApplyHubRgb(HeadlessConfig cfg, List<string> warnings)
     {
         var (r, g, b) = RgbTarget(cfg);
-        var rainbow = cfg.Control.RainbowActive;
-        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
+        var animated = cfg.Control.AnimatedActive; // Rainbow or GTA 6 (#109)
+        var key = animated ? $"{cfg.Control.RgbEffect}:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
 
         foreach (var hub in _hubs.ToList())
         {
-            if (rainbow)
+            if (animated)
             {
                 // the animator streams this hub's frames; switching back to Static changes the key
                 if (_appliedHubRgb.GetValueOrDefault(hub.SerialNumber) != key)
                 {
-                    _log($"RGB rainbow on hub {hub.SerialNumber[..8]}… ({hub.TotalLeds} LEDs, speed {cfg.Control.RgbSpeed})");
+                    _log($"RGB {cfg.Control.RgbEffect} on hub {hub.SerialNumber[..8]}… ({hub.TotalLeds} LEDs, speed {cfg.Control.RgbSpeed})");
                 }
 
                 _appliedHubRgb[hub.SerialNumber] = key;
@@ -773,6 +773,22 @@ public sealed partial class HeadlessLoop : IDisposable
         return cfg.Control.RgbOff
             ? ((byte)0, (byte)0, (byte)0)
             : (Scale(cfg.Control.RgbR), Scale(cfg.Control.RgbG), Scale(cfg.Control.RgbB));
+    }
+
+    /// <summary>
+    /// The colour for ENE chips (GPU, RAM), which can't play a custom effect: GTA 6 holds the
+    /// palette's pink there instead of streaming over SMBus (#109); otherwise the static colour.
+    /// </summary>
+    private static (byte, byte, byte) ChipRgbTarget(HeadlessConfig cfg)
+    {
+        if (!cfg.Control.Gta6Active)
+        {
+            return RgbTarget(cfg);
+        }
+
+        var still = DeviceMaster.Core.Lighting.RainbowEffect.Gta6StillColor;
+        var bright = Math.Clamp(cfg.Control.RgbBrightness, 0, 100);
+        return ((byte)(still.R * bright / 100), (byte)(still.G * bright / 100), (byte)(still.B * bright / 100));
     }
 
     // ---- GPU ENE RGB ----
@@ -864,7 +880,7 @@ public sealed partial class HeadlessLoop : IDisposable
             return;
         }
 
-        var (r, g, b) = RgbTarget(cfg);
+        var (r, g, b) = ChipRgbTarget(cfg);
         var key = $"{r},{g},{b}";
         if (_appliedGpuRgb != key && Environment.TickCount64 >= _gpuRgbRetryAt)
         {

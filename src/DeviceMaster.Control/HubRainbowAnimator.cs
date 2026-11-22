@@ -4,7 +4,7 @@ using DeviceMaster.Devices.CorsairLink;
 namespace DeviceMaster.Control;
 
 /// <summary>
-/// Streams rainbow frames to Corsair iCUE LINK hubs. The hubs have no built-in effects in
+/// Streams effect frames (Rainbow or GTA 6) to Corsair iCUE LINK hubs. The hubs have no built-in effects in
 /// software mode, so frames go out from this background thread at ~15 fps while the control
 /// loop keeps its 1 Hz duty/telemetry cadence. Each frame is one atomic hub operation
 /// (<see cref="LinkHub.ApplyLedColors"/> holds the hub's I/O lock), so frames slot in between
@@ -23,7 +23,7 @@ public sealed class HubRainbowAnimator : IDisposable
     private readonly Thread _thread;
     private volatile Settings? _settings;
 
-    private sealed record Settings(int Speed, int Brightness);
+    private sealed record Settings(RgbEffect Effect, int Speed, int Brightness);
 
     /// <param name="hubs">The hubs open right now (read every frame; the loop owns the list).</param>
     public HubRainbowAnimator(Func<IReadOnlyList<LinkHub>> hubs, Action<string>? log)
@@ -39,7 +39,7 @@ public sealed class HubRainbowAnimator : IDisposable
 
     /// <summary>Start, retune or stop the rainbow from the current settings (called every loop tick).</summary>
     public void Update(ControlSettings settings) =>
-        _settings = settings.RainbowActive ? new Settings(settings.RgbSpeed, Math.Clamp(settings.RgbBrightness, 0, 100)) : null;
+        _settings = settings.AnimatedActive ? new Settings(settings.RgbEffect, settings.RgbSpeed, Math.Clamp(settings.RgbBrightness, 0, 100)) : null;
 
     private void Run()
     {
@@ -65,7 +65,7 @@ public sealed class HubRainbowAnimator : IDisposable
                         // the path (one black frame) and the next frame is the real one.
                         hub.ApplyLedColors(hub.TotalLeds == 0
                             ? ReadOnlySpan<byte>.Empty
-                            : RainbowEffect.Frame(hub.TotalLeds, phase, settings.Brightness));
+                            : RainbowEffect.Frame(hub.TotalLeds, phase, settings.Brightness, settings.Effect));
                     }
                     catch (Exception ex)
                     {

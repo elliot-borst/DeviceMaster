@@ -90,8 +90,9 @@ public sealed partial class HeadlessLoop
             return;
         }
 
-        var (r, g, b) = RgbTarget(cfg);
+        var (r, g, b) = ChipRgbTarget(cfg);
         var rainbow = cfg.Control.RainbowActive;
+
         var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}" : $"{r},{g},{b}";
         if (_appliedRamRgb != key && Environment.TickCount64 >= _ramRgbRetryAt)
         {

@@ -29,6 +29,7 @@ public sealed partial class HeadlessLoop
     // ASUS Aura
     private AuraController? _aura;
     private string? _appliedAura;
+    private bool _auraWalking;
     private long _auraRetryAt;
     private string _auraSummary = "Aura: not opened yet";
 
@@ -241,8 +242,8 @@ public sealed partial class HeadlessLoop
         }
 
         var (r, g, b) = RgbTarget(cfg);
-        var rainbow = cfg.Control.RainbowActive && !cfg.Control.RgbOff;
-        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
+        var rainbow = cfg.Control.AnimatedActive && !cfg.Control.RgbOff; // Rainbow or GTA 6 (#109)
+        var key = rainbow ? $"{cfg.Control.RgbEffect}:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
         if (!rainbow && key == _appliedMsi && Environment.TickCount64 < _msiRefreshDue)
         {
             return;
@@ -253,8 +254,8 @@ public sealed partial class HeadlessLoop
             if (rainbow)
             {
                 // no built-in effect on this protocol: one wheel step per tick, painted from here
-                var phase = Environment.TickCount64 / 1000.0 / DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(cfg.Control.RgbSpeed) % 1.0;
-                _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, cfg.Control.RgbBrightness));
+                var phase = DeviceMaster.Core.Lighting.RainbowEffect.PhaseAt(Environment.TickCount64, cfg.Control.RgbSpeed);
+                _msi.ApplyFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(MsiRainbowLeds, phase, cfg.Control.RgbBrightness, cfg.Control.RgbEffect));
             }
             else
             {
@@ -326,6 +327,13 @@ public sealed partial class HeadlessLoop
 
         var (r, g, b) = RgbTarget(cfg);
         var rainbow = cfg.Control.RainbowActive;
+        var gta6 = cfg.Control.Gta6Active;
+        if (gta6)
+        {
+            // no custom effects in the controller: walk the GTA 6 palette, one colour per tick (#109)
+            (r, g, b) = DeviceMaster.Core.Lighting.RainbowEffect.Now(cfg.Control.RgbEffect, cfg.Control.RgbSpeed, cfg.Control.RgbBrightness);
+        }
+
         var key = rainbow ? "rainbow" : $"{r},{g},{b}";
         if (key == _appliedAura)
         {
@@ -334,6 +342,7 @@ public sealed partial class HeadlessLoop
 
         try
         {
+            var logIt = !gta6 || !_auraWalking; // the palette walk changes colour every tick: log it once
             if (rainbow)
             {
                 _aura.ApplyRainbow();
@@ -344,8 +353,13 @@ public sealed partial class HeadlessLoop
             }
 
             _appliedAura = key;
+            _auraWalking = gta6;
             _auraSummary = _aura.Describe();
-            _log($"RGB applied on Aura ({_aura.Zones.Count} zones): {key}");
+            if (logIt)
+            {
+                _log($"RGB applied on Aura ({_aura.Zones.Count} zones): {(gta6 ? "GTA 6 palette walk" : key)}");
+            }
+
             if (_aura.LastZoneErrors.Count > 0)
             {
                 _log($"headless: Aura zone errors: {string.Join("; ", _aura.LastZoneErrors)}");

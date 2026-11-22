@@ -1069,16 +1069,16 @@ public sealed class MainWindow : Window
         _ => "Fastest",
     };
 
-    /// <summary>Static shows the colour swatches; Rainbow hides them and shows the speed (the web page does the same).</summary>
+    /// <summary>Static shows the colour swatches; Rainbow and GTA 6 dim them and show the speed (the web page does the same).</summary>
     private void RefreshRgbEffectUi()
     {
-        var rainbow = _controlSettings.RgbEffect == RgbEffect.Rainbow;
-        FillChips(_effectChips, ["Static", "Rainbow"], rainbow ? 1 : 0, i =>
+        var rainbow = _controlSettings.RgbEffect != RgbEffect.Static; // any moving effect
+        FillChips(_effectChips, ["Static", "Rainbow", "GTA 6"], (int)_controlSettings.RgbEffect, i =>
         {
-            _controlSettings.RgbEffect = i == 1 ? RgbEffect.Rainbow : RgbEffect.Static;
-            if (i == 1)
+            _controlSettings.RgbEffect = (RgbEffect)i;
+            if (i != 0)
             {
-                _controlSettings.RgbOff = false; // "lights out" and rainbow are opposites
+                _controlSettings.RgbOff = false; // "lights out" and an effect are opposites
             }
 
             RefreshRgbEffectUi();
@@ -1143,6 +1143,11 @@ public sealed class MainWindow : Window
         else if (_controlSettings.RgbEffect == RgbEffect.Rainbow)
         {
             _rgbStatus.Text = $"Rainbow ({SpeedName(_controlSettings.RgbSpeed).ToLowerInvariant()}) on Corsair, Lian Li, motherboard ARGB, RAM and GPU LEDs.";
+        }
+        else if (_controlSettings.RgbEffect == RgbEffect.Gta6)
+        {
+            _rgbStatus.Text = $"GTA 6 ({SpeedName(_controlSettings.RgbSpeed).ToLowerInvariant()}): sunset orange, pink, purple and light blue on Corsair, "
+                + "Lian Li and motherboard ARGB; RAM and GPU hold the pink.";
         }
         else
         {

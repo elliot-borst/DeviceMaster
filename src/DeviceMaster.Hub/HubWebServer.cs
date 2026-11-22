@@ -554,6 +554,7 @@ public sealed class HubWebServer : IDisposable
         FleetSection.Screens => $"Turzx {p.TurzxScreen} {p.TurzxBrightness}%",
         _ => p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
             : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Rainbow ? $"rainbow speed {p.RgbSpeed}, {p.RgbBrightness}%"
+            : p.RgbEffect == DeviceMaster.Core.Lighting.RgbEffect.Gta6 ? $"GTA 6 speed {p.RgbSpeed}, {p.RgbBrightness}%"
             : $"#{p.RgbR:X2}{p.RgbG:X2}{p.RgbB:X2}, {p.RgbBrightness}%",
     };
 
@@ -725,7 +726,7 @@ function ownLight(name){
 }
 function lightFor(name){ const f = fleetLight() || {}, o = ownLight(name) || {}; const r = {}; LIGHT_KEYS.forEach(k => r[k] = o[k] ?? f[k]); return r; }
 function badge(m){ return m.InSync === true ? `<span class="badge sync">in sync</span>` : m.InSync === false ? `<span class="badge differs">differs from fleet</span>` : ""; }
-function mode(L){ return L.Blackout ? "blackout" : L.RgbOff ? "off" : L.RgbEffect === "Rainbow" ? "rainbow" : "colour"; }
+function mode(L){ return L.Blackout ? "blackout" : L.RgbOff ? "off" : L.RgbEffect === "Rainbow" ? "rainbow" : L.RgbEffect === "Gta6" ? "gta6" : "colour"; }
 async function put(url, body){
   const r = await fetch(url, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || `Not saved (${r.status})`); }
@@ -743,6 +744,7 @@ function lightControls(scope, L){
   return `<div class="ctl"><label>Effect</label><div class="seg">
       <button class="${md==="colour"?"on":""}" onclick='${set(`{RgbEffect:"Static",RgbOff:false,Blackout:false}`)}'>Colour</button>
       <button class="${md==="rainbow"?"on":""}" onclick='${set(`{RgbEffect:"Rainbow",RgbOff:false,Blackout:false}`)}'>Rainbow</button>
+      <button class="${md==="gta6"?"on":""}" onclick='${set(`{RgbEffect:"Gta6",RgbOff:false,Blackout:false}`)}'>GTA 6</button>
       <button class="${md==="off"?"on":""}" onclick='${set(`{RgbOff:true,Blackout:false}`)}'>Lights out</button>
       <button class="${md==="blackout"?"on":""}" onclick='${set(`{Blackout:true}`)}'>Blackout</button></div></div>
     ${md === "colour" ? `<div class="ctl"><label>Colour</label>${SWATCHES.map(([h,n,ink]) => `<div class="sw${h===cur?" on":""}" title="${n}" style="background:#${h};color:#${ink}"

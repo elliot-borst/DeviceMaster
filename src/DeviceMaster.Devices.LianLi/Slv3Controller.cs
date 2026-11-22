@@ -439,10 +439,11 @@ public sealed class Slv3Controller : IDisposable
     /// literal-only, so this is ~110 payloads for a 3-fan group: send them with
     /// <see cref="SendRgbPayload"/> from a worker, never inline on a time-critical thread.
     /// </summary>
-    public List<byte[]> BuildRainbowPayloads(Slv3Device device, int speed, int brightness, ReadOnlySpan<byte> effectIndex)
+    public List<byte[]> BuildRainbowPayloads(Slv3Device device, int speed, int brightness, ReadOnlySpan<byte> effectIndex,
+        DeviceMaster.Core.Lighting.RgbEffect effect = DeviceMaster.Core.Lighting.RgbEffect.Rainbow)
     {
         var ledCount = (byte)Math.Clamp(device.FanCount * Slv3Protocol.LedsPerFan, Slv3Protocol.LedsPerFan, 255);
-        var raw = DeviceMaster.Core.Lighting.RainbowEffect.Cycle(ledCount, RainbowFrames, brightness);
+        var raw = DeviceMaster.Core.Lighting.RainbowEffect.Cycle(ledCount, RainbowFrames, brightness, effect);
         var compressed = TinyUz.Compress(raw);
         var intervalMs = (ushort)Math.Clamp(DeviceMaster.Core.Lighting.RainbowEffect.CycleSeconds(speed) * 1000 / RainbowFrames, 10, 60_000);
         return Slv3Protocol.BuildRgbRfPayloads(

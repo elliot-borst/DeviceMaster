@@ -139,8 +139,9 @@ input[type=color] { padding:3px 5px; width:52px; height:36px; cursor:pointer; }
 .swatch.sel { box-shadow:0 0 0 3px var(--bg), 0 0 0 5px var(--text); transform:scale(1.12); } /* selected: a tick + a white ring, visible on every colour */
 .preview { width:52px; height:34px; border-radius:9px; background:#8000ff; border:1px solid var(--line2); }
 .preview.rainbow { background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
+.preview.gta6 { background:linear-gradient(90deg,#ff4800,#ff108c,#8200ff,#00aaff,#8200ff,#ff108c,#ff4800) 0/200% 100%; animation:rb var(--rbs,7s) linear infinite; }
 @keyframes rb { to { background-position:200% 0; } }
-@media (prefers-reduced-motion: reduce){ .preview.rainbow { animation:none; } }
+@media (prefers-reduced-motion: reduce){ .preview.rainbow, .preview.gta6 { animation:none; } }
 /* table */
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th { text-align:left; color:var(--dim); font-weight:500; font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -239,7 +240,7 @@ td.dim { color:var(--dim); }
       <div class="row"><label for="rgbBright">Brightness</label>
         <input type="range" id="rgbBright" min="0" max="100" step="5"><span class="val" id="rgbBrightVal">—</span></div>
       <div class="row"><label>Preview</label><div class="preview" id="rgbPreview"></div><span class="val mono" id="rgbHex"></span></div>
-      <div class="note">Rainbow runs on every lighting device this machine drives (the same effect and speeds as the Windows app).</div>
+      <div class="note">Rainbow and GTA 6 run on every lighting device this machine drives (the same effects and speeds as the Windows app); RAM and GPU hold GTA 6's pink.</div>
     </div>
     <div class="card">
       <div class="cardhead"><div class="tile">▣</div><div><div class="cardtitle">GPU RGB (ENE)</div><div class="cardsub">4090 Strix</div></div></div>
@@ -284,7 +285,7 @@ function toast(msg, err=false){
 /* ---- config load / apply ---- */
 /* config.json stores enums by name ("Curve"); the controls work in numbers */
 /* CurveSource numbers start at 1 (0 was the removed coolant source) */
-const ENUMS = { RgbEffect:["Static","Rainbow"], Mode:["Off","Manual","Curve"], Source:[null,"Cpu","Gpu","Hottest"] };
+const ENUMS = { RgbEffect:["Static","Rainbow","Gta6"], Mode:["Off","Manual","Curve"], Source:[null,"Cpu","Gpu","Hottest"] };
 function normalize(c){
   for (const [k, names] of Object.entries(ENUMS)) if (typeof c.Control[k] === "string") c.Control[k] = Math.max(0, names.indexOf(c.Control[k]));
   return c;
@@ -343,7 +344,7 @@ function apply(patch){
           case "rgbG": c.RgbG = +v; break;
           case "rgbB": c.RgbB = +v; break;
           case "rgbBrightness": c.RgbBrightness = +v; break;
-          case "rgbEffect": c.RgbEffect = +v; if (+v === 1) c.RgbOff = false; break;
+          case "rgbEffect": c.RgbEffect = +v; if (+v >= 1) c.RgbOff = false; break;
           case "rgbSpeed": c.RgbSpeed = +v; break;
         }
       });
@@ -381,21 +382,22 @@ SWATCHES.forEach(([hex,name,ink]) => {
     apply({rgbEffect: 0, rgbR: parseInt(hex.slice(0,2),16), rgbG: parseInt(hex.slice(2,4),16), rgbB: parseInt(hex.slice(4,6),16)}); };
   $("swatches").appendChild(d);
 });
-/* ---- effect: Static (colour + swatches) or Rainbow (speed) — same as the Windows Lighting card ---- */
+/* ---- effect: Static (colour + swatches), Rainbow or GTA 6 (speed) — same as the Windows Lighting card ---- */
 const SPEED_NAMES = ["", "Slowest", "Slow", "Medium", "Fast", "Fastest"];
 const CYCLE_SECONDS = [0, 20, 12, 7, 4, 2]; // RainbowEffect.CycleSeconds
 function renderEffect(){
   if (!cfg) return;
-  const c = cfg.Control, rainbow = c.RgbEffect === 1;
-  chips($("effectChips"), ["Static","Rainbow"], rainbow ? 1 : 0, i => apply({rgbEffect: i}));
+  const c = cfg.Control, rainbow = c.RgbEffect === 1 || c.RgbEffect === 2; // any moving effect
+  chips($("effectChips"), ["Static","Rainbow","GTA 6"], c.RgbEffect || 0, i => apply({rgbEffect: i}));
   $("speedRow").style.display = rainbow ? "" : "none";
   $("colourRow").style.opacity = rainbow ? .45 : 1;
   $("rgbSpeedVal").textContent = SPEED_NAMES[c.RgbSpeed || 3];
-  $("rgbPreview").classList.toggle("rainbow", rainbow && !c.RgbOff);
+  $("rgbPreview").classList.toggle("rainbow", c.RgbEffect === 1 && !c.RgbOff);
+  $("rgbPreview").classList.toggle("gta6", c.RgbEffect === 2 && !c.RgbOff);
   $("rgbPreview").style.setProperty("--rbs", CYCLE_SECONDS[c.RgbSpeed || 3] + "s");
 }
 function updateRgbPreview(){
-  if (cfg && cfg.Control.RgbEffect === 1 && !cfg.Control.RgbOff) { $("rgbPreview").style.background = ""; $("rgbHex").textContent = "RAINBOW"; return; }
+  if (cfg && cfg.Control.RgbEffect >= 1 && !cfg.Control.RgbOff) { $("rgbPreview").style.background = ""; $("rgbHex").textContent = cfg.Control.RgbEffect === 2 ? "GTA 6" : "RAINBOW"; return; }
   const v = $("rgbColor").value, b = $("rgbBright").value/100;
   const r = Math.round(parseInt(v.slice(1,3),16)*b), g = Math.round(parseInt(v.slice(3,5),16)*b), bl = Math.round(parseInt(v.slice(5,7),16)*b);
   $("rgbPreview").style.background = `rgb(${r},${g},${bl})`;

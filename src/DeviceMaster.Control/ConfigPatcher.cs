@@ -112,9 +112,9 @@ public static class ConfigPatcher
                     if (TryEnum(prop.Value, out var effect) && Enum.IsDefined(typeof(RgbEffect), effect))
                     {
                         s.RgbEffect = (RgbEffect)effect;
-                        if (s.RgbEffect == RgbEffect.Rainbow)
+                        if (s.RgbEffect != RgbEffect.Static)
                         {
-                            s.RgbOff = false; // "lights out" and rainbow are opposites
+                            s.RgbOff = false; // "lights out" and an effect are opposites
                         }
 
                         applied.Add($"rgbEffect={(int)s.RgbEffect}");

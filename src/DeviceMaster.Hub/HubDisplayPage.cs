@@ -160,12 +160,13 @@ async function loadLights(){
     const p = s.state && s.state.Profile, managed = s.state && (s.state.Managed || []).includes("Lighting");
     lighting = p ? { RgbEnabled:p.RgbEnabled, RgbOff:p.RgbOff, RgbEffect:p.RgbEffect, RgbR:p.RgbR, RgbG:p.RgbG, RgbB:p.RgbB, RgbBrightness:p.RgbBrightness, RgbSpeed:p.RgbSpeed, Blackout:p.Blackout } : null;
     const L = lighting || {}, cur = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Static" ? [L.RgbR, L.RgbG, L.RgbB].map(v => (v ?? 0).toString(16).padStart(2, "0")).join("") : "";
-    const rainbow = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Rainbow", off = managed && (L.RgbOff || L.Blackout);
+    const rainbow = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Rainbow", gta6 = managed && !L.RgbOff && !L.Blackout && L.RgbEffect === "Gta6", off = managed && (L.RgbOff || L.Blackout);
     if (briBusy) return; // don't rebuild the bar under a finger on the brightness slider
     const bri = L.RgbBrightness ?? 100;
     $("lights").innerHTML = SWATCHES.map(([h, n, ink]) => `<span class="sw${h === cur ? " on" : ""}" title="${n}" style="background:#${h};color:#${ink}"
         onclick='setLights({RgbEffect:"Static",RgbOff:false,Blackout:false,RgbR:${parseInt(h.slice(0,2),16)},RgbG:${parseInt(h.slice(2,4),16)},RgbB:${parseInt(h.slice(4,6),16)}})'>${h === cur ? "✓" : ""}</span>`).join("")
       + `<button class="btn${rainbow ? " on" : ""}" onclick='setLights({RgbEffect:"Rainbow",RgbOff:false,Blackout:false})'>Rainbow</button>`
+      + `<button class="btn${gta6 ? " on" : ""}" onclick='setLights({RgbEffect:"Gta6",RgbOff:false,Blackout:false})'>GTA 6</button>`
       + `<button class="btn${off ? " on" : ""}" onclick='setLights({RgbOff:true})'>Off</button>`
       + `<span class="bri" title="Brightness">☀<input type="range" min="0" max="100" step="5" value="${bri}"
           onpointerdown="briBusy=true" oninput='this.nextElementSibling.textContent=this.value+"%"'
