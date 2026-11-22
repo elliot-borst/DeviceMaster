@@ -41,7 +41,11 @@ wait_for_version() { # $1 = version the agent must report within ~2 minutes
   return 1
 }
 
-LATEST=$(curl -fsSI -m 20 "https://github.com/$REPO/releases/latest" | tr -d '\r' | grep -i '^location:' | grep -o 'tag/v[0-9]*$' | grep -o '[0-9]*$')
+# the API knows a new release at once; github.com/…/releases/latest redirects from a cache that lags
+# minutes behind, so it is only the fallback (e.g. when the API's hourly anonymous limit is used up)
+LATEST=$(curl -fsS -m 20 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest" \
+  | grep -o '"tag_name" *: *"v[0-9]*"' | grep -o '[0-9]*' | head -1)
+[ -n "$LATEST" ] || LATEST=$(curl -fsSI -m 20 "https://github.com/$REPO/releases/latest" | tr -d '\r' | grep -i '^location:' | grep -o 'tag/v[0-9]*$' | grep -o '[0-9]*$')
 CURRENT=$(running_version)
 [ -n "$LATEST" ] || { log "could not read the newest release of $REPO"; exit 1; }
 if [ -n "$CURRENT" ] && [ "$LATEST" -le "$CURRENT" ]; then
