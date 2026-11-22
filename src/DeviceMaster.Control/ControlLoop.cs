@@ -1065,9 +1065,6 @@ public sealed class ControlLoop : IDisposable
     // rainbow: Corsair hubs are streamed from a background animator; the other families play
     // the effect themselves once told to (Aura/ENE built-in rainbow, SL V3 stored loop)
     private HubRainbowAnimator? _rainbow;
-
-    private static (byte R, byte G, byte B) ScaleColor((byte R, byte G, byte B) c, int brightPercent) =>
-        ((byte)(c.R * brightPercent / 100), (byte)(c.G * brightPercent / 100), (byte)(c.B * brightPercent / 100));
     private volatile LinkHub[] _hubSnapshot = [];
     private string? _appliedChipRgb;
     private long _chipRgbRetryAt;
@@ -1256,23 +1253,31 @@ public sealed class ControlLoop : IDisposable
             }
         }
 
-        if (_appliedChipRgb != key
+        if ((_appliedChipRgb != key || gta6)
             && Environment.TickCount64 >= _chipRgbRetryAt
             && (_ramRgb.Count > 0 || _gpuRgb.Any(g2 => g2.Ene is not null)))
         {
             try
             {
-                // ENE chips only have their own rainbow: GTA 6 holds the logo's magenta (no SMBus streaming)
-                var (cr, cg, cb) = gta6 ? ScaleColor(DeviceMaster.Core.Lighting.RainbowEffect.Gta6StillColor, bright) : (r, g, b);
-                foreach (var ram in _ramRgb)
+                // GTA 6: the chips only know their own rainbow, so frames go out in direct mode, one
+                // per tick (like MSI and Aura), never saved to flash (#111). Each stick is a little
+                // further along the palette than the last, so the sticks flow rather than match.
+                var enter = _appliedChipRgb != key;
+                var phase = DeviceMaster.Core.Lighting.RainbowEffect.PhaseAt(Environment.TickCount64, settings.RgbSpeed);
+                for (var k = 0; k < _ramRgb.Count; k++)
                 {
+                    var ram = _ramRgb[k];
                     if (rainbow)
                     {
                         ram.ApplyRainbow(settings.RgbSpeed, persist: false);
                     }
+                    else if (gta6)
+                    {
+                        ram.ApplyDirectFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(ram.LedCount, phase + 0.06 * k, bright, effect), enter);
+                    }
                     else
                     {
-                        ram.ApplyStaticColor(cr, cg, cb, persist: false);
+                        ram.ApplyStaticColor(r, g, b, persist: false);
                     }
                 }
 
@@ -1282,14 +1287,26 @@ public sealed class ControlLoop : IDisposable
                     {
                         gpu.Ene?.ApplyRainbow(settings.RgbSpeed, persist: false);
                     }
+                    else if (gta6)
+                    {
+                        if (gpu.Ene is { } ene)
+                        {
+                            ene.ApplyDirectFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(ene.LedCount, phase, bright, effect), enter);
+                        }
+                    }
                     else
                     {
-                        gpu.Ene?.ApplyStaticColor(cr, cg, cb, persist: false);
+                        gpu.Ene?.ApplyStaticColor(r, g, b, persist: false);
                     }
                 }
 
+                if (enter)
+                {
+                    _log?.Invoke($"RGB applied on {_ramRgb.Count} RAM controller(s) + {_gpuRgb.Count(g2 => g2.Ene is not null)} GPU(s)"
+                        + (gta6 ? " (GTA 6 frames in direct mode)" : ""));
+                }
+
                 _appliedChipRgb = key;
-                _log?.Invoke($"RGB applied on {_ramRgb.Count} RAM controller(s) + {_gpuRgb.Count(g2 => g2.Ene is not null)} GPU(s)");
             }
             catch (Exception ex)
             {
@@ -1337,14 +1354,17 @@ public sealed class ControlLoop : IDisposable
                 try
                 {
                     _aura?.Commit();
-                    foreach (var ram in _ramRgb)
+                    if (!gta6) // GTA 6 frames are live only: never write moving colours to the chips' flash (#111)
                     {
-                        ram.Persist();
-                    }
+                        foreach (var ram in _ramRgb)
+                        {
+                            ram.Persist();
+                        }
 
-                    foreach (var gpu in _gpuRgb)
-                    {
-                        gpu.Ene?.Persist();
+                        foreach (var gpu in _gpuRgb)
+                        {
+                            gpu.Ene?.Persist();
+                        }
                     }
 
                     // SL V3 fans: persist the stored lighting effect too, so keepalive gaps

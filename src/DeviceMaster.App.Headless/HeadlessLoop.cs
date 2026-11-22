@@ -775,22 +775,6 @@ public sealed partial class HeadlessLoop : IDisposable
             : (Scale(cfg.Control.RgbR), Scale(cfg.Control.RgbG), Scale(cfg.Control.RgbB));
     }
 
-    /// <summary>
-    /// The colour for ENE chips (GPU, RAM), which can't play a custom effect: GTA 6 holds the
-    /// logo's magenta there instead of streaming over SMBus (#109); otherwise the static colour.
-    /// </summary>
-    private static (byte, byte, byte) ChipRgbTarget(HeadlessConfig cfg)
-    {
-        if (!cfg.Control.Gta6Active)
-        {
-            return RgbTarget(cfg);
-        }
-
-        var still = DeviceMaster.Core.Lighting.RainbowEffect.Gta6StillColor;
-        var bright = Math.Clamp(cfg.Control.RgbBrightness, 0, 100);
-        return ((byte)(still.R * bright / 100), (byte)(still.G * bright / 100), (byte)(still.B * bright / 100));
-    }
-
     // ---- GPU ENE RGB ----
 
     private void EnsureGpuRgb(HeadlessConfig cfg, List<string> warnings)
@@ -880,16 +864,33 @@ public sealed partial class HeadlessLoop : IDisposable
             return;
         }
 
-        var (r, g, b) = ChipRgbTarget(cfg);
-        var key = $"{r},{g},{b}";
-        if (_appliedGpuRgb != key && Environment.TickCount64 >= _gpuRgbRetryAt)
+        var (r, g, b) = RgbTarget(cfg);
+        var gta6 = cfg.Control.Gta6Active;
+        var key = gta6 ? $"{cfg.Control.RgbEffect}:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}" : $"{r},{g},{b}";
+        if ((_appliedGpuRgb != key || gta6) && Environment.TickCount64 >= _gpuRgbRetryAt)
         {
             try
             {
-                _gpuRgb.ApplyStaticColor(r, g, b, persist: false);
+                if (gta6)
+                {
+                    // the chip only knows its own rainbow: GTA 6 frames go out in direct mode, one per tick (#111)
+                    var phase = DeviceMaster.Core.Lighting.RainbowEffect.PhaseAt(Environment.TickCount64, cfg.Control.RgbSpeed);
+                    _gpuRgb.ApplyDirectFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(
+                        _gpuRgb.LedCount, phase, cfg.Control.RgbBrightness, cfg.Control.RgbEffect), enter: _appliedGpuRgb != key);
+                    _gpuPersistedKey = key; // moving colours are never saved to the chip's flash
+                }
+                else
+                {
+                    _gpuRgb.ApplyStaticColor(r, g, b, persist: false);
+                }
+
+                if (_appliedGpuRgb != key)
+                {
+                    _log($"RGB applied on GPU ENE ({_gpuRgb.LedCount} LEDs){(gta6 ? ": GTA 6 frames in direct mode" : "")}");
+                }
+
                 _appliedGpuRgb = key;
                 _gpuRgbRetryAt = 0;
-                _log($"RGB applied on GPU ENE ({_gpuRgb.LedCount} LEDs)");
             }
             catch (Exception ex)
             {

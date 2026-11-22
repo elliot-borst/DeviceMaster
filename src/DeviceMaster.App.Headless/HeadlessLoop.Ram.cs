@@ -90,19 +90,30 @@ public sealed partial class HeadlessLoop
             return;
         }
 
-        var (r, g, b) = ChipRgbTarget(cfg);
+        var (r, g, b) = RgbTarget(cfg);
         var rainbow = cfg.Control.RainbowActive;
+        var gta6 = cfg.Control.Gta6Active;
 
-        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}" : $"{r},{g},{b}";
-        if (_appliedRamRgb != key && Environment.TickCount64 >= _ramRgbRetryAt)
+        var key = rainbow ? $"rainbow:{cfg.Control.RgbSpeed}"
+            : gta6 ? $"{cfg.Control.RgbEffect}:{cfg.Control.RgbSpeed}:{cfg.Control.RgbBrightness}"
+            : $"{r},{g},{b}";
+        if ((_appliedRamRgb != key || gta6) && Environment.TickCount64 >= _ramRgbRetryAt)
         {
             try
             {
-                foreach (var ram in _ramRgb)
+                // GTA 6: direct-mode frames, one per tick, each stick a little further along (#111)
+                var phase = DeviceMaster.Core.Lighting.RainbowEffect.PhaseAt(Environment.TickCount64, cfg.Control.RgbSpeed);
+                for (var k = 0; k < _ramRgb.Count; k++)
                 {
+                    var ram = _ramRgb[k];
                     if (rainbow)
                     {
                         ram.ApplyRainbow(cfg.Control.RgbSpeed, persist: false);
+                    }
+                    else if (gta6)
+                    {
+                        ram.ApplyDirectFrame(DeviceMaster.Core.Lighting.RainbowEffect.Frame(
+                            ram.LedCount, phase + 0.06 * k, cfg.Control.RgbBrightness, cfg.Control.RgbEffect), enter: _appliedRamRgb != key);
                     }
                     else
                     {
@@ -110,9 +121,18 @@ public sealed partial class HeadlessLoop
                     }
                 }
 
+                if (_appliedRamRgb != key)
+                {
+                    _log($"RGB applied on {_ramRgb.Count} RAM ENE controller(s): {key}");
+                }
+
+                if (gta6)
+                {
+                    _ramPersistedKey = key; // moving colours are never saved to the chips' flash
+                }
+
                 _appliedRamRgb = key;
                 _ramRgbRetryAt = 0;
-                _log($"RGB applied on {_ramRgb.Count} RAM ENE controller(s): {key}");
             }
             catch (Exception ex)
             {

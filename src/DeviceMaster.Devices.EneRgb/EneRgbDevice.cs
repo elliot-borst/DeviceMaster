@@ -149,6 +149,34 @@ public sealed class EneRgbDevice
         }
     }
 
+    /// <summary>
+    /// One frame of a software effect in the controller's direct mode (OpenRGB's SetLEDColorsDirect):
+    /// <paramref name="rgb"/> holds R,G,B per LED (a shorter frame repeats). <paramref name="enter"/>
+    /// switches the controller into direct mode first (once, when the effect starts); static colour
+    /// and rainbow switch it back out. Never saved to flash (#111).
+    /// </summary>
+    public void ApplyDirectFrame(ReadOnlySpan<byte> rgb, bool enter)
+    {
+        if (rgb.Length < 3)
+        {
+            return;
+        }
+
+        if (enter)
+        {
+            WriteRegister(RegDirectSelect, 0x01);
+            WriteRegister(RegApply, ApplyValue);
+        }
+
+        var frameLeds = rgb.Length / 3;
+        for (var led = 0; led < LedCount; led++)
+        {
+            var i = led % frameLeds * 3;
+            // on-wire per-LED order is R, B, G
+            WriteRegisterBlock((ushort)(_directBase + 3 * led), [rgb[i], rgb[i + 2], rgb[i + 1]]);
+        }
+    }
+
     /// <summary>Remaps the controller listening at this address to a new SMBus address (RAM enumeration).</summary>
     public void RemapAddress(byte slot, byte newAddress)
     {

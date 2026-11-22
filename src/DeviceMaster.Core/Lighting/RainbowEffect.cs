@@ -50,10 +50,12 @@ public static class RainbowEffect
     ];
 
     /// <summary>
-    /// One colour for LED families that can't play a custom effect (ENE GPU and RAM controllers,
-    /// which only know their own rainbow): the logo's magenta, held still.
+    /// How much of the effect's loop one chain shows at once. Rainbow's wheel is a circle, so a whole
+    /// turn fits along the chain. GTA 6 goes orange → blue and back, so a whole loop along the chain
+    /// would mirror itself (the 2nd fan matching the 2nd-last, #111): the chain shows half the loop,
+    /// orange to blue once, and no two LEDs share a colour.
     /// </summary>
-    public static (byte R, byte G, byte B) Gta6StillColor => Gta6Palette[3];
+    public static double ChainSpread(RgbEffect effect) => effect == RgbEffect.Gta6 ? 0.5 : 1.0;
 
     /// <summary>The colour at <paramref name="position"/> 0–1 round the effect's loop.</summary>
     public static (byte R, byte G, byte B) ColorAt(RgbEffect effect, double position)
@@ -84,9 +86,10 @@ public static class RainbowEffect
     {
         var rgb = new byte[Math.Max(ledCount, 0) * 3];
         var scale = Math.Clamp(brightness, 0, 100) / 100.0;
+        var spread = ChainSpread(effect);
         for (var i = 0; i < ledCount; i++)
         {
-            var (r, g, b) = ColorAt(effect, Fraction(phase + (double)i / ledCount));
+            var (r, g, b) = ColorAt(effect, Fraction(phase + spread * i / ledCount));
             rgb[i * 3] = (byte)Math.Round(r * scale);
             rgb[i * 3 + 1] = (byte)Math.Round(g * scale);
             rgb[i * 3 + 2] = (byte)Math.Round(b * scale);

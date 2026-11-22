@@ -1147,7 +1147,7 @@ public sealed class MainWindow : Window
         else if (_controlSettings.RgbEffect == RgbEffect.Gta6)
         {
             _rgbStatus.Text = $"GTA 6 ({SpeedName(_controlSettings.RgbSpeed).ToLowerInvariant()}): the GTA VI logo's stripes, orange to blue, on Corsair, "
-                + "Lian Li and motherboard ARGB; RAM and GPU hold its magenta.";
+                + "Lian Li, motherboard ARGB, RAM and GPU LEDs.";
         }
         else
         {

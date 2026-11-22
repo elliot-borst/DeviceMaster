@@ -240,7 +240,7 @@ td.dim { color:var(--dim); }
       <div class="row"><label for="rgbBright">Brightness</label>
         <input type="range" id="rgbBright" min="0" max="100" step="5"><span class="val" id="rgbBrightVal">—</span></div>
       <div class="row"><label>Preview</label><div class="preview" id="rgbPreview"></div><span class="val mono" id="rgbHex"></span></div>
-      <div class="note">Rainbow and GTA 6 run on every lighting device this machine drives (the same effects and speeds as the Windows app); RAM and GPU hold GTA 6's magenta.</div>
+      <div class="note">Rainbow and GTA 6 run on every lighting device this machine drives (the same effects and speeds as the Windows app).</div>
     </div>
     <div class="card">
       <div class="cardhead"><div class="tile">▣</div><div><div class="cardtitle">GPU RGB (ENE)</div><div class="cardsub">4090 Strix</div></div></div>

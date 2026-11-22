@@ -99,4 +99,20 @@ public class RainbowEffectTests
         Assert.All(RainbowEffect.Frame(9, 0.2, 0, RgbEffect.Gta6), v => Assert.Equal(0, v));
         Assert.Equal(RainbowEffect.Frame(9, 0.2, 100), RainbowEffect.Frame(9, 0.2, 100, RgbEffect.Rainbow));
     }
+
+    [Fact]
+    public void Gta6ChainNeverMirrorsItself()
+    {
+        // #111: 13 fans × 8 LEDs on one hub — the fan k from the start must not match the fan k from the end
+        const int fans = 13, perFan = 8, leds = fans * perFan;
+        foreach (var phase in new[] { 0.0, 0.13, 0.5, 0.77 })
+        {
+            var frame = RainbowEffect.Frame(leds, phase, 100, RgbEffect.Gta6);
+            (byte, byte, byte) Fan(int k) { var o = (k * perFan + perFan / 2) * 3; return (frame[o], frame[o + 1], frame[o + 2]); }
+            for (var k = 0; k < fans / 2; k++)
+            {
+                Assert.NotEqual(Fan(k), Fan(fans - 1 - k));
+            }
+        }
+    }
 }
