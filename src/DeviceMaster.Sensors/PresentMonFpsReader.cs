@@ -23,6 +23,7 @@ public sealed class PresentMonFpsReader : IDisposable
     private const string MsColumn = "msBetweenPresents";
     private const string PidColumn = "ProcessID";
     private const string AppColumn = "Application";
+    private const string ModeColumn = "PresentMode";
     private const int FrameWindow = 60;   // rolling average length, like StarMaster
     private const long FreshMs = 2000;    // a frame older than this no longer counts toward "presenting now"
 
@@ -46,6 +47,7 @@ public sealed class PresentMonFpsReader : IDisposable
     private readonly Dictionary<int, Queue<(long Tick, double Ms)>> _byPid = new();
     private readonly Dictionary<int, string> _names = new(); // pid → Application, to skip non-game presenters
     private int _fpsPid;                                     // last selected presenter (recomputed each read)
+    private readonly HashSet<int> _games = new();            // presenters that have looked like a game (#112)
 
     private Thread? _reader;
     private Process? _proc;
@@ -132,18 +134,39 @@ public sealed class PresentMonFpsReader : IDisposable
     public int? CurrentAppFps()
     {
         var now = Environment.TickCount64;
+        var foreground = ForegroundFullscreenPid();
         lock (_gate)
         {
-            var pid = SelectAppPid(_byPid, _names, now);
+            if (foreground != 0 && _byPid.ContainsKey(foreground))
+            {
+                _games.Add(foreground); // stays a game after an alt-tab, until it stops presenting
+            }
+
+            var pid = SelectAppPid(_byPid, _names, now, _games);
             return pid != 0 ? RollingFps(_byPid[pid], now) : null;
         }
     }
 
-    /// <summary>The busiest real app presenting (0 = none; the compositor/shell never count). Pure.</summary>
+    /// <summary>
+    /// The busiest real app presenting (0 = none; the compositor/shell never count). Pure. With
+    /// <paramref name="games"/>, only those presenters count (#112): an ordinary window that redraws
+    /// now and then (a chat app, a browser) is not a game and must not read as "9 FPS".
+    /// </summary>
     public static int SelectAppPid(
         IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
         IReadOnlyDictionary<int, string> names,
-        long now) => DominantPresenter(byPid, names, now, excludeInfrastructure: true);
+        long now,
+        IReadOnlySet<int>? games = null) => DominantPresenter(byPid, names, now, excludeInfrastructure: true, games);
+
+    /// <summary>
+    /// Whether a PresentMon present mode means the app owns the screen (exclusive or borderless
+    /// fullscreen flipped straight to the display) — how games present, unlike windowed apps,
+    /// which are composed by the desktop ("Composed: Flip", "Composed: Copy …").
+    /// </summary>
+    public static bool IsFullscreenPresentMode(string? mode) =>
+        mode is not null
+        && (mode.Contains("Independent Flip", StringComparison.OrdinalIgnoreCase)
+            || mode.Contains("Legacy Flip", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Which process's FPS to report (0 = nothing presenting), pure so it can be unit-tested.
@@ -172,11 +195,17 @@ public sealed class PresentMonFpsReader : IDisposable
         IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
         IReadOnlyDictionary<int, string> names,
         long now,
-        bool excludeInfrastructure)
+        bool excludeInfrastructure,
+        IReadOnlySet<int>? only = null)
     {
         int best = 0, bestCount = 0;
         foreach (var (pid, q) in byPid)
         {
+            if (only is not null && !only.Contains(pid))
+            {
+                continue;
+            }
+
             if (names.TryGetValue(pid, out var name)
                 && (name.Equals(Self, StringComparison.OrdinalIgnoreCase)
                     || (excludeInfrastructure && NonGame.Contains(name))))
@@ -235,6 +264,7 @@ public sealed class PresentMonFpsReader : IDisposable
         var msCol = -1;
         var pidCol = -1;
         var appCol = -1;
+        var modeCol = -1;
 
         while (_running)
         {
@@ -281,7 +311,7 @@ public sealed class PresentMonFpsReader : IDisposable
                         var lines = (lineLeft + chunk).Split('\n');
                         for (var i = 0; i < lines.Length - 1; i++)
                         {
-                            ParseLine(lines[i].TrimEnd('\r'), ref msCol, ref pidCol, ref appCol);
+                            ParseLine(lines[i].TrimEnd('\r'), ref msCol, ref pidCol, ref appCol, ref modeCol);
                         }
 
                         lineLeft = lines[^1];
@@ -297,7 +327,7 @@ public sealed class PresentMonFpsReader : IDisposable
         }
     }
 
-    private void ParseLine(string line, ref int msCol, ref int pidCol, ref int appCol)
+    private void ParseLine(string line, ref int msCol, ref int pidCol, ref int appCol, ref int modeCol)
     {
         if (line.Length == 0)
         {
@@ -318,6 +348,7 @@ public sealed class PresentMonFpsReader : IDisposable
                 if (name.Equals(MsColumn, StringComparison.OrdinalIgnoreCase)) msCol = j;
                 else if (name.Equals(PidColumn, StringComparison.OrdinalIgnoreCase)) pidCol = j;
                 else if (name.Equals(AppColumn, StringComparison.OrdinalIgnoreCase)) appCol = j;
+                else if (name.Equals(ModeColumn, StringComparison.OrdinalIgnoreCase)) modeCol = j;
             }
 
             return;
@@ -340,6 +371,7 @@ public sealed class PresentMonFpsReader : IDisposable
         }
 
         var app = appCol >= 0 && appCol < f.Length ? f[appCol].Trim() : null;
+        var fullscreen = modeCol >= 0 && modeCol < f.Length && IsFullscreenPresentMode(f[modeCol]);
 
         var now = Environment.TickCount64;
         lock (_gate)
@@ -352,6 +384,11 @@ public sealed class PresentMonFpsReader : IDisposable
             if (!string.IsNullOrEmpty(app))
             {
                 _names[pid] = app;
+            }
+
+            if (fullscreen)
+            {
+                _games.Add(pid);
             }
 
             q.Enqueue((now, ms));
@@ -389,8 +426,78 @@ public sealed class PresentMonFpsReader : IDisposable
         {
             _byPid.Remove(pid);
             _names.Remove(pid);
+            _games.Remove(pid);
         }
     }
+
+    /// <summary>
+    /// The process whose window is in front AND fills its whole monitor without being an ordinary
+    /// maximized window — a borderless-fullscreen game (or fullscreen video) that the desktop still
+    /// composes, e.g. because an overlay is on top. 0 when none.
+    /// </summary>
+    private static int ForegroundFullscreenPid()
+    {
+        try
+        {
+            var hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero || IsZoomed(hwnd) || !GetWindowRect(hwnd, out var window))
+            {
+                return 0;
+            }
+
+            var monitor = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(MonitorFromWindow(hwnd, 2), ref monitor))
+            {
+                return 0;
+            }
+
+            var m = monitor.rcMonitor;
+            if (window.Left > m.Left || window.Top > m.Top || window.Right < m.Right || window.Bottom < m.Bottom)
+            {
+                return 0;
+            }
+
+            GetWindowThreadProcessId(hwnd, out var pid);
+            return (int)pid;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsZoomed(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
 
     private string? EnsurePresentMon()
     {

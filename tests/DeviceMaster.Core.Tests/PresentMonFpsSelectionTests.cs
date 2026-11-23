@@ -107,4 +107,27 @@ public class PresentMonFpsSelectionTests
         var names = new Dictionary<int, string> { [4242] = "DeviceMaster.exe" };
         Assert.Equal(0, PresentMonFpsReader.SelectFpsPid(byPid, names, Now));
     }
+
+    [Fact]
+    public void A_window_that_merely_redraws_is_not_a_game()
+    {
+        // #112: a chat app repainting ~12 times a second at the desktop read as "12 FPS" with a graph
+        const int Chat = 2900;
+        var byPid = new Dictionary<int, Queue<(long Tick, double Ms)>> { [Chat] = Frames(25, 80), [Dwm] = Frames(60, 45.5) };
+        var names = new Dictionary<int, string> { [Chat] = "claude.exe", [Dwm] = "dwm.exe" };
+        Assert.Equal(0, PresentMonFpsReader.SelectAppPid(byPid, names, Now, new HashSet<int>()));
+
+        // the same app once it has looked like a game (fullscreen) counts
+        Assert.Equal(Chat, PresentMonFpsReader.SelectAppPid(byPid, names, Now, new HashSet<int> { Chat }));
+    }
+
+    [Theory]
+    [InlineData("Hardware: Independent Flip", true)]
+    [InlineData("Hardware Composed: Independent Flip", true)]
+    [InlineData("Hardware: Legacy Flip", true)]
+    [InlineData("Composed: Flip", false)]
+    [InlineData("Composed: Copy with GPU GDI", false)]
+    [InlineData(null, false)]
+    public void Fullscreen_present_modes_mark_a_game(string? mode, bool game) =>
+        Assert.Equal(game, PresentMonFpsReader.IsFullscreenPresentMode(mode));
 }
