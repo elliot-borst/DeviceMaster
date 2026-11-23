@@ -130,4 +130,25 @@ public class PresentMonFpsSelectionTests
     [InlineData(null, false)]
     public void Fullscreen_present_modes_mark_a_game(string? mode, bool game) =>
         Assert.Equal(game, PresentMonFpsReader.IsFullscreenPresentMode(mode));
+
+    [Theory]
+    [InlineData("StarCitizen.exe", "StarCitizen")]
+    [InlineData("dwm.exe", "Desktop")]
+    [InlineData("<unknown>", null)]
+    [InlineData(null, null)]
+    public void The_source_is_named_for_the_screen(string? application, string? shown) =>
+        Assert.Equal(shown, PresentMonFpsReader.SourceName(application));
+
+    [Fact]
+    public void The_screen_rate_is_the_game_else_the_desktop_never_a_redrawing_window()
+    {
+        const int Chat = 2900;
+        var byPid = new Dictionary<int, Queue<(long Tick, double Ms)>> { [Chat] = Frames(25, 80), [Dwm] = Frames(60, 8.3) };
+        var names = new Dictionary<int, string> { [Chat] = "claude.exe", [Dwm] = "dwm.exe" };
+        Assert.Equal(Dwm, PresentMonFpsReader.SelectScreenPid(byPid, names, Now, new HashSet<int>()));
+
+        byPid[Game] = Frames(60, 10);
+        names[Game] = "StarCitizen.exe";
+        Assert.Equal(Game, PresentMonFpsReader.SelectScreenPid(byPid, names, Now, new HashSet<int> { Game }));
+    }
 }

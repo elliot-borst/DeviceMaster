@@ -9,7 +9,7 @@ namespace DeviceMaster.Control;
 /// </summary>
 public static class TurzxDashboardFeed
 {
-    public static TurzxDashboardData From(ControlStatus s, int? fps, IReadOnlyList<double> fpsHistory)
+    public static TurzxDashboardData From(ControlStatus s, int? fps, IReadOnlyList<double> fpsHistory, string? fpsSource = null)
     {
         // the CPU card's COOLER bar: a motherboard header if one spins, else the first spinning fan
         var fan = s.Devices.FirstOrDefault(d => d.Family == "motherboard" && d.Rpm is > 0)
@@ -20,6 +20,7 @@ public static class TurzxDashboardFeed
             ShowFps = true,
             Fps = fps,
             FpsHistory = fpsHistory,
+            FpsSource = fpsSource,
             GpuName = s.GpuName ?? "GPU",
             GpuTempC = s.GpuTemperatureC,
             GpuUtil = s.GpuLoadPercent,

@@ -50,6 +50,9 @@ public sealed record TurzxDashboardData
     /// <summary>Current frames per second of the busiest game/app; null = nothing presenting.</summary>
     public int? Fps { get; init; }
 
+    /// <summary>What the FPS is read from ("StarCitizen", "Desktop"), shown under the card title; null = unknown.</summary>
+    public string? FpsSource { get; init; }
+
     /// <summary>Recent FPS readings, oldest first, for the graph under the number.</summary>
     public IReadOnlyList<double> FpsHistory { get; init; } = [];
 
@@ -474,7 +477,7 @@ public static class TurzxDashboard
     /// <summary>The middle card of the gaming layout: a big FPS number and its recent history.</summary>
     private static void DrawFps(SKCanvas c, SKRect r, TurzxDashboardData d)
     {
-        CardShell(c, r, "FPS", "", 26, bold: false);
+        CardShell(c, r, "FPS", d.Fps is null ? "" : d.FpsSource ?? "", 26, bold: false);
         if (d.Fps is { } fps)
         {
             // green when smooth, amber when it dips, red when it's struggling

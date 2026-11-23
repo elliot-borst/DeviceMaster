@@ -142,7 +142,8 @@ public sealed class PresentMonFpsReader : IDisposable
                 _games.Add(foreground); // stays a game after an alt-tab, until it stops presenting
             }
 
-            var pid = SelectAppPid(_byPid, _names, now, _games);
+            var pid = SelectScreenPid(_byPid, _names, now, _games);
+            CurrentAppSource = pid != 0 ? SourceName(_names.GetValueOrDefault(pid)) : null;
             return pid != 0 ? RollingFps(_byPid[pid], now) : null;
         }
     }
@@ -157,6 +158,43 @@ public sealed class PresentMonFpsReader : IDisposable
         IReadOnlyDictionary<int, string> names,
         long now,
         IReadOnlySet<int>? games = null) => DominantPresenter(byPid, names, now, excludeInfrastructure: true, games);
+
+    /// <summary>What the last <see cref="CurrentAppFps"/> reading came from ("StarCitizen", "Desktop"), or null.</summary>
+    public string? CurrentAppSource { get; private set; }
+
+    /// <summary>A presenter's name for the screen: the process without ".exe"; the compositor is "Desktop". Pure.</summary>
+    public static string? SourceName(string? application)
+    {
+        if (string.IsNullOrWhiteSpace(application) || application.StartsWith('<'))
+        {
+            return null;
+        }
+
+        return application.Equals("dwm.exe", StringComparison.OrdinalIgnoreCase)
+            ? "Desktop"
+            : application.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? application[..^4] : application;
+    }
+
+    /// <summary>
+    /// The frame rate of what is on screen (#112), pure: the busiest game if one is running, else the
+    /// desktop compositor (dwm.exe) — the rate the desktop actually reaches the display at. Never an
+    /// ordinary window's own redraw rate (that is not what the screen shows). 0 = nothing presenting.
+    /// </summary>
+    public static int SelectScreenPid(
+        IReadOnlyDictionary<int, Queue<(long Tick, double Ms)>> byPid,
+        IReadOnlyDictionary<int, string> names,
+        long now,
+        IReadOnlySet<int> games)
+    {
+        var game = SelectAppPid(byPid, names, now, games);
+        if (game != 0)
+        {
+            return game;
+        }
+
+        var compositor = byPid.Keys.Where(pid => names.TryGetValue(pid, out var n) && n.Equals("dwm.exe", StringComparison.OrdinalIgnoreCase)).ToHashSet();
+        return DominantPresenter(byPid, names, now, excludeInfrastructure: false, compositor);
+    }
 
     /// <summary>
     /// Whether a PresentMon present mode means the app owns the screen (exclusive or borderless

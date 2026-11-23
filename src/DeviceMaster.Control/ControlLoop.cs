@@ -1495,6 +1495,7 @@ public sealed class ControlLoop : IDisposable
 
     // FPS for the V1.x USB panel's gaming layout (#102): written by the tick, read by the worker under _turzxGate
     private int? _turzxFpsNow;
+    private string? _turzxFpsSource;
     private readonly Queue<double> _turzxFpsHistory = new();
 
     // worker-thread-only state
@@ -1578,6 +1579,7 @@ public sealed class ControlLoop : IDisposable
                 lock (_turzxGate)
                 {
                     _turzxFpsNow = appFps;
+                    _turzxFpsSource = _fps is not null ? _fps.CurrentAppSource : appFps is null ? null : "RivaTuner";
                     _turzxFpsHistory.Enqueue(appFps ?? 0);
                     while (_turzxFpsHistory.Count > 60)
                     {
@@ -1909,13 +1911,15 @@ public sealed class ControlLoop : IDisposable
                 case LcdMode.Metrics when Environment.TickCount64 >= _turzxUsbNextAt:
                     int? fps;
                     double[] history;
+                    string? fpsSource;
                     lock (_turzxGate)
                     {
                         fps = _turzxFpsNow;
+                        fpsSource = _turzxFpsSource;
                         history = _turzxFpsHistory.ToArray();
                     }
 
-                    var data = TurzxDashboardFeed.From(_status, fps, history);
+                    var data = TurzxDashboardFeed.From(_status, fps, history, fpsSource);
                     _turzxUsb.SendJpeg(Lcd.Skia.TurzxDashboard.RenderNativeJpeg(data, flip));
                     _turzxUsbShownKey = "metrics";
                     _turzxUsbNextAt = Environment.TickCount64 + 1_000;
