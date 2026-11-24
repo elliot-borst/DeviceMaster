@@ -11,7 +11,7 @@ public enum FleetSection
     /// <summary>The Turzx screen: mode, metric and brightness.</summary>
     Screens,
 
-    /// <summary>Fan mode, duty, curve source and curve.</summary>
+    /// <summary>Fan mode, curve source and curve.</summary>
     Cooling,
 }
 
@@ -99,7 +99,6 @@ public sealed record FleetState
         FleetSection.Cooling => target with
         {
             Mode = source.Mode,
-            ManualDutyPercent = source.ManualDutyPercent,
             Source = source.Source,
             CurvePoints = source.CurvePoints,
         },
@@ -124,7 +123,7 @@ public static class FleetOverrides
         },
         FleetSection.Cooling => o with
         {
-            Mode = own.Mode, ManualDutyPercent = own.ManualDutyPercent, Source = own.Source, CurvePoints = own.CurvePoints,
+            Mode = own.Mode, Source = own.Source, CurvePoints = own.CurvePoints,
         },
         _ => o,
     };
@@ -141,7 +140,7 @@ public static class FleetOverrides
         {
             TurzxScreen = null, TurzxMetric = null, TurzxBrightness = null,
         },
-        FleetSection.Cooling => o with { Mode = null, ManualDutyPercent = null, Source = null, CurvePoints = null },
+        FleetSection.Cooling => o with { Mode = null, Source = null, CurvePoints = null },
         _ => o,
     };
 
@@ -150,14 +149,15 @@ public static class FleetOverrides
     {
         FleetSection.Lighting => o.RgbEnabled is not null || o.RgbOff is not null || o.RgbEffect is not null || o.RgbR is not null || o.Blackout is not null,
         FleetSection.Screens => o.TurzxScreen is not null || o.TurzxMetric is not null || o.TurzxBrightness is not null,
-        FleetSection.Cooling => o.Mode is not null || o.Source is not null || o.CurvePoints is not null || o.ManualDutyPercent is not null,
+        FleetSection.Cooling => o.Mode is not null || o.Source is not null || o.CurvePoints is not null,
         _ => false,
     };
 
     /// <summary>
     /// Makes fleet cooling safe for every machine before it is stored: the curve source is always
     /// the hottest of each machine's own CPU and GPU (a GPU-only source would put a machine without
-    /// that sensor into failsafe), the mode is Curve or Fixed, and the curve passes the shared rules.
+    /// that sensor into failsafe), the mode is Curve (never Off: the fleet never hands fans back to the
+    /// hardware; a constant speed is a flat curve, #116), and the curve passes the shared rules.
     /// Null when the curve is unusable.
     /// </summary>
     public static FleetProfile? SanitizeCooling(FleetProfile p)
@@ -170,9 +170,8 @@ public static class FleetOverrides
         return p with
         {
             Source = CurveSource.Hottest,
-            Mode = p.Mode == ControlMode.Manual ? ControlMode.Manual : ControlMode.Curve,
+            Mode = ControlMode.Curve,
             CurvePoints = curve,
-            ManualDutyPercent = Math.Clamp(p.ManualDutyPercent, 0, 100),
         };
     }
 }

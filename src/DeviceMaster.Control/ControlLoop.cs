@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Discovery;
 using DeviceMaster.Core.Safety;
@@ -25,6 +26,7 @@ public sealed record ControlStatus
     public string Version { get; init; } = BuildInfo.Version;
     public string? Commit { get; init; } = BuildInfo.Commit;
     public bool Running { get; init; }
+    [JsonConverter(typeof(ControlModeJsonConverter))] // an older agent may still report the removed Fixed ("Manual") mode
     public ControlMode Mode { get; init; }
     public string SourceName { get; init; } = "";
     public double? SourceTemperatureC { get; init; }
@@ -96,7 +98,7 @@ public sealed record ControlStatus
 
 /// <summary>
 /// The 1 Hz control loop. Each tick: read the selected temperature source, evaluate the curve
-/// (or take the manual duty), and drive every fan on both families — Corsair Link hubs
+/// (a constant speed is a flat curve), and drive every fan on both families — Corsair Link hubs
 /// (write-on-change plus a periodic refresh) and Lian Li SL V3 wireless
 /// (keepalive PWM every tick, as the firmware requires).
 /// Failsafe: a missing or implausible source reading forces 100% everywhere.
@@ -530,26 +532,19 @@ public sealed class ControlLoop : IDisposable
         }
 
         // ---- decide the duty ----
-        double? sourceTemp = null;
+        // always the curve (a constant speed is a flat curve, #116): no reading, no duty but 100%
         var failsafe = false;
         int duty;
-        if (settings.Mode == ControlMode.Manual)
+        var sourceTemp = ReadSourceTemperature(settings.Source, warnings);
+        if (!SensorValidity.IsPlausibleTemperature(sourceTemp))
         {
-            duty = SafetyGuard.ClampFanDuty(settings.ManualDutyPercent);
+            duty = SafetyGuard.DutyOnSensorFailure();
+            failsafe = true;
+            warnings.Add($"{settings.Source} temperature unavailable — failsafe 100%");
         }
         else
         {
-            sourceTemp = ReadSourceTemperature(settings.Source, warnings);
-            if (!SensorValidity.IsPlausibleTemperature(sourceTemp))
-            {
-                duty = SafetyGuard.DutyOnSensorFailure();
-                failsafe = true;
-                warnings.Add($"{settings.Source} temperature unavailable — failsafe 100%");
-            }
-            else
-            {
-                duty = settings.Curve.EvaluateDuty(sourceTemp!.Value);
-            }
+            duty = settings.Curve.EvaluateDuty(sourceTemp!.Value);
         }
 
         Lap("duty");
@@ -580,7 +575,7 @@ public sealed class ControlLoop : IDisposable
         {
             Running = true,
             Mode = settings.Mode,
-            SourceName = settings.Mode == ControlMode.Manual ? "manual" : settings.Source.ToString(),
+            SourceName = settings.Source.ToString(),
             SourceTemperatureC = sourceTemp,
             CpuTemperatureC = _dashCpuTemp,
             GpuTemperatureC = _dashGpuTemp,

@@ -53,8 +53,7 @@ public class LegacyMigrationTests
         Assert.False(settings.SourceCurves.ContainsKey("Coolant"));
 
         // everything else survives
-        Assert.Equal(ControlMode.Curve, settings.Mode);
-        Assert.Equal(45, settings.ManualDutyPercent);
+        Assert.Equal(ControlMode.Curve, settings.Mode); // Curve mode: the old fixed duty (45) is ignored, as it was
         Assert.Equal((10, 20, 30), (settings.RgbR, settings.RgbG, settings.RgbB));
         Assert.Equal(LcdMode.Metrics, settings.TurzxScreen);
         Assert.Equal(LcdMetric.CpuTemp, settings.TurzxMetric); // the coolant metric is gone
@@ -74,6 +73,7 @@ public class LegacyMigrationTests
         Assert.DoesNotContain("Coolant", json);
         Assert.DoesNotContain("Pump", json);
         Assert.DoesNotContain("LcdScreens", json);
+        Assert.DoesNotContain("ManualDutyPercent", json);
         Assert.Contains("\"Source\": \"Hottest\"", json);
         Assert.Equal(CurveSource.Hottest, ControlSettings.FromJson(json).Source);
     }

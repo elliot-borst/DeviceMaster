@@ -103,13 +103,13 @@ public sealed class AgentApiTests : IDisposable
     [Fact]
     public async Task PutAppliesThroughTheLocalClamps()
     {
-        var profile = FleetProfile.From(_host.Settings) with { ManualDutyPercent = 150, RgbEffect = RgbEffect.Rainbow };
+        var profile = FleetProfile.From(_host.Settings) with { CurvePoints = [new(40, 150), new(85, 150)], RgbEffect = RgbEffect.Rainbow };
         var response = await _client.SendAsync(Request(HttpMethod.Put, "profile", body: profile));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var answer = await response.Content.ReadFromJsonAsync<JsonElement>(AgentApi.Json);
         Assert.True(answer.GetProperty("changed").GetBoolean());
-        Assert.Equal(100, _host.Settings.ManualDutyPercent); // clamped to the fan range
+        Assert.Equal(DeviceMaster.Core.Curves.CurveRules.Flat(100), _host.Settings.CurvePoints); // clamped to the fan range
         Assert.Equal(RgbEffect.Rainbow, _host.Settings.RgbEffect);
 
         // the revision the agent reports is the one for what now runs

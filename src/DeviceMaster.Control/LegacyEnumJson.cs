@@ -67,3 +67,27 @@ public sealed class CurveSourceJsonConverter() : LenientEnumConverter<CurveSourc
 
 /// <summary>A removed metric (coolant, pump rpm/duty) reads as <see cref="LcdMetric.CpuTemp"/>.</summary>
 public sealed class LcdMetricJsonConverter() : LenientEnumConverter<LcdMetric>(LcdMetric.CpuTemp);
+
+/// <summary>
+/// The removed Fixed fan mode (#116: "Manual", 1 on the wire) reads as <see cref="ControlMode.Curve"/>,
+/// as does anything unknown. Where the old fixed duty is at hand, the owning type reads the mode with
+/// <see cref="Read"/> and turns that duty into a flat curve, so the fans keep their speed.
+/// </summary>
+public sealed class ControlModeJsonConverter() : LenientEnumConverter<ControlMode>(ControlMode.Curve)
+{
+    /// <summary>The wire number the removed Fixed ("Manual") mode had.</summary>
+    public const int LegacyFixed = 1;
+
+    /// <summary>Reads a mode leniently; <paramref name="legacyFixed"/> = it was the removed Fixed mode (read as Curve).</summary>
+    public static ControlMode Read(JsonElement element, out bool legacyFixed)
+    {
+        legacyFixed = element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() is { } s
+                && (s.Equals("Manual", StringComparison.OrdinalIgnoreCase) || s.Equals("Fixed", StringComparison.OrdinalIgnoreCase)),
+            JsonValueKind.Number => element.TryGetInt32(out var n) && n == LegacyFixed,
+            _ => false,
+        };
+        return TryParse(element, ControlMode.Curve, out var mode) ? mode : ControlMode.Curve;
+    }
+}

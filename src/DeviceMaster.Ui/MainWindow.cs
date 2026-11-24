@@ -67,8 +67,6 @@ public sealed class MainWindow : Window
     private int _downloadDots;
 
     // fan control card
-    private DmSlider _dutySlider = null!;
-    private TextBlock _dutyLabel = null!;
     private readonly TextBlock _controlStatus = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Text, Margin = new Thickness(0, 14, 0, 10) };
     private readonly StackPanel _fanRows = new() { Visibility = Visibility.Collapsed };
     private readonly StackPanel _fanWarnings = new();
@@ -733,10 +731,10 @@ public sealed class MainWindow : Window
         }
     }
 
-    // fan mode (Fixed / Curve) and the curve editor — the web dashboard's Cooling page mirrors these
+    // the curve source and the curve editor — the web dashboard's Cooling page mirrors these. There is
+    // no fixed mode (#116): a constant speed is a curve with both points at the same duty
     private TextBlock _fanSubtitle = null!;
-    private StackPanel _dutyRow = null!, _sourceRow = null!;
-    private readonly StackPanel _modeChips = new() { Orientation = Orientation.Horizontal };
+    private StackPanel _sourceRow = null!;
     private readonly StackPanel _sourceChips = new() { Orientation = Orientation.Horizontal };
     private readonly TextBlock _curveReadout = new() { FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Theme.Accent2, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
     private readonly CurveEditor _curveEditor = new();
@@ -765,13 +763,6 @@ public sealed class MainWindow : Window
 
     private void RefreshFanModeUi()
     {
-        var curve = _controlSettings.Mode == ControlMode.Curve;
-        FillChips(_modeChips, ["Fixed", "Curve"], curve ? 1 : 0, i =>
-        {
-            _controlSettings.Mode = i == 1 ? ControlMode.Curve : ControlMode.Manual;
-            RefreshFanModeUi();
-            OnControlSettingChanged();
-        });
         FillChips(_sourceChips, CurveSources.Select(s => s.Label).ToList(),
             Array.FindIndex(CurveSources, s => s.Source == _controlSettings.Source), i =>
             {
@@ -782,15 +773,11 @@ public sealed class MainWindow : Window
                 }
             });
 
-        _dutyRow.Visibility = curve ? Visibility.Collapsed : Visibility.Visible;
-        _sourceRow.Visibility = curve ? Visibility.Visible : Visibility.Collapsed;
         var sourceLabel = CurveSources.FirstOrDefault(s => s.Source == _controlSettings.Source).Label ?? "CPU/GPU";
-        _fanSubtitle.Text = curve ? $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system" : "one fixed duty · every fan in the system";
+        _fanSubtitle.Text = $"curve on {sourceLabel.ToLowerInvariant()} · every fan in the system";
         _curveSubtitle.Text = (_controlSettings.Source == CurveSource.Hottest ? "Hotter of CPU and GPU" : sourceLabel)
-            + " temperature → fan duty · drag a point to change it"
-            + (curve ? "" : " · used when Mode is Curve");
+            + " temperature → fan duty · drag a point to change it";
         _curveEditor.SetCurve(_controlSettings.CurvePoints);
-        _curveEditor.Opacity = curve ? 1.0 : 0.6;
     }
 
     private Border BuildCurveCard()
@@ -861,8 +848,8 @@ public sealed class MainWindow : Window
 
     private Border BuildFanCard()
     {
-        // one row (#113): title, Mode, Follows + live readout (or the Fixed duty slider), CPU/GPU,
-        // fans reporting + links, status badge at the right; wraps on a narrow window
+        // one row (#113): title, Follows + live readout, CPU/GPU, fans reporting + links, status
+        // badge at the right; wraps on a narrow window
         var card = Theme.CardShell("✻", "Fan Control", "every fan in the system", out var body, out var head);
         _fanSubtitle = CardSubtitle(head);
         head.Margin = new Thickness(0);
@@ -874,21 +861,6 @@ public sealed class MainWindow : Window
 
         var controls = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(28, 0, 0, 0) };
         var itemMargin = new Thickness(0, 4, 28, 4);
-
-        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = itemMargin, VerticalAlignment = VerticalAlignment.Center };
-        modeRow.Children.Add(Theme.SmallLabel("Mode"));
-        modeRow.Children.Add(_modeChips);
-        controls.Children.Add(modeRow);
-
-        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 360);
-        _dutySlider.ValueChanged += _ => OnControlSettingChanged();
-        _dutyLabel = new TextBlock { Text = $"{_controlSettings.ManualDutyPercent}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
-        var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        dutyRow.Children.Add(_dutySlider);
-        dutyRow.Children.Add(_dutyLabel);
-        _dutyRow = LabelledInline("Fan duty", dutyRow);
-        _dutyRow.Margin = itemMargin;
-        controls.Children.Add(_dutyRow);
 
         _sourceRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = itemMargin, VerticalAlignment = VerticalAlignment.Center };
         _sourceRow.Children.Add(Theme.SmallLabel("Follows"));
@@ -1178,7 +1150,7 @@ public sealed class MainWindow : Window
         }
         else if (_controlSettings.Mode == ControlMode.Off)
         {
-            _rgbStatus.Text = "Waiting for fan control — set Mode to Manual or Curve to apply lighting.";
+            _rgbStatus.Text = "Waiting for fan control to start before applying lighting.";
         }
         else if (_controlSettings.RgbOff)
         {
@@ -1223,14 +1195,6 @@ public sealed class MainWindow : Window
         body.Children.Add(_hardwareRows);
         body.Children.Add(_conflictSummary);
         return card;
-    }
-
-    private static StackPanel LabelledInline(string label, UIElement element)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 20, 8), VerticalAlignment = VerticalAlignment.Center };
-        panel.Children.Add(Theme.SmallLabel(label));
-        panel.Children.Add(element);
-        return panel;
     }
 
     /// <summary>Compact two-per-row chip for the hardware inventory.</summary>
@@ -1951,8 +1915,6 @@ public sealed class MainWindow : Window
 
     private void ReloadControlsFromSettings()
     {
-        _dutySlider.Value = _controlSettings.ManualDutyPercent;
-        _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
         _rgbSpeedSlider.Value = _controlSettings.RgbSpeed;
         _turzxBrightnessSlider.Value = Math.Clamp(_controlSettings.TurzxBrightness, 0, 100);
         _turzxBrightnessLabel.Text = $"{Math.Clamp(_controlSettings.TurzxBrightness, 0, 100)}%";
@@ -1970,9 +1932,6 @@ public sealed class MainWindow : Window
         {
             return;
         }
-
-        _controlSettings.ManualDutyPercent = (int)Math.Round(_dutySlider.Value);
-        _dutyLabel.Text = $"{_controlSettings.ManualDutyPercent}%";
 
         try
         {
@@ -2011,15 +1970,13 @@ public sealed class MainWindow : Window
 
     private void ApplyControlState()
     {
-        // fan control is always on: Fixed (Manual) or Curve. Off stays retired from the UI
-        // (the enum survives in settings for config compatibility) and maps to Fixed.
+        // fan control is always on, following the curve (a constant speed is a flat curve, #116).
+        // Off stays retired from the UI (the enum survives in settings for config compatibility).
         if (_controlSettings.Mode == ControlMode.Off)
         {
-            _controlSettings.Mode = ControlMode.Manual;
+            _controlSettings.Mode = ControlMode.Curve;
             TrySaveSettings();
         }
-
-        _dutySlider.Enabled = true;
 
         if (NoControl)
         {
@@ -2107,32 +2064,22 @@ public sealed class MainWindow : Window
         else
         {
             SetBadge("Running", Theme.Good);
-            if (status.Mode == ControlMode.Curve)
-            {
-                _curveReadout.Text = $"{temp} → {status.TargetDutyPercent}%";
-            }
-
+            _curveReadout.Text = $"{temp} → {status.TargetDutyPercent}%";
             _controlStatus.Text =
                 $"CPU {(status.CpuTemperatureC is { } ct ? $"{ct:F0} °C" : "—")}"
                 + $"   ·   GPU {(status.GpuTemperatureC is { } gt ? $"{gt:F0} °C" : "—")}";
             _controlStatus.Foreground = Theme.Text;
         }
 
-        // the "now" marker shows in Fixed mode too: where the curve would put the fans right now
+        // the "now" marker: where the curve puts the fans right now
         var curveTemp = _controlSettings.Source switch
         {
             CurveSource.Cpu => status.CpuTemperatureC,
             CurveSource.Gpu => status.GpuTemperatureC,
-            // the loop's smoothed value while the curve runs; the raw hotter one in Fixed mode
-            CurveSource.Hottest => status.Mode == ControlMode.Curve
-                ? status.SourceTemperatureC
-                : HottestTemperature.Combine(status.CpuTemperatureC, status.GpuTemperatureC, gpuExpected: false),
+            CurveSource.Hottest => status.SourceTemperatureC, // the loop's smoothed value
             _ => null,
         };
-        var curveDuty = status.Mode == ControlMode.Curve
-            ? status.TargetDutyPercent
-            : curveTemp is { } ct2 ? _controlSettings.Curve.EvaluateDuty(ct2) : (int?)null;
-        _curveEditor.SetLive(status.FailsafeActive ? null : curveTemp, curveDuty);
+        _curveEditor.SetLive(status.FailsafeActive ? null : curveTemp, status.TargetDutyPercent);
         _curveEditor.SetSensors(status.CpuTemperatureC, status.GpuTemperatureC);
 
         var fans = status.Devices.ToList();
@@ -2182,9 +2129,7 @@ public sealed class MainWindow : Window
         {
             var tip = status.FailsafeActive
                 ? "DeviceMaster — FAILSAFE, fans 100%"
-                : status.Mode == ControlMode.Manual
-                    ? $"DeviceMaster — manual → {status.TargetDutyPercent}%"
-                    : $"DeviceMaster — {status.SourceName} {temp} → {status.TargetDutyPercent}%";
+                : $"DeviceMaster — {status.SourceName} {temp} → {status.TargetDutyPercent}%";
             _trayIcon.Text = tip.Length > 63 ? tip[..63] : tip;
         }
     }
@@ -2222,9 +2167,7 @@ public sealed class MainWindow : Window
 
         _dashStatus.Text = status.FailsafeActive
             ? $"{status.SourceName} unavailable — FAILSAFE, all fans at 100%"
-            : status.Mode == ControlMode.Manual
-                ? $"Fixed — all fans at {status.TargetDutyPercent}%"
-                : $"Curve on {SourceLabel(status.SourceName)} → fans {status.TargetDutyPercent}%";
+            : $"Curve on {SourceLabel(status.SourceName)} → fans {status.TargetDutyPercent}%";
         _dashStatus.Foreground = status.FailsafeActive ? Theme.Warn : Theme.Text;
 
         UpdateProcessorSections(status);
@@ -2235,7 +2178,7 @@ public sealed class MainWindow : Window
         _tileFansSub.Text = silent > 0 ? $"{silent} without rpm" : "all reporting";
 
         _tileDuty.Text = $"{status.TargetDutyPercent}%";
-        _tileDutySub.Text = status.Mode == ControlMode.Manual ? "fixed" : "from curve";
+        _tileDutySub.Text = "from curve";
 
         _dashFanGrid.Children.Clear();
         foreach (var fan in fans)

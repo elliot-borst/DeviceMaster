@@ -37,12 +37,21 @@ public static class ConfigPatcher
             return applied;
         }
 
+        // the removed Fixed mode (#116): an older client's {"mode":1,"fanDuty":X} becomes a flat curve
+        // at X (fans keep that speed); the legacy mode or duty alone is ignored
+        var legacyFixed = false;
+        int? legacyDuty = null;
+
         foreach (var prop in patch.EnumerateObject())
         {
             switch (prop.Name)
             {
                 case "mode":
-                    if (TryEnum(prop.Value, out var mode) && Enum.IsDefined(typeof(ControlMode), mode))
+                    if (TryEnum(prop.Value, out var mode) && mode == ControlModeJsonConverter.LegacyFixed)
+                    {
+                        legacyFixed = true;
+                    }
+                    else if (TryEnum(prop.Value, out mode) && Enum.IsDefined(typeof(ControlMode), mode))
                     {
                         s.Mode = (ControlMode)mode;
                         applied.Add($"mode={(int)s.Mode}");
@@ -51,8 +60,7 @@ public static class ConfigPatcher
                 case "fanDuty":
                     if (TryInt(prop.Value, 0, 100, out var duty))
                     {
-                        s.ManualDutyPercent = duty;
-                        applied.Add($"fanDuty={duty}");
+                        legacyDuty = duty;
                     }
                     break;
 
@@ -139,6 +147,13 @@ public static class ConfigPatcher
                     // unknown fields are ignored, never fatal
                     break;
             }
+        }
+
+        if (legacyFixed && legacyDuty is { } fixedDuty && s.SetCurve(CurveRules.Flat(fixedDuty, s.CurvePoints)))
+        {
+            s.Mode = ControlMode.Curve;
+            applied.Add($"mode={(int)s.Mode}");
+            applied.Add("curvePoints=" + string.Join(";", s.CurvePoints.Select(p => $"{p.TemperatureC:0}:{p.DutyPercent}")));
         }
 
         return applied;

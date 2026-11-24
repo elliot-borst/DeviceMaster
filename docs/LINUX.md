@@ -112,8 +112,12 @@ docker run -d --name devicemaster \
 
 ## Configuration (headless block)
 
-Same JSON shape as the Windows app's `Control` section (mode, source, `CurvePoints`,
-manual duty, RGB, Turzx screen), plus:
+Same JSON shape as the Windows app's `Control` section (mode, source, `CurvePoints`, RGB,
+Turzx screen), plus the fields below. `Mode` is `Curve` (DeviceMaster drives the fans) or `Off`
+(the hardware's own curves). There is no fixed-duty mode (#116): for a constant speed, set both
+curve points to the same duty. A config saved with the old `"Mode": "Manual"` and
+`ManualDutyPercent` still loads, as a curve flat at that duty on the same source; a sensor failure
+still sends every fan to 100 %.
 
 | Field | Meaning |
 |---|---|

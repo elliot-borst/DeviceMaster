@@ -7,20 +7,23 @@ internal static class ControlCommands
 {
     public static int Run(string[] args)
     {
-        var mode = GetString(args, "--mode") ?? "curve";
-        var duty = GetInt(args, "--duty") ?? 50;
+        // --duty N runs a flat curve at N% (there is no fixed mode, #116); without it, the default curve
+        var duty = GetInt(args, "--duty");
         var seconds = GetInt(args, "--seconds") ?? 15;
         var source = GetString(args, "--source") ?? "hottest";
 
         var settings = new ControlSettings
         {
-            Mode = mode.Equals("manual", StringComparison.OrdinalIgnoreCase) ? ControlMode.Manual : ControlMode.Curve,
-            ManualDutyPercent = duty,
+            Mode = ControlMode.Curve,
             Source = Enum.TryParse<CurveSource>(source, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed) ? parsed : CurveSource.Hottest,
         };
+        if (duty is { } flat)
+        {
+            settings.SetCurve(DeviceMaster.Core.Curves.CurveRules.Flat(flat));
+        }
 
-        Log.Information("Control loop: mode={Mode} source={Source} for {Seconds}s (Ctrl+C safe — hardware reverts)",
-            settings.Mode, settings.Source, seconds);
+        Log.Information("Control loop: source={Source} curve={Curve} for {Seconds}s (Ctrl+C safe — hardware reverts)",
+            settings.Source, string.Join(" ", settings.CurvePoints.Select(p => $"{p.TemperatureC:0}°C:{p.DutyPercent}%")), seconds);
 
         using var loop = new ControlLoop(settings, m => Log.Debug("{Message}", m));
         loop.Start();
