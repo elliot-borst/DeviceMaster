@@ -538,6 +538,10 @@ public sealed class MainWindow : Window
         var curve = BuildCurveCard();
         curve.Margin = new Thickness(0, 16, 0, 0);
         page.Children.Add(curve);
+
+        var history = BuildHistoryCard();
+        history.Margin = new Thickness(0, 16, 0, 0);
+        page.Children.Add(history);
         RefreshFanModeUi();
         return page;
     }
@@ -822,50 +826,88 @@ public sealed class MainWindow : Window
         return card;
     }
 
+    // temperature history card (#113): ~10 minutes of CPU/GPU readings from the 1 Hz status refresh
+    private readonly TemperatureHistory _tempHistory = TemperatureHistory.TenMinutes();
+    private readonly TemperatureChart _tempChart = new();
+    private readonly StackPanel _historyRangeChips = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+    private static readonly (TimeSpan Window, string Label)[] HistoryRanges =
+        [(TimeSpan.FromMinutes(1), "1m"), (TimeSpan.FromMinutes(5), "5m"), (TimeSpan.FromMinutes(10), "10m")];
+    private TimeSpan _historyWindow = TimeSpan.FromMinutes(10);
+
+    private Border BuildHistoryCard()
+    {
+        var card = Theme.CardShell("◔", "Temperature history", "CPU and GPU over the last minutes", out var body, out var head);
+        DockPanel.SetDock(_historyRangeChips, Dock.Right);
+        head.Children.Add(_historyRangeChips);
+        RefreshHistoryRangeChips();
+        _tempChart.IsVisibleChanged += (_, _) => RedrawTemperatureHistory();
+        body.Children.Add(_tempChart);
+        return card;
+    }
+
+    private void RefreshHistoryRangeChips()
+    {
+        FillChips(_historyRangeChips, HistoryRanges.Select(r => r.Label).ToList(),
+            Array.FindIndex(HistoryRanges, r => r.Window == _historyWindow), i =>
+            {
+                _historyWindow = HistoryRanges[i].Window;
+                RefreshHistoryRangeChips();
+                RedrawTemperatureHistory();
+            });
+    }
+
+    private void RedrawTemperatureHistory()
+    {
+        if (_tempChart.IsVisible)
+        {
+            _tempChart.Show(_tempHistory, DateTimeOffset.Now, _historyWindow);
+        }
+    }
+
     private Border BuildFanCard()
     {
+        // one row (#113): title, Mode, Follows + live readout (or the Fixed duty slider), CPU/GPU,
+        // fans reporting + links, status badge at the right; wraps on a narrow window
         var card = Theme.CardShell("✻", "Fan Control", "every fan in the system", out var body, out var head);
         _fanSubtitle = CardSubtitle(head);
+        head.Margin = new Thickness(0);
+        head.LastChildFill = true;
         var badge = Theme.StatusBadge("Off", Theme.Faint, out _fanDot, out _fanBadge);
-        badge.VerticalAlignment = VerticalAlignment.Top;
+        badge.Margin = new Thickness(16, 0, 0, 0);
         DockPanel.SetDock(badge, Dock.Right);
         head.Children.Add(badge);
 
-        var controls = new WrapPanel { Orientation = Orientation.Horizontal };
+        var controls = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(28, 0, 0, 0) };
+        var itemMargin = new Thickness(0, 4, 28, 4);
 
-        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 460);
+        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = itemMargin, VerticalAlignment = VerticalAlignment.Center };
+        modeRow.Children.Add(Theme.SmallLabel("Mode"));
+        modeRow.Children.Add(_modeChips);
+        controls.Children.Add(modeRow);
+
+        _dutySlider = new DmSlider(0, 100, _controlSettings.ManualDutyPercent, 360);
         _dutySlider.ValueChanged += _ => OnControlSettingChanged();
         _dutyLabel = new TextBlock { Text = $"{_controlSettings.ManualDutyPercent}%", FontSize = 13, Foreground = Theme.Accent2, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), MinWidth = 40 };
         var dutyRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         dutyRow.Children.Add(_dutySlider);
         dutyRow.Children.Add(_dutyLabel);
         _dutyRow = LabelledInline("Fan duty", dutyRow);
-
-        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-        modeRow.Children.Add(Theme.SmallLabel("Mode"));
-        modeRow.Children.Add(_modeChips);
-        body.Children.Add(modeRow);
-
+        _dutyRow.Margin = itemMargin;
         controls.Children.Add(_dutyRow);
-        _sourceRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 20, 8) };
+
+        _sourceRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = itemMargin, VerticalAlignment = VerticalAlignment.Center };
         _sourceRow.Children.Add(Theme.SmallLabel("Follows"));
         _sourceRow.Children.Add(_sourceChips);
         _sourceRow.Children.Add(_curveReadout);
         controls.Children.Add(_sourceRow);
 
-        body.Children.Add(controls);
-        body.Children.Add(_controlStatus);
+        _controlStatus.Margin = itemMargin;
+        _controlStatus.VerticalAlignment = VerticalAlignment.Center;
+        controls.Children.Add(_controlStatus);
 
-        // rolled-up by default: one "N/N fans" line; details expand on demand
-        var summaryRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        _fanExpandLink = LinkText("▸  details", () =>
-        {
-            _fansExpanded = !_fansExpanded;
-            _fanRows.Visibility = _fansExpanded ? Visibility.Visible : Visibility.Collapsed;
-            _fanExpandLink.Text = _fansExpanded ? "▾  hide" : "▸  details";
-        });
-        DockPanel.SetDock(_fanExpandLink, Dock.Right);
-        summaryRow.Children.Add(_fanExpandLink);
+        // rolled-up by default: one "N/N fans" line; details expand below the row on demand
+        var summaryRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = itemMargin, VerticalAlignment = VerticalAlignment.Center };
+        summaryRow.Children.Add(_fanSummary);
         _fanForgetLink = LinkText("forget missing", () =>
         {
             var status = _loop?.Status;
@@ -875,11 +917,18 @@ public sealed class MainWindow : Window
             TrySaveSettings();
         });
         _fanForgetLink.Visibility = Visibility.Collapsed;
-        DockPanel.SetDock(_fanForgetLink, Dock.Right);
         summaryRow.Children.Add(_fanForgetLink);
-        summaryRow.Children.Add(_fanSummary);
-        body.Children.Add(summaryRow);
+        _fanExpandLink = LinkText("▸  details", () =>
+        {
+            _fansExpanded = !_fansExpanded;
+            _fanRows.Visibility = _fansExpanded ? Visibility.Visible : Visibility.Collapsed;
+            _fanExpandLink.Text = _fansExpanded ? "▾  hide" : "▸  details";
+        });
+        summaryRow.Children.Add(_fanExpandLink);
+        controls.Children.Add(summaryRow);
+        head.Children.Add(controls); // fills the space between the title and the badge
 
+        _fanRows.Margin = new Thickness(0, 12, 0, 0);
         body.Children.Add(_fanRows);
         body.Children.Add(_fanWarnings); // warnings stay visible even when collapsed
         return card;
@@ -2010,6 +2059,13 @@ public sealed class MainWindow : Window
         UpdateDashboard(status);
         UpdateTurzxStatus(status);
 
+        if (status is { Running: true })
+        {
+            _tempHistory.Add(DateTimeOffset.Now, status.CpuTemperatureC, status.GpuTemperatureC);
+        }
+
+        RedrawTemperatureHistory(); // every tick, so the time axis keeps moving through a gap
+
         if (status is null || !status.Running)
         {
             _chainRowsLive = false;
@@ -2124,7 +2180,7 @@ public sealed class MainWindow : Window
         _fanWarnings.Children.Clear();
         foreach (var warning in status.Warnings)
         {
-            _fanWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 4) });
+            _fanWarnings.Children.Add(new TextBlock { Text = "⚠  " + warning, Foreground = Theme.Warn, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 0, 0) });
         }
 
         if (_trayIcon is not null)

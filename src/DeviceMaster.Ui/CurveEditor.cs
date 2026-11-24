@@ -180,8 +180,8 @@ public sealed class CurveEditor : Canvas
         }
     }
 
-    private static readonly Brush CpuBrush = Theme.Warn;
-    private static readonly Brush GpuBrush = Theme.Good;
+    internal static readonly Brush CpuBrush = Theme.Warn; // amber, shared with TemperatureChart
+    internal static readonly Brush GpuBrush = Theme.Good; // teal
 
     private void AddSensor(string name, double? temperatureC, Brush brush, int row)
     {
