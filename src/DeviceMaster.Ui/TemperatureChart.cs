@@ -14,7 +14,7 @@ namespace DeviceMaster.Ui;
 /// </summary>
 public sealed class TemperatureChart : Canvas
 {
-    private const double PadLeft = 44, PadRight = 24, PadTop = 30, PadBottom = 28;
+    private const double PadLeft = 44, PadRight = 24, PadTop = 10, PadBottom = 28;
 
     /// <summary>A pause longer than this between samples breaks the line.</summary>
     private static readonly TimeSpan MaxGap = TimeSpan.FromSeconds(5);
@@ -25,12 +25,15 @@ public sealed class TemperatureChart : Canvas
 
     public TemperatureChart()
     {
-        Height = 260;
+        Height = 300;
         ClipToBounds = true;
         SizeChanged += (_, _) => Redraw();
     }
 
     public TimeSpan Window => _window;
+
+    /// <summary>CPU/GPU legend with the current readings, for the card header (#115); kept up to date on redraw.</summary>
+    public StackPanel Legend { get; } = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
 
     /// <summary>Shows the history's last <paramref name="window"/> ending at <paramref name="now"/>.</summary>
     public void Show(TemperatureHistory history, DateTimeOffset now, TimeSpan window)
@@ -54,26 +57,18 @@ public sealed class TemperatureChart : Canvas
             return;
         }
 
-        // y range: whole tens around what's on screen, at least 30 °C tall
+        // y range (#115): a fixed 20–100 °C so the scale never moves (lower only if a reading is below 20)
         var values = _samples.SelectMany(s => new[] { s.CpuC, s.GpuC }).OfType<double>().ToList();
-        double lo = 20, hi = 80;
+        double lo = 20, hi = 100;
         if (values.Count > 0)
         {
-            lo = Math.Floor((values.Min() - 3) / 10) * 10;
-            hi = Math.Ceiling((values.Max() + 3) / 10) * 10;
-            if (hi - lo < 30)
-            {
-                var mid = (lo + hi) / 2;
-                lo = Math.Floor((mid - 15) / 10) * 10;
-                hi = lo + 30;
-            }
-
-            lo = Math.Max(lo, 0);
+            lo = Math.Max(0, Math.Min(lo, Math.Floor((values.Min() - 3) / 10) * 10));
+            hi = Math.Max(hi, Math.Ceiling((values.Max() + 3) / 10) * 10);
         }
 
         double Y(double c) => PadTop + (1 - (c - lo) / (hi - lo)) * PlotHeight;
 
-        var yStep = hi - lo > 60 ? 20 : 10;
+        var yStep = 10;
         for (var c = lo; c <= hi + 0.01; c += yStep)
         {
             Add(new Line { X1 = PadLeft, X2 = PadLeft + PlotWidth, Y1 = Y(c), Y2 = Y(c), Stroke = Theme.Line, StrokeThickness = 1, Opacity = c == lo ? 1 : 0.6 });
@@ -82,12 +77,12 @@ public sealed class TemperatureChart : Canvas
 
         // time axis: -10m … now
         var totalSeconds = _window.TotalSeconds;
-        var xStep = totalSeconds switch { <= 60 => 10, <= 300 => 60, _ => 120 };
+        var xStep = totalSeconds switch { <= 60 => 10, <= 300 => 60, <= 600 => 120, <= 900 => 180, <= 1800 => 300, _ => 600 };
         for (var ago = 0; ago <= totalSeconds + 0.01; ago += xStep)
         {
             var x = X(_now.AddSeconds(-ago));
             Add(new Line { X1 = x, X2 = x, Y1 = PadTop, Y2 = PadTop + PlotHeight, Stroke = Theme.Line, StrokeThickness = 1, Opacity = 0.45 });
-            var label = ago == 0 ? "now" : xStep < 60 ? $"-{ago}s" : $"-{ago / 60}m";
+            var label = ago == 0 ? "now" : xStep < 60 ? $"-{ago}s" : ago >= 3600 ? $"-{ago / 3600}h" : $"-{ago / 60}m";
             var left = Math.Clamp(x - 20, PadLeft - 20, PadLeft + PlotWidth - 30);
             AddText(label, left, PadTop + PlotHeight + 6, 40, ago == 0 ? TextAlignment.Right : TextAlignment.Center);
         }
@@ -95,13 +90,11 @@ public sealed class TemperatureChart : Canvas
         DrawSeries(s => s.CpuC, CurveEditor.CpuBrush, Y);
         DrawSeries(s => s.GpuC, CurveEditor.GpuBrush, Y);
 
-        // legend with current readings, top right
+        // legend with current readings, shown in the card header (#115)
         var latest = _samples.Count > 0 ? _samples[^1] : (TemperatureHistory.Sample?)null;
-        var legend = new StackPanel { Orientation = Orientation.Horizontal };
-        legend.Children.Add(LegendItem("CPU", latest?.CpuC, CurveEditor.CpuBrush));
-        legend.Children.Add(LegendItem("GPU", latest?.GpuC, CurveEditor.GpuBrush));
-        legend.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        Place(legend, PadLeft + PlotWidth - legend.DesiredSize.Width, 4);
+        Legend.Children.Clear();
+        Legend.Children.Add(LegendItem("CPU", latest?.CpuC, CurveEditor.CpuBrush));
+        Legend.Children.Add(LegendItem("GPU", latest?.GpuC, CurveEditor.GpuBrush));
 
         if (values.Count == 0)
         {

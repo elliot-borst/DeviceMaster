@@ -30,6 +30,9 @@ public sealed class TemperatureHistory
     /// <summary>Ten minutes at about 1 Hz (the Cooling page's status refresh).</summary>
     public static TemperatureHistory TenMinutes() => new(TimeSpan.FromMinutes(10), 1200, TimeSpan.FromMilliseconds(500));
 
+    /// <summary>An hour at about 1 Hz (#115: the 15m/30m/1h ranges).</summary>
+    public static TemperatureHistory OneHour() => new(TimeSpan.FromHours(1), 7200, TimeSpan.FromMilliseconds(500));
+
     public TimeSpan Span { get; }
     public TimeSpan MinInterval { get; }
     public int Capacity => _ring.Length;

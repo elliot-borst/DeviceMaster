@@ -815,30 +815,25 @@ public sealed class MainWindow : Window
             }
         };
         body.Children.Add(_curveEditor);
-        body.Children.Add(new TextBlock
-        {
-            Text = "Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan goes to 100%.",
-            FontSize = 11.5,
-            Foreground = Theme.Faint,
-            Margin = new Thickness(0, 8, 0, 0),
-            TextWrapping = TextWrapping.Wrap,
-        });
         return card;
     }
 
     // temperature history card (#113): ~10 minutes of CPU/GPU readings from the 1 Hz status refresh
-    private readonly TemperatureHistory _tempHistory = TemperatureHistory.TenMinutes();
+    private readonly TemperatureHistory _tempHistory = TemperatureHistory.OneHour();
     private readonly TemperatureChart _tempChart = new();
     private readonly StackPanel _historyRangeChips = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
     private static readonly (TimeSpan Window, string Label)[] HistoryRanges =
-        [(TimeSpan.FromMinutes(1), "1m"), (TimeSpan.FromMinutes(5), "5m"), (TimeSpan.FromMinutes(10), "10m")];
+        [(TimeSpan.FromMinutes(1), "1m"), (TimeSpan.FromMinutes(5), "5m"), (TimeSpan.FromMinutes(10), "10m"),
+         (TimeSpan.FromMinutes(15), "15m"), (TimeSpan.FromMinutes(30), "30m"), (TimeSpan.FromHours(1), "1h")];
     private TimeSpan _historyWindow = TimeSpan.FromMinutes(10);
 
     private Border BuildHistoryCard()
     {
-        var card = Theme.CardShell("◔", "Temperature history", "CPU and GPU over the last minutes", out var body, out var head);
+        var card = Theme.CardShell("◔", "Temperature history", "CPU and GPU over the last hour", out var body, out var head);
         DockPanel.SetDock(_historyRangeChips, Dock.Right);
         head.Children.Add(_historyRangeChips);
+        DockPanel.SetDock(_tempChart.Legend, Dock.Right); // left of the range chips
+        head.Children.Add(_tempChart.Legend);
         RefreshHistoryRangeChips();
         _tempChart.IsVisibleChanged += (_, _) => RedrawTemperatureHistory();
         body.Children.Add(_tempChart);

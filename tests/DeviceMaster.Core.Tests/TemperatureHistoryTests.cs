@@ -111,4 +111,19 @@ public class TemperatureHistoryTests
         Assert.Empty(history.Window(T0, TimeSpan.FromMinutes(10)));
         Assert.Empty(TemperatureHistory.Segments([], s => s.CpuC, TimeSpan.FromSeconds(5)));
     }
+
+    [Fact]
+    public void AnHourIsKeptForTheLongestRange()
+    {
+        var history = TemperatureHistory.OneHour();
+        var start = DateTimeOffset.UnixEpoch;
+        for (var s = 0; s < 3700; s++)
+        {
+            history.Add(start.AddSeconds(s), 50, 40);
+        }
+
+        var hour = history.Window(start.AddSeconds(3699), TimeSpan.FromHours(1));
+        Assert.InRange(hour.Count, 3590, 3601);
+        Assert.Equal(TimeSpan.FromHours(1), history.Span);
+    }
 }
