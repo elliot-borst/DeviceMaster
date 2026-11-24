@@ -35,6 +35,18 @@ public static class CurveRules
         return [new CurvePoint(lowTemp, lowDuty), new CurvePoint(highTemp, highDuty)];
     }
 
+    /// <summary>
+    /// A flat curve: both points at one duty, so the fans run at that duty whatever the temperature
+    /// (a sensor failure still means 100%). Keeps <paramref name="template"/>'s temperatures when it is a
+    /// usable curve, the default curve's otherwise. This is what a constant fan speed is (#116).
+    /// </summary>
+    public static List<CurvePoint> Flat(int dutyPercent, IEnumerable<CurvePoint>? template = null)
+    {
+        var duty = Math.Clamp(dutyPercent, 0, 100);
+        var at = Normalize(template) ?? Normalize(Default)!;
+        return [at[0] with { DutyPercent = duty }, at[1] with { DutyPercent = duty }];
+    }
+
     /// <summary>The factory curve (every source is a CPU/GPU temperature).</summary>
     public static IReadOnlyList<CurvePoint> Default { get; } = [new(40, 30), new(85, 100)];
 }

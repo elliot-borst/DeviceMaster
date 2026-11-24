@@ -50,9 +50,16 @@ DeviceMaster.App.exe slv3 set --duty 65 --hold 10
 
 (From source, prefix with `dotnet run --project src/DeviceMaster.App --`.)
 
+## Fan control
+
+Every fan follows one two-point temperature curve (CPU, GPU, or the hotter of the two). There is
+no separate fixed-duty mode: for a constant speed, drag both points to the same duty. Settings
+saved in the old Fixed mode load as a curve flat at that duty, so the fans keep their speed.
+
 ## Safety (read before touching device code)
 
-- Sensor failure or an implausible temperature ⇒ every fan to 100%; any error state drives 100%.
+- Sensor failure or an implausible temperature ⇒ every fan to 100% (a flat curve too); any error
+  state drives 100%.
 - Pumps are never driven: a Link chain carrying a pump or other liquid-cooling device is not
   written to at all, and a Lian Li wireless AIO is never sent a duty.
 - Devices revert to hardware-default behaviour if the app dies (verified per family;

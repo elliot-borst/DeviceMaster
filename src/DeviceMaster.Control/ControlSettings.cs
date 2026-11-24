@@ -5,12 +5,19 @@ using DeviceMaster.Core.Lighting;
 
 namespace DeviceMaster.Control;
 
+/// <summary>
+/// Whether DeviceMaster drives the fans. The numbers are stable on the wire: 1 was the removed
+/// Fixed ("Manual") mode (#116) — a constant speed is a flat curve — and loads as
+/// <see cref="Curve"/> with a flat curve at its old duty (see <see cref="ControlModeJsonConverter"/>).
+/// </summary>
+[JsonConverter(typeof(ControlModeJsonConverter))]
 public enum ControlMode
 {
     /// <summary>DeviceMaster leaves the hardware alone (hub/firmware curves rule).</summary>
     Off = 0,
-    Manual,
-    Curve,
+
+    /// <summary>The fans follow the curve (both points at one duty = a constant speed).</summary>
+    Curve = 2,
 }
 
 /// <summary>
@@ -69,12 +76,37 @@ public enum LcdMetric
 /// Settings written before pump/coolant support was removed load safely: unknown properties
 /// (PumpDutyPercent, the pump/fan LCD fields) are ignored, and a "Coolant" curve source becomes
 /// <see cref="CurveSource.Hottest"/> with the Hottest curve — a coolant curve (25–38 °C) would
-/// pin CPU-driven fans at 100% (see <see cref="OnDeserialized"/>).
+/// pin CPU-driven fans at 100% (see <see cref="OnDeserialized"/>). Settings saved in the removed
+/// Fixed mode (#116: "Mode": "Manual" with ManualDutyPercent) load as Curve with a flat curve at
+/// that duty on the same source, so the fans keep their speed.
 /// </remarks>
 public sealed class ControlSettings : IJsonOnDeserialized
 {
+    [JsonIgnore]
     public ControlMode Mode { get; set; } = ControlMode.Off;
-    public int ManualDutyPercent { get; set; } = 50;
+
+    /// <summary>The JSON form of <see cref="Mode"/>: spots the removed Fixed mode so its duty becomes a flat curve.</summary>
+    [JsonInclude]
+    [JsonPropertyName(nameof(Mode))]
+    private JsonElement ModeJson
+    {
+        get => JsonSerializer.SerializeToElement(Mode.ToString());
+        set => Mode = ControlModeJsonConverter.Read(value, out _legacyFixed);
+    }
+
+    private bool _legacyFixed;
+
+    /// <summary>The removed Fixed mode's duty, read from older settings only (never written).</summary>
+    [JsonInclude]
+    [JsonPropertyName("ManualDutyPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private int? LegacyFixedDuty
+    {
+        get => null;
+        set => _legacyFixedDuty = value;
+    }
+
+    private int? _legacyFixedDuty;
 
     [JsonIgnore]
     public CurveSource Source { get; set; } = CurveSource.Hottest;
@@ -109,7 +141,10 @@ public sealed class ControlSettings : IJsonOnDeserialized
     /// </summary>
     public Dictionary<string, List<CurvePoint>> SourceCurves { get; set; } = [];
 
-    /// <summary>Migrates a legacy coolant source: Hottest with its remembered (or default) curve.</summary>
+    /// <summary>
+    /// Migrates a legacy coolant source (Hottest with its remembered, or the default, curve) and the
+    /// removed Fixed mode (Curve, flat at the fixed duty — the old default 50% when none was saved).
+    /// </summary>
     void IJsonOnDeserialized.OnDeserialized() => OnDeserialized();
 
     private void OnDeserialized()
@@ -123,8 +158,19 @@ public sealed class ControlSettings : IJsonOnDeserialized
                 : CurveRules.Default.ToList();
         }
 
+        if (_legacyFixed)
+        {
+            _legacyFixed = false;
+            Mode = ControlMode.Curve;
+            CurvePoints = CurveRules.Flat(_legacyFixedDuty ?? LegacyFixedDefaultDuty, CurvePoints);
+        }
+
+        _legacyFixedDuty = null;
         SourceCurves.Remove("Coolant");
     }
+
+    /// <summary>The duty the removed Fixed mode defaulted to.</summary>
+    public const int LegacyFixedDefaultDuty = 50;
 
     /// <summary>Switches the curve source, saving the current curve and loading the new source's (or its default).</summary>
     public bool SetSource(CurveSource source)

@@ -579,8 +579,8 @@ public sealed class HubWebServer : IDisposable
 
     private static string Describe(FleetSection section, FleetProfile p) => section switch
     {
-        FleetSection.Cooling => p.Mode == ControlMode.Manual
-            ? $"fixed {p.ManualDutyPercent}%"
+        FleetSection.Cooling => p.CurvePoints.Count > 0 && p.CurvePoints.All(c => c.DutyPercent == p.CurvePoints[0].DutyPercent)
+            ? $"flat curve, fans at {p.CurvePoints[0].DutyPercent}%"
             : $"curve on CPU/GPU {string.Join(" → ", p.CurvePoints.Select(c => $"{c.TemperatureC:0} °C {c.DutyPercent}%"))}",
         FleetSection.Screens => $"Turzx {p.TurzxScreen} {p.TurzxBrightness}%",
         _ => p.Blackout ? "blackout" : !p.RgbEnabled ? "not managed" : p.RgbOff ? "lights out"
@@ -809,7 +809,7 @@ function machineLightingCard(m){
 }
 /* ---- fleet cooling + screens: same pattern as lighting ---- */
 const SECTION_KEYS = {
-  cooling: ["Mode","ManualDutyPercent","Source","CurvePoints"],
+  cooling: ["Mode","Source","CurvePoints"],
   screens: ["TurzxScreen","TurzxBrightness","TurzxMetric"],
 };
 const SECTION_NAME = { cooling:"Cooling", screens:"Screens" };
@@ -824,22 +824,18 @@ function sendSection(s, scope, v){
                        : put(`/api/fleet/machines/${encodeURIComponent(scope)}/${s}`, v);
 }
 function coolingControls(scope, v){
-  const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), fixed = v.Mode === "Manual";
-  const set = patch => `sendSection("cooling", ${S}, Object.assign(${J}, ${patch}))`;
+  // the fans always follow the curve (#116): both points at one duty = a constant speed
+  const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;");
+  const set = patch => `sendSection("cooling", ${S}, Object.assign(${J}, {Mode:"Curve"}, ${patch}))`;
   const pts = (v.CurvePoints || []).length >= 2 ? v.CurvePoints : [{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}];
   const id = scope == null ? "fc" : "mc";
-  return `<div class="ctl"><label>Fans</label><div class="seg">
-      <button class="${fixed?"":"on"}" onclick='${set(`{Mode:"Curve"}`)}'>Curve</button>
-      <button class="${fixed?"on":""}" onclick='${set(`{Mode:"Manual"}`)}'>Fixed</button></div></div>
-    ${fixed ? `<div class="ctl"><label>Duty</label><input type="range" min="0" max="100" value="${v.ManualDutyPercent ?? 50}"
-        oninput='document.getElementById("${id}-duty").textContent=this.value+"%"' onchange='${set(`{ManualDutyPercent:+this.value}`)}'><span class="val" id="${id}-duty">${v.ManualDutyPercent ?? 50}%</span></div>`
-    : `<div class="ctl"><label>Curve</label>
+  return `<div class="ctl"><label>Curve</label>
         <input id="${id}-t0" type="number" min="20" max="99" value="${pts[0].TemperatureC}" style="width:62px"> °C →
         <input id="${id}-d0" type="number" min="0" max="100" value="${pts[0].DutyPercent}" style="width:58px"> %, rising to
         <input id="${id}-d1" type="number" min="0" max="100" value="${pts[1].DutyPercent}" style="width:58px"> % at
         <input id="${id}-t1" type="number" min="21" max="100" value="${pts[1].TemperatureC}" style="width:62px"> °C
         <div class="seg"><button class="on" onclick='const g=k=>+document.getElementById("${id}-"+k).value;${set(`{CurvePoints:[{TemperatureC:g("t0"),DutyPercent:g("d0")},{TemperatureC:g("t1"),DutyPercent:g("d1")}]}`)}'>Apply</button></div></div>
-      <div class="note">Each server follows the hotter of its own CPU and GPU (a server without a GPU uses its CPU). An unreadable temperature still means 100 %.</div>`}`;
+      <div class="note">Each server follows the hotter of its own CPU and GPU (a server without a GPU uses its CPU). An unreadable temperature still means 100 %. Both points at one duty keep the fans at that speed.</div>`;
 }
 function screensControls(scope, v){
   const S = JSON.stringify(scope), J = JSON.stringify(v).replace(/'/g, "&#39;"), id = scope == null ? "fs" : "ms";
@@ -852,7 +848,7 @@ function screensControls(scope, v){
 }
 const CONTROLS = { cooling: coolingControls, screens: screensControls };
 const DEFAULTS = {
-  cooling: { Mode:"Curve", ManualDutyPercent:50, Source:"Hottest", CurvePoints:[{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}] },
+  cooling: { Mode:"Curve", Source:"Hottest", CurvePoints:[{TemperatureC:20,DutyPercent:0},{TemperatureC:80,DutyPercent:100}] },
   screens: { TurzxScreen:"Metrics", TurzxBrightness:100 },
 };
 function fleetSectionCard(s, title){

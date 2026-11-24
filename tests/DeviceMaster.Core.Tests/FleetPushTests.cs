@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using DeviceMaster.Control;
+using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Lighting;
 
 namespace DeviceMaster.Core.Tests;
@@ -223,11 +224,10 @@ public sealed class FleetPushTests : IDisposable
         }, "t", "t");
         await _hub.PollOnce();
 
-        _agent.Settings.ManualDutyPercent = 15;
-        _agent.Settings.Mode = ControlMode.Manual;
+        _agent.Settings.SetCurve(CurveRules.Flat(15)); // a constant 15 % set on the machine itself
         await _hub.PollOnce();
 
-        Assert.Equal(ControlMode.Curve, _store.State.Profile.Mode);   // fleet cooling stays as the owner set it
+        Assert.Equal([new(20, 0), new(80, 100)], _store.State.Profile.CurvePoints); // fleet cooling stays as the owner set it
         Assert.False(_hub.Machine("A")!.InSync);                       // and the machine shows as differing
     }
 
@@ -235,18 +235,18 @@ public sealed class FleetPushTests : IDisposable
     public async Task OnlyTheManagedSectionChangesOnTheMachine()
     {
         _agent.Settings.SetSource(CurveSource.Cpu);
-        _agent.Settings.ManualDutyPercent = 80;
+        _agent.Settings.SetCurve(CurveRules.Flat(80));
         _store.Update(s => s with
         {
             Managed = [FleetSection.Lighting],
-            Profile = s.Profile with { Source = CurveSource.Hottest, ManualDutyPercent = 100, RgbOff = true },
+            Profile = s.Profile with { Source = CurveSource.Hottest, CurvePoints = CurveRules.Flat(100), RgbOff = true },
         }, "t", "t");
 
         await _hub.PollOnce();
 
         Assert.True(_agent.Settings.RgbOff);
         Assert.Equal(CurveSource.Cpu, _agent.Settings.Source);  // cooling stays the machine's own
-        Assert.Equal(80, _agent.Settings.ManualDutyPercent);
+        Assert.Equal(CurveRules.Flat(80), _agent.Settings.CurvePoints);
     }
 
     public void Dispose()
@@ -263,11 +263,15 @@ public class FleetCoolingTests
     [Fact]
     public void FleetCoolingAlwaysUsesEachMachinesHottestSensor()
     {
-        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { Source = CurveSource.Gpu, Mode = ControlMode.Off, ManualDutyPercent = 150 })!;
+        var safe = FleetOverrides.SanitizeCooling(new FleetProfile { Source = CurveSource.Gpu, Mode = ControlMode.Off, CurvePoints = [new(40, 150), new(85, 150)] })!;
         Assert.Equal(CurveSource.Hottest, safe.Source);          // a GPU-only source would failsafe machines without a GPU
         Assert.Equal(ControlMode.Curve, safe.Mode);              // never hand fans back to hardware from the fleet
-        Assert.Equal(100, safe.ManualDutyPercent);
+        Assert.Equal(CurveRules.Flat(100), safe.CurvePoints);    // duties clamped to the fan range
     }
+
+    [Fact]
+    public void AFlatCurveSurvivesSanitizing() =>
+        Assert.Equal(CurveRules.Flat(45), FleetOverrides.SanitizeCooling(new FleetProfile { CurvePoints = CurveRules.Flat(45) })!.CurvePoints);
 
     [Fact]
     public void AnUnusableCurveIsRejected() =>
@@ -286,7 +290,7 @@ public class FleetCoolingTests
     [InlineData(FleetSection.Cooling)]
     public void OverridesSetAndClearPerSection(FleetSection section)
     {
-        var own = FleetOverrides.Set(new FleetOverride(), section, new FleetProfile { Mode = ControlMode.Manual, TurzxScreen = LcdMode.Off, RgbOff = true });
+        var own = FleetOverrides.Set(new FleetOverride(), section, new FleetProfile { Mode = ControlMode.Curve, TurzxScreen = LcdMode.Off, RgbOff = true });
         Assert.True(FleetOverrides.Has(own, section));
         Assert.All(Enum.GetValues<FleetSection>().Where(s => s != section), other => Assert.False(FleetOverrides.Has(own, other)));
         Assert.False(FleetOverrides.Has(FleetOverrides.Clear(own, section), section));
@@ -382,11 +386,22 @@ public sealed class FullSettingsTests : IDisposable
     [Fact]
     public async Task APagePatchReachesTheServerThroughItsClamps()
     {
-        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"fanDuty":150,"rgbR":200}""");
+        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"curvePoints":[[40,150],[85,150]],"rgbR":200}""");
         Assert.Equal(200, status);
         Assert.Contains("rgbR=200", body);
         Assert.Equal(200, _agent.Settings.RgbR);
-        Assert.Equal(100, _agent.Settings.ManualDutyPercent);
+        Assert.Equal(CurveRules.Flat(100), _agent.Settings.CurvePoints);
+    }
+
+    [Fact]
+    public async Task AnOlderPagesFixedDutyBecomesAFlatCurveOnTheServer()
+    {
+        // a page from before #116 sends the removed Fixed mode (1) with its duty
+        var (status, body) = await _hub.ForwardAsync("A", HttpMethod.Patch, "settings", """{"mode":1,"fanDuty":35}""");
+        Assert.Equal(200, status);
+        Assert.Contains("mode=2", body);
+        Assert.Equal(ControlMode.Curve, _agent.Settings.Mode);
+        Assert.Equal(CurveRules.Flat(35), _agent.Settings.CurvePoints);
     }
 
     [Fact]

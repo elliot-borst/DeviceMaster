@@ -9,15 +9,33 @@ public class ConfigPatcherTests
     private static HeadlessConfig NewConfig() => new();
 
     [Fact]
-    public void SetsFanDutyClampedToRange()
+    public void AnOlderClientsFixedDutyBecomesAFlatCurve()
+    {
+        // the removed Fixed mode (#116): {"mode":1,"fanDuty":X} from an older page = a flat curve at X
+        var cfg = NewConfig();
+        cfg.Control.SetCurve([new(30, 20), new(70, 90)]);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"mode":1,"fanDuty":150}""", out var invalid);
+        Assert.False(invalid);
+        Assert.Equal(ControlMode.Curve, cfg.Control.Mode);
+        Assert.Equal([new(30, 100), new(70, 100)], cfg.Control.CurvePoints); // clamped, the curve's temperatures kept
+        Assert.Contains("mode=2", applied);
+
+        ConfigPatcher.ApplyPatch(cfg.Control, """{"fanDuty":-20,"mode":1}""", out _);
+        Assert.Equal([new(30, 0), new(70, 0)], cfg.Control.CurvePoints);
+        Assert.Equal(0, cfg.Control.Curve.EvaluateDuty(95));
+    }
+
+    [Theory]
+    [InlineData("""{"fanDuty":40}""")] // a duty alone said nothing in Curve mode before either
+    [InlineData("""{"mode":1}""")]     // Fixed without its duty: nothing to keep the fans at
+    public void HalfALegacyFixedPatchChangesNothing(string patch)
     {
         var cfg = NewConfig();
-        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"fanDuty":150}""", out var invalid);
+        var before = cfg.Control.CurvePoints.ToList();
+        Assert.Empty(ConfigPatcher.ApplyPatch(cfg.Control, patch, out var invalid));
         Assert.False(invalid);
-        Assert.Equal(100, cfg.Control.ManualDutyPercent);
-
-        applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"fanDuty":-20}""", out _);
-        Assert.Equal(0, cfg.Control.ManualDutyPercent);
+        Assert.Equal(ControlMode.Curve, cfg.Control.Mode);
+        Assert.Equal(before, cfg.Control.CurvePoints);
     }
 
     [Fact]
@@ -78,9 +96,9 @@ public class ConfigPatcherTests
     public void NoChangesMeansEmptyApplied()
     {
         var cfg = NewConfig();
-        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"fanDuty":50,"unknown":3}""", out var invalid);
+        var applied = ConfigPatcher.ApplyPatch(cfg.Control, """{"rgbBrightness":100,"unknown":3}""", out var invalid);
         Assert.False(invalid);
-        // 50 == default ManualDutyPercent — still reported as applied (explicit user intent),
+        // 100 == default RgbBrightness — still reported as applied (explicit user intent),
         // the web server only skips persistence when the applied list is empty
         Assert.Single(applied);
     }
@@ -91,14 +109,15 @@ public class ConfigPatcherTests
         var cfg = NewConfig();
         cfg.I2cDevice = "/dev/i2c-10";
         cfg.GpuSensorFile = "/var/run/gpu-sensors.jsonl";
-        cfg.Control.ManualDutyPercent = 80;
+        cfg.Control.SetCurve(DeviceMaster.Core.Curves.CurveRules.Flat(80));
         cfg.Control.Source = CurveSource.Cpu;
         var json = cfg.Save();
+        Assert.DoesNotContain("ManualDutyPercent", json); // the removed Fixed mode's field is never written
 
         var reloaded = HeadlessConfig.Deserialize(json);
         Assert.NotNull(reloaded);
         Assert.Equal("/dev/i2c-10", reloaded.I2cDevice);
-        Assert.Equal(80, reloaded.Control.ManualDutyPercent);
+        Assert.Equal(DeviceMaster.Core.Curves.CurveRules.Flat(80), reloaded.Control.CurvePoints);
         Assert.Equal(CurveSource.Cpu, reloaded.Control.Source);
     }
 

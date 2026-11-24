@@ -233,26 +233,19 @@ public sealed partial class HeadlessLoop : IDisposable
         }
 
         // ---- decide the duty ----
-        double? sourceTemp = null;
+        // always the curve (a constant speed is a flat curve, #116): no reading, no duty but 100%
         var failsafe = false;
         int duty;
-        if (cfg.Control.Mode == ControlMode.Manual)
+        var sourceTemp = ReadSourceTemperature(cfg);
+        if (!SensorValidity.IsPlausibleTemperature(sourceTemp))
         {
-            duty = SafetyGuard.ClampFanDuty(cfg.Control.ManualDutyPercent);
+            duty = SafetyGuard.DutyOnSensorFailure();
+            failsafe = true;
+            warnings.Add($"{cfg.Control.Source} temperature unavailable — failsafe 100%");
         }
         else
         {
-            sourceTemp = ReadSourceTemperature(cfg);
-            if (!SensorValidity.IsPlausibleTemperature(sourceTemp))
-            {
-                duty = SafetyGuard.DutyOnSensorFailure();
-                failsafe = true;
-                warnings.Add($"{cfg.Control.Source} temperature unavailable — failsafe 100%");
-            }
-            else
-            {
-                duty = cfg.Control.Curve.EvaluateDuty(sourceTemp.Value);
-            }
+            duty = cfg.Control.Curve.EvaluateDuty(sourceTemp!.Value);
         }
 
         // ---- write duties (per-hub write-on-change + periodic refresh, per-hub error isolation) ----
@@ -400,7 +393,7 @@ public sealed partial class HeadlessLoop : IDisposable
         {
             Running = true,
             Mode = cfg.Control.Mode,
-            SourceName = cfg.Control.Mode == ControlMode.Manual ? "manual" : cfg.Control.Source.ToString(),
+            SourceName = cfg.Control.Source.ToString(),
             SourceTemperatureC = sourceTemp,
             CpuTemperatureC = cpu,
             GpuTemperatureC = gpuTemp,

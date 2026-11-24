@@ -204,13 +204,10 @@ td.dim { color:var(--dim); }
 
   <!-- ============ COOLING ============ -->
   <section class="page" id="page-cooling">
-    <h1>Cooling<span class="sub">fan duty or curve</span></h1>
+    <h1>Cooling<span class="sub">fan curve</span></h1>
       <div class="card">
         <div class="cardhead"><div class="tile">✻</div><div><div class="cardtitle">Fan Control</div><div class="cardsub" id="fanSub">every fan in the system</div></div>
           <div class="badge" id="fanBadge"><i></i><span>…</span></div></div>
-        <div class="ctl"><label>Mode</label><div class="chips" id="modeChips"></div></div>
-        <div class="ctl" id="dutyRow"><label for="fanDuty">Fan duty</label>
-          <input type="range" class="gslider" id="fanDuty" min="0" max="100" step="5"><span class="pct" id="fanDutyVal">—</span></div>
         <div class="ctl" id="sourceRow"><label>Follows</label><div class="chips" id="sourceChips"></div><span class="readout" id="curveReadout"></span></div>
         <div class="coolline" id="coolTemps">—</div>
         <div class="fanline" id="fanLine"></div>
@@ -219,7 +216,7 @@ td.dim { color:var(--dim); }
       <div class="cardhead"><div class="tile">〜</div><div><div class="cardtitle">Fan curve</div><div class="cardsub" id="curveSub"></div></div>
         <button class="btn" id="curveReset" style="margin-left:auto;align-self:flex-start">↺&nbsp; Reset</button></div>
       <svg id="curveSvg" aria-label="Fan curve: temperature to fan duty"></svg>
-      <div class="note">Below the first point the fans hold its duty, above the second they hold that one. If the temperature can't be read, every fan goes to 100%.</div>
+      <div class="note">Below the first point the fans hold its duty, above the second they hold that one; both points at one duty keep the fans at that speed. If the temperature can't be read, every fan goes to 100%.</div>
     </div>
   </section>
 
@@ -263,7 +260,6 @@ td.dim { color:var(--dim); }
 <div id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
-const MODES = ["Off","Manual","Curve"];
 const f = (n,d=1) => n == null ? "—" : (Math.round(n*Math.pow(10,d))/Math.pow(10,d)).toString();
 let cfg = null;
 
@@ -285,7 +281,7 @@ function toast(msg, err=false){
 /* ---- config load / apply ---- */
 /* config.json stores enums by name ("Curve"); the controls work in numbers */
 /* CurveSource numbers start at 1 (0 was the removed coolant source) */
-const ENUMS = { RgbEffect:["Static","Rainbow","Gta6"], Mode:["Off","Manual","Curve"], Source:[null,"Cpu","Gpu","Hottest"] };
+const ENUMS = { RgbEffect:["Static","Rainbow","Gta6"], Mode:["Off",null,"Curve"], Source:[null,"Cpu","Gpu","Hottest"] };
 function normalize(c){
   for (const [k, names] of Object.entries(ENUMS)) if (typeof c.Control[k] === "string") c.Control[k] = Math.max(0, names.indexOf(c.Control[k]));
   return c;
@@ -302,7 +298,6 @@ function syncControls(){
   if (!cfg) return;
   const c = cfg.Control;
   const busy = id => document.activeElement === $(id) || $(id)._drag;
-  if (!busy("fanDuty")) { $("fanDuty").value = c.ManualDutyPercent; $("fanDutyVal").textContent = c.ManualDutyPercent + "%"; paintSlider($("fanDuty")); }
 
   renderFanMode();
   if (!busy("rgbOn")) $("rgbOn").checked = c.RgbEnabled;
@@ -316,7 +311,7 @@ function syncControls(){
   updateRgbPreview();
 
 }
-["fanDuty","rgbBright"].forEach(id => {
+["rgbBright"].forEach(id => {
   const el = $(id);
   el.addEventListener("pointerdown", () => el._drag = true);
   window.addEventListener("pointerup", () => el._drag = false);
@@ -328,15 +323,14 @@ function apply(patch){
   fetch("config.json", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch) })
     .then(r => r.json()).then(j => {
       if (!j.ok) throw new Error(j.error || "rejected");
-      // re-sync the local copy from the server's CLAMPED values (fanDuty=150 -> 100 etc.),
-      // so enable/disable state reacts immediately (e.g. mode -> Manual unlocks the slider)
+      // re-sync the local copy from the server's CLAMPED values (rgbBrightness=150 -> 100 etc.),
+      // so the controls reflect what the machine actually runs
       const c = cfg.Control;
       (j.applied||[]).forEach(a => {
         const i = a.indexOf("="), k = a.slice(0, i), v = a.slice(i + 1);
         switch (k) {
           case "mode": c.Mode = +v; break;
           case "curvePoints": pullConfig(); break;
-          case "fanDuty": c.ManualDutyPercent = +v; break;
           case "source": pullConfig(); break; // switching source swaps the curve too
           case "rgbEnabled": c.RgbEnabled = v === "True"; break;
           case "blackout": pullConfig(); break; // blackout rewrites several fields — take them all from the server
@@ -356,8 +350,6 @@ function apply(patch){
 }
 
 /* ---- controls wiring (fires on release / selection, not on every drag tick) ---- */
-$("fanDuty").onchange = e => apply({fanDuty: +e.target.value});
-$("fanDuty").oninput  = e => { $("fanDutyVal").textContent = e.target.value + "%"; paintSlider(e.target); };
 $("curveReset").onclick = () => apply({curvePoints: DEFAULT_CURVE});
 $("rgbOn").onchange = e => apply({rgbEnabled: e.target.checked});
 $("blackout").onchange = e => apply({blackout: e.target.checked});
@@ -429,12 +421,9 @@ function chips(host, labels, selected, onPick){
 }
 function renderFanMode(){
   const c = cfg.Control, curve = c.Mode === 2, src = SOURCES.find(x => x[1] === c.Source) || SOURCES[2];
-  chips($("modeChips"), ["Fixed","Curve"], curve ? 1 : 0, i => apply({mode: i === 1 ? 2 : 1}));
   chips($("sourceChips"), SOURCES.map(x => x[0]), SOURCES.indexOf(src), i => apply({source: SOURCES[i][1]}));
-  $("dutyRow").style.display = curve ? "none" : "";
-  $("sourceRow").style.display = curve ? "" : "none";
-  $("fanSub").textContent = curve ? `curve on ${src[0].toLowerCase()} · every fan in the system` : "one fixed duty · every fan in the system";
-  $("curveSub").textContent = `${c.Source === 3 ? "Hotter of CPU and GPU" : src[0]} temperature → fan duty · drag a point to change it` + (curve ? "" : " · used when Mode is Curve");
+  $("fanSub").textContent = curve ? `curve on ${src[0].toLowerCase()} · every fan in the system` : "control off · devices follow their own curves";
+  $("curveSub").textContent = `${c.Source === 3 ? "Hotter of CPU and GPU" : src[0]} temperature → fan duty · drag a point to change it`;
   $("curveCard").className = "card" + (curve ? "" : " idle");
   $("rgbOnEcho").textContent = c.RgbEnabled ? "on" : "off";
   if (!curveDrag) drawCurve();
@@ -511,7 +500,6 @@ function tick(){
     const deg = (v, d) => v == null ? "—" : v.toFixed(d) + "°";
     if (!s.Running) { $("dashStatus").textContent = "Control off — devices follow their own hardware/firmware curves."; }
     else $("dashStatus").textContent = s.FailsafeActive ? `${s.SourceName} unavailable — FAILSAFE, all fans at 100%`
-      : s.Mode === 1 ? `Fixed — all fans at ${s.TargetDutyPercent}%`
       : s.Mode === 2 ? `Curve on ${sourceLabel(s.SourceName)} → fans ${s.TargetDutyPercent}%`
       : "Control off — devices follow their own hardware/firmware curves.";
     $("dashStatus").className = "dashstatus" + (s.FailsafeActive ? " warn" : "");
@@ -520,7 +508,7 @@ function tick(){
     const silent = fans.filter(x => x.Rpm == null).length;
     $("fansSub").textContent = silent ? `${silent} without rpm` : "all reporting";
     $("duty").textContent = s.TargetDutyPercent + "%";
-    $("dutySub").textContent = s.Mode === 1 ? "fixed" : "from curve";
+    $("dutySub").textContent = s.Mode === 2 ? "from curve" : "";
     const family = f => ({"corsair-link":"Corsair","motherboard":"Motherboard","lian-li":"Lian Li"})[f] || f;
     $("fanGrid").innerHTML = fans.map(x => `<div class="fanpill"><span class="n">${family(x.Family)} · ${x.Name||"fan"}</span>`
       + `<span class="r${x.Rpm == null ? " none" : ""}">${x.Rpm == null ? "no rpm" : x.Rpm + " rpm"}</span></div>`).join("");
@@ -551,7 +539,7 @@ function tick(){
     $("fanLine").textContent = `${reporting}/${fans.length} fan devices reporting`;
     $("fanLine").className = "fanline" + (reporting === fans.length ? " ok" : "");
     $("curveReadout").textContent = s.Mode === 2 && s.SourceTemperatureC != null ? `${s.SourceTemperatureC.toFixed(1)} °C → ${s.TargetDutyPercent}%` : "";
-    // the "now" marker shows in Fixed mode too: where the curve would put the fans right now
+    // the "now" marker: where the curve puts (or, with control off, would put) the fans right now
     const srcTemp = cfg ? (cfg.Control.Source === 3 ? (s.SourceTemperatureC ?? ((s.CpuTemperatureC ?? s.GpuTemperatureC) == null ? null : Math.max(s.CpuTemperatureC ?? 0, s.GpuTemperatureC ?? 0))) : [null, s.CpuTemperatureC, s.GpuTemperatureC][cfg.Control.Source]) : null;
     const srcDuty = s.Mode === 2 ? s.TargetDutyPercent
       : srcTemp != null && cfg ? curveDuty(twoPoints(cfg.Control), srcTemp) : null;

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeviceMaster.Core.Curves;
 using DeviceMaster.Core.Lighting;
@@ -14,15 +15,60 @@ namespace DeviceMaster.Control;
 /// on top. Applying the profile goes through <see cref="ControlSettings.SetBlackout"/>, so a
 /// machine that leaves blackout restores the fleet's lighting, not whatever it had before.
 /// </para>
+/// <para>
+/// A profile in the removed Fixed mode (#116: "Mode": "Manual" with ManualDutyPercent, from an
+/// older hub or agent, or the hub's saved state) loads as Curve with a flat curve at that duty.
+/// </para>
 /// </summary>
-public sealed record FleetProfile
+public sealed record FleetProfile : IJsonOnDeserialized
 {
+    [JsonIgnore]
     public ControlMode Mode { get; init; } = ControlMode.Curve;
-    public int ManualDutyPercent { get; init; } = 50;
+
+    /// <summary>The JSON form of <see cref="Mode"/>: spots the removed Fixed mode so its duty becomes a flat curve.</summary>
+    [JsonInclude]
+    [JsonPropertyName(nameof(Mode))]
+    private JsonElement ModeJson
+    {
+        get => JsonSerializer.SerializeToElement(Mode.ToString());
+        init => Mode = ControlModeJsonConverter.Read(value, out _legacyFixed);
+    }
+
+    private bool _legacyFixed;
+
+    /// <summary>The removed Fixed mode's duty, read from older profiles only (never written).</summary>
+    [JsonInclude]
+    [JsonPropertyName("ManualDutyPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private int? LegacyFixedDuty
+    {
+        get => null;
+        init => _legacyFixedDuty = value;
+    }
+
+    private int? _legacyFixedDuty;
 
     [JsonConverter(typeof(CurveSourceJsonConverter))]
     public CurveSource Source { get; init; } = CurveSource.Hottest;
-    public IReadOnlyList<CurvePoint> CurvePoints { get; init; } = CurveRules.Default;
+
+    public IReadOnlyList<CurvePoint> CurvePoints
+    {
+        get => _curvePoints;
+        init => _curvePoints = value;
+    }
+
+    private IReadOnlyList<CurvePoint> _curvePoints = CurveRules.Default;
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (_legacyFixed)
+        {
+            _curvePoints = CurveRules.Flat(_legacyFixedDuty ?? ControlSettings.LegacyFixedDefaultDuty, _curvePoints);
+        }
+
+        _legacyFixed = false;
+        _legacyFixedDuty = null;
+    }
 
     public bool RgbEnabled { get; init; } = true;
     public bool RgbOff { get; init; }
@@ -46,7 +92,6 @@ public sealed record FleetProfile
     public static FleetProfile From(ControlSettings s) => new()
     {
         Mode = s.Mode,
-        ManualDutyPercent = s.ManualDutyPercent,
         Source = s.Source,
         CurvePoints = s.CurvePoints.ToList(),
         RgbEnabled = s.BlackoutActive ? s.BlackoutPrevRgbEnabled : s.RgbEnabled,
@@ -76,7 +121,6 @@ public sealed record FleetProfile
         s.SetBlackout(false);
 
         s.Mode = Enum.IsDefined(Mode) ? Mode : ControlMode.Curve;
-        s.ManualDutyPercent = Math.Clamp(ManualDutyPercent, 0, 100); // the write layer applies the fan floor
         if (Enum.IsDefined(Source))
         {
             s.SetSource(Source);
@@ -105,7 +149,6 @@ public sealed record FleetProfile
     public FleetProfile With(FleetOverride? o) => o is null ? this : this with
     {
         Mode = o.Mode ?? Mode,
-        ManualDutyPercent = o.ManualDutyPercent ?? ManualDutyPercent,
         Source = o.Source ?? Source,
         CurvePoints = o.CurvePoints ?? CurvePoints,
         RgbEnabled = o.RgbEnabled ?? RgbEnabled,
@@ -129,19 +172,63 @@ public sealed record FleetProfile
     public override int GetHashCode() => Flat().GetHashCode();
 
     private string Flat() =>
-        $"{Mode}|{ManualDutyPercent}|{Source}|{string.Join(";", CurvePoints)}|{RgbEnabled}|{RgbOff}|{RgbR},{RgbG},{RgbB}|"
+        $"{Mode}|{Source}|{string.Join(";", CurvePoints)}|{RgbEnabled}|{RgbOff}|{RgbR},{RgbG},{RgbB}|"
         + $"{RgbBrightness}|{RgbEffect}|{RgbSpeed}|{TurzxScreen}|{TurzxMetric}|{TurzxBrightness}|{Blackout}";
 }
 
-/// <summary>A machine's exceptions to the fleet profile: every field is optional, null = inherit.</summary>
-public sealed record FleetOverride
+/// <summary>
+/// A machine's exceptions to the fleet profile: every field is optional, null = inherit. An override
+/// saved in the removed Fixed mode (#116) loads as Curve with a flat curve at its fixed duty.
+/// </summary>
+public sealed record FleetOverride : IJsonOnDeserialized
 {
+    [JsonIgnore]
     public ControlMode? Mode { get; init; }
-    public int? ManualDutyPercent { get; init; }
+
+    /// <summary>The JSON form of <see cref="Mode"/>: spots the removed Fixed mode so its duty becomes a flat curve.</summary>
+    [JsonInclude]
+    [JsonPropertyName(nameof(Mode))]
+    private JsonElement? ModeJson
+    {
+        get => Mode is { } mode ? JsonSerializer.SerializeToElement(mode.ToString()) : null;
+        init => Mode = value is { ValueKind: not JsonValueKind.Null } element ? ControlModeJsonConverter.Read(element, out _legacyFixed) : null;
+    }
+
+    private bool _legacyFixed;
+
+    /// <summary>The removed Fixed mode's duty, read from older state only (never written).</summary>
+    [JsonInclude]
+    [JsonPropertyName("ManualDutyPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private int? LegacyFixedDuty
+    {
+        get => null;
+        init => _legacyFixedDuty = value;
+    }
+
+    private int? _legacyFixedDuty;
 
     [JsonConverter(typeof(CurveSourceJsonConverter))]
     public CurveSource? Source { get; init; }
-    public IReadOnlyList<CurvePoint>? CurvePoints { get; init; }
+
+    public IReadOnlyList<CurvePoint>? CurvePoints
+    {
+        get => _curvePoints;
+        init => _curvePoints = value;
+    }
+
+    private IReadOnlyList<CurvePoint>? _curvePoints;
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (_legacyFixed)
+        {
+            _curvePoints = CurveRules.Flat(_legacyFixedDuty ?? ControlSettings.LegacyFixedDefaultDuty, _curvePoints);
+        }
+
+        _legacyFixed = false;
+        _legacyFixedDuty = null;
+    }
     public bool? RgbEnabled { get; init; }
     public bool? RgbOff { get; init; }
     public int? RgbR { get; init; }
