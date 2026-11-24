@@ -294,7 +294,7 @@ public sealed class MainWindow : Window
         // ---- pages (visibility-switched so live updates keep flowing) ----
         var host = new Grid { Margin = new Thickness(26, 22, 26, 16) };
         _pages["dashboard"] = WrapPage(BuildDashboardPage());
-        _pages["cooling"] = WrapPage(BuildCoolingPage());
+        _pages["cooling"] = FitPage(BuildCoolingPage());
         _pages["lighting"] = WrapPage(BuildLightingPage());
         _pages["turzx"] = WrapPage(BuildTurzxPage());
         _pages["buttonart"] = WrapPage(_buttonArtPage.Build());
@@ -316,6 +316,53 @@ public sealed class MainWindow : Window
             Content = content,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
+    }
+
+    /// <summary>
+    /// The Cooling page never scrolls (#118): its two charts share whatever height the window leaves
+    /// after the title and the Fan Control row, so everything fits at any window size.
+    /// </summary>
+    private UIElement FitPage(FrameworkElement content)
+    {
+        var viewer = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        viewer.SizeChanged += (_, _) => FitCoolingCharts(viewer, content);
+        if (content is Panel panel)
+        {
+            content.Loaded += (_, _) =>
+            {
+                foreach (FrameworkElement child in panel.Children)
+                {
+                    child.SizeChanged += (_, _) => FitCoolingCharts(viewer, content); // "details" opened, the row wrapped
+                }
+            };
+        }
+
+        return viewer;
+    }
+
+    private void FitCoolingCharts(ScrollViewer viewer, FrameworkElement content)
+    {
+        const double MinChart = 150;
+        if (viewer.ActualHeight <= 0 || content is not Panel panel)
+        {
+            return;
+        }
+
+        // everything on the page except the two charts keeps its size; the charts get the rest
+        var used = panel.Children.OfType<FrameworkElement>().Sum(c => c.ActualHeight + c.Margin.Top + c.Margin.Bottom);
+        var others = used - _curveEditor.ActualHeight - _tempChart.ActualHeight;
+        var spare = Math.Max(viewer.ActualHeight - others - 2, 2 * MinChart);
+        var curve = Math.Max(MinChart, Math.Floor(spare * 0.5));
+        var history = Math.Max(MinChart, Math.Floor(spare - curve));
+        if (Math.Abs(_curveEditor.Height - curve) >= 1)
+        {
+            _curveEditor.Height = curve;
+        }
+
+        if (Math.Abs(_tempChart.Height - history) >= 1)
+        {
+            _tempChart.Height = history;
+        }
     }
 
     private static readonly FontFamily NavGlyphFont = new("Segoe UI Symbol, Segoe UI Emoji, Segoe UI");
@@ -527,7 +574,7 @@ public sealed class MainWindow : Window
         };
     }
 
-    private UIElement BuildCoolingPage()
+    private FrameworkElement BuildCoolingPage()
     {
         var page = new StackPanel();
         page.Children.Add(PageTitle("Cooling", "fan duty or curve"));
