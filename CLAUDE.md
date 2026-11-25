@@ -68,3 +68,18 @@ Every issue created on this repo is **assigned to the owner, `elliot-borst`, the
 or with the plain API put `"assignees":["elliot-borst"]` in the create body. If you pick up or reopen an
 issue that has no assignee, add it (`gh issue edit <n> --add-assignee elliot-borst`). A 10-minute sweep
 (ServerStack `tools/assign-issues-to-owner.sh`) catches any that slip through; don't rely on it.
+
+## Git workflow: feature branches and pull requests (owner standard, 2026-11-25)
+
+Every change goes through a **feature branch and a pull request**. Nobody (person or agent) commits to `main`.
+1. Start from fresh `main`: `git switch main && git pull`, then `git switch -c <type>/<short-name>`
+   (`feat/`, `fix/`, `docs/`, `chore/`).
+2. Commit on the branch, push it (`git push -u origin <branch>`) and open a PR assigned to the owner:
+   `gh pr create --assignee elliot-borst --fill` (link the issue: `Closes #n`), or run **`/ship`**, which opens the PR,
+   reviews it and keeps fixing checks and review comments (Claude Code 2.1.330+).
+3. Get it reviewed (`/ship` or `/code-review`), fix the findings and failing checks.
+4. **The agent merges its own PR once the review is clean and checks are green** (owner decision 2026-11-25):
+   `gh pr merge --squash --delete-branch`, then `git switch main && git pull`. The owner gets the PR link and can
+   review or veto any time; a PR the owner comments on waits for them.
+5. **Exception: unattended scheduled jobs** (nightly compose-git-sync, Watches runs, generated pages) keep pushing
+   straight to `main`. Everything a person or chat agent does goes through a PR.
