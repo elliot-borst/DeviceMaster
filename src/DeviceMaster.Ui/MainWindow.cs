@@ -829,7 +829,7 @@ public sealed class MainWindow : Window
 
     private Border BuildCurveCard()
     {
-        var card = Theme.CardShell("〜", "Fan curve", "", out var body, out var head);
+        var card = Theme.CardShell("〜", "Fan Curve", "", out var body, out var head);
         _curveSubtitle = CardSubtitle(head);
         var reset = Theme.Btn("↺  Reset", primary: false, () =>
         {
@@ -863,11 +863,21 @@ public sealed class MainWindow : Window
 
     private Border BuildHistoryCard()
     {
-        var card = Theme.CardShell("◔", "Temperature history", "CPU and GPU over the last hour", out var body, out var head);
+        var card = Theme.CardShell("◔", "Temperature History", "CPU and GPU over the last hour", out var body, out var head);
         DockPanel.SetDock(_historyRangeChips, Dock.Right);
         head.Children.Add(_historyRangeChips);
-        DockPanel.SetDock(_tempChart.Legend, Dock.Right); // left of the range chips
-        head.Children.Add(_tempChart.Legend);
+        // legend centred across the whole header row: overlay the head in a Grid so the title and the
+        // range chips (different widths) can't pull it off-centre
+        var headParent = (Panel)head.Parent;
+        var headIndex = headParent.Children.IndexOf(head);
+        headParent.Children.RemoveAt(headIndex);
+        var headRow = new Grid { Margin = head.Margin };
+        head.Margin = new Thickness(0);
+        _tempChart.Legend.Margin = new Thickness(0);
+        _tempChart.Legend.HorizontalAlignment = HorizontalAlignment.Center;
+        headRow.Children.Add(head);
+        headRow.Children.Add(_tempChart.Legend);
+        headParent.Children.Insert(headIndex, headRow);
         RefreshHistoryRangeChips();
         _tempChart.IsVisibleChanged += (_, _) => RedrawTemperatureHistory();
         body.Children.Add(_tempChart);
