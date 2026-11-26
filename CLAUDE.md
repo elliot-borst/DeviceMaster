@@ -53,7 +53,11 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
    Linux agents and hub all report it;
    the UI shows it and the updater compares against the release tag) and update
    `MainWindow.VersionDate`.
-2. `.\build-installer.ps1` → `dist\DeviceMaster-Setup.exe` (Inno Setup 6 required).
+2. `.\build-installer.ps1` → `dist\DeviceMaster-Setup.exe` (Inno Setup 6 required). It signs the app, setup and
+   uninstaller (Authenticode, SHA-256, Certum timestamp, #123) when the code-signing certificate named by
+   `DEVICEMASTER_SIGN_THUMBPRINT` is usable: on the release PC that is the owner's Certum cloud certificate, so the
+   owner must be logged in to SimplySign Desktop. Not logged in ⇒ the build warns and stays unsigned; pass
+   `-RequireSigning` to stop instead. The certificate expires every year (renew in the Certum shop).
 3. Commit + push (plain messages, authored as the repo owner — never AI attribution).
 4. Linux build for the hosts' update helper (#110), on a Linux box with Docker (not the Unraid host):
    `scripts/update-helper/build-linux-release.sh <commit> <dir>` → `DeviceMaster-linux-x64.tar.gz` + `.sha256`.
