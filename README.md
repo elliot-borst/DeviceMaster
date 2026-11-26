@@ -75,3 +75,8 @@ saved in the old Fixed mode load as a curve flat at that duty, so the fans keep 
 - `DeviceMaster.Devices.CorsairLink` / `.LianLi` / `.Turzx` — one project per protocol family
 - `DeviceMaster.App` — host (console commands now; tray app in later stages)
 - `tests/DeviceMaster.Core.Tests` — xunit (protocol packet builders/parsers are pure and tested)
+
+## Licence
+
+DeviceMaster is free software under the [GNU General Public License v3.0](LICENSE): you may use, change and
+redistribute it, and anything you distribute that is built from it must be released under the same licence.

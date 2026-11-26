@@ -31,6 +31,12 @@ itself — features, fixes, chores, all of it. Reference the issue number in the
 - `src/DeviceMaster.App` — composition root (console commands now, tray app later).
 - `tests/` — xunit. Protocol packet builders must be pure static functions with tests.
 
+## Licence
+
+DeviceMaster is GPL-3.0 (`LICENSE`, owner decision 2026-11-26; it also qualifies the project for the
+open-source code-signing certificate). Every public repo of the owner carries GPL-3.0. Never copy code from a
+project whose licence is incompatible with GPL-3.0; protocol facts are fine (see docs/REFERENCES.md).
+
 ## Hardware truth
 
 Keep the repo generic — other people will install this. Supported hardware and protocol
