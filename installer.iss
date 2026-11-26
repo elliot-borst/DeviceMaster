@@ -41,6 +41,12 @@ SetupIconFile=src\DeviceMaster.Ui\DeviceMaster.ico
 ; open; close the running copy so files can be replaced (no forced reboot).
 CloseApplications=force
 RestartApplications=no
+; Code signing (#123): build-installer.ps1 defines SignTool (and passes /S<name>=<command>)
+; when a signing certificate is available; ISCC then signs the setup and its uninstaller.
+#ifdef SignTool
+SignTool={#SignTool}
+SignedUninstaller=yes
+#endif
 
 [Files]
 Source: "dist\ui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
