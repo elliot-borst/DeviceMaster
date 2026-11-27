@@ -73,7 +73,7 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
 6. Update the fleet: the hub's ⇪ Update per machine (or `POST /api/fleet/machines/{name}/update`).
 7. **Second release location (#128), when the Windows PC is off:** a Linux desktop machine with SimplySign Desktop
    logged in builds the whole release (both assets, signed): `git -C ~/GitHub/DeviceMaster pull &&
-   scripts/release/build-release-linux.sh <commit> <dir> --require-signing`. It cross-compiles the Windows app
+   scripts/linux-release/build-release-linux.sh <commit> <dir> --require-signing`. It cross-compiles the Windows app
    (.NET 9 SDK), packages it with Inno Setup under Wine and signs the app, setup and uninstaller through PKCS#11
    (osslsigncode); setup instructions in the script header. Then step 5 as usual.
 ## GitHub issues: assign the owner
