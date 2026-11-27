@@ -71,6 +71,11 @@ docs/REFERENCES.md maps each device family to the open-source implementation we 
    The Windows asset MUST be the setup exe (the in-app updater looks for an .exe asset with
    "setup" in the name); the Linux asset names are fixed (the update helper downloads them by name).
 6. Update the fleet: the hub's ⇪ Update per machine (or `POST /api/fleet/machines/{name}/update`).
+7. **Second release location (#128), when the Windows PC is off:** a Linux desktop machine with SimplySign Desktop
+   logged in builds the whole release (both assets, signed): `git -C ~/GitHub/DeviceMaster pull &&
+   scripts/linux-release/build-release-linux.sh <commit> <dir> --require-signing`. It cross-compiles the Windows app
+   (.NET 9 SDK), packages it with Inno Setup under Wine and signs the app, setup and uninstaller through PKCS#11
+   (osslsigncode); setup instructions in the script header. Then step 5 as usual.
 ## GitHub issues: assign the owner
 
 Every issue created on this repo is **assigned to the owner, `elliot-borst`, the moment it is created**
